@@ -1,6 +1,6 @@
-// SQLite writer for teamspace notes
+// SQLite writer for space notes
 
-import { getDatabase, listTeamspaces } from './sqlite-reader.js';
+import { getDatabase, listSpaces } from './sqlite-reader.js';
 import { SQLITE_NOTE_TYPES } from './types.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -12,21 +12,21 @@ function generateNoteId(): string {
 }
 
 /**
- * Create a new note in a teamspace
+ * Create a new note in a space
  */
-export function createTeamspaceNote(
-  teamspaceId: string,
+export function createSpaceNote(
+  spaceId: string,
   title: string,
   content: string = '',
   parent?: string
 ): string {
   const database = getDatabase();
   if (!database) {
-    throw new Error('Teamspace database not available');
+    throw new Error('Space database not available');
   }
 
   const noteId = generateNoteId();
-  const filename = `%%NotePlanCloud%%/${teamspaceId}/${noteId}`;
+  const filename = `%%NotePlanCloud%%/${spaceId}/${noteId}`;
   const now = new Date().toISOString();
 
   try {
@@ -41,26 +41,26 @@ export function createTeamspaceNote(
 
     return filename;
   } catch (error) {
-    console.error('Error creating teamspace note:', error);
-    throw new Error(`Failed to create teamspace note: ${error}`);
+    console.error('Error creating space note:', error);
+    throw new Error(`Failed to create space note: ${error}`);
   }
 }
 
 /**
- * Create a calendar note in a teamspace
+ * Create a calendar note in a space
  */
-export function createTeamspaceCalendarNote(
-  teamspaceId: string,
+export function createSpaceCalendarNote(
+  spaceId: string,
   dateStr: string,
   content: string = ''
 ): string {
   const database = getDatabase();
   if (!database) {
-    throw new Error('Teamspace database not available');
+    throw new Error('Space database not available');
   }
 
   const noteId = generateNoteId();
-  const filename = `%%NotePlanCloud%%/${teamspaceId}/${dateStr}`;
+  const filename = `%%NotePlanCloud%%/${spaceId}/${dateStr}`;
   const now = new Date().toISOString();
 
   try {
@@ -75,18 +75,18 @@ export function createTeamspaceCalendarNote(
 
     return filename;
   } catch (error) {
-    console.error('Error creating teamspace calendar note:', error);
-    throw new Error(`Failed to create teamspace calendar note: ${error}`);
+    console.error('Error creating space calendar note:', error);
+    throw new Error(`Failed to create space calendar note: ${error}`);
   }
 }
 
 /**
- * Update a teamspace note's content
+ * Update a space note's content
  */
-export function updateTeamspaceNote(identifier: string, content: string): void {
+export function updateSpaceNote(identifier: string, content: string): void {
   const database = getDatabase();
   if (!database) {
-    throw new Error('Teamspace database not available');
+    throw new Error('Space database not available');
   }
 
   const now = new Date().toISOString();
@@ -106,18 +106,18 @@ export function updateTeamspaceNote(identifier: string, content: string): void {
       throw new Error(`Note not found: ${identifier}`);
     }
   } catch (error) {
-    console.error('Error updating teamspace note:', error);
-    throw new Error(`Failed to update teamspace note: ${error}`);
+    console.error('Error updating space note:', error);
+    throw new Error(`Failed to update space note: ${error}`);
   }
 }
 
 /**
- * Update a teamspace note's title
+ * Update a space note's title
  */
-export function updateTeamspaceNoteTitle(identifier: string, title: string): void {
+export function updateSpaceNoteTitle(identifier: string, title: string): void {
   const database = getDatabase();
   if (!database) {
-    throw new Error('Teamspace database not available');
+    throw new Error('Space database not available');
   }
 
   const now = new Date().toISOString();
@@ -137,18 +137,18 @@ export function updateTeamspaceNoteTitle(identifier: string, title: string): voi
       throw new Error(`Note not found: ${identifier}`);
     }
   } catch (error) {
-    console.error('Error updating teamspace note title:', error);
-    throw new Error(`Failed to update teamspace note title: ${error}`);
+    console.error('Error updating space note title:', error);
+    throw new Error(`Failed to update space note title: ${error}`);
   }
 }
 
 /**
- * Delete a teamspace note
+ * Delete a space note
  */
-export function deleteTeamspaceNote(identifier: string): void {
+export function deleteSpaceNote(identifier: string): void {
   const database = getDatabase();
   if (!database) {
-    throw new Error('Teamspace database not available');
+    throw new Error('Space database not available');
   }
 
   try {
@@ -165,22 +165,22 @@ export function deleteTeamspaceNote(identifier: string): void {
       throw new Error(`Note not found: ${identifier}`);
     }
   } catch (error) {
-    console.error('Error deleting teamspace note:', error);
-    throw new Error(`Failed to delete teamspace note: ${error}`);
+    console.error('Error deleting space note:', error);
+    throw new Error(`Failed to delete space note: ${error}`);
   }
 }
 
 /**
- * Create a folder in a teamspace
+ * Create a folder in a space
  */
-export function createTeamspaceFolder(teamspaceId: string, name: string, parent?: string): string {
+export function createSpaceFolder(spaceId: string, name: string, parent?: string): string {
   const database = getDatabase();
   if (!database) {
-    throw new Error('Teamspace database not available');
+    throw new Error('Space database not available');
   }
 
   const folderId = generateNoteId();
-  const filename = `%%NotePlanCloud%%/${teamspaceId}/${folderId}`;
+  const filename = `%%NotePlanCloud%%/${spaceId}/${folderId}`;
   const now = new Date().toISOString();
 
   try {
@@ -195,15 +195,15 @@ export function createTeamspaceFolder(teamspaceId: string, name: string, parent?
 
     return filename;
   } catch (error) {
-    console.error('Error creating teamspace folder:', error);
-    throw new Error(`Failed to create teamspace folder: ${error}`);
+    console.error('Error creating space folder:', error);
+    throw new Error(`Failed to create space folder: ${error}`);
   }
 }
 
 /**
- * Get the default teamspace ID (first one found)
+ * Get the default space ID (first one found)
  */
-export function getDefaultTeamspaceId(): string | null {
-  const teamspaces = listTeamspaces();
-  return teamspaces.length > 0 ? teamspaces[0].id : null;
+export function getDefaultSpaceId(): string | null {
+  const spaces = listSpaces();
+  return spaces.length > 0 ? spaces[0].id : null;
 }

@@ -58,7 +58,7 @@ export const addTaskSchema = z.object({
     .string()
     .optional()
     .describe('Heading to add task under (when position is after-heading)'),
-  teamspace: z.string().optional().describe('Teamspace ID when targeting daily notes'),
+  space: z.string().optional().describe('Space ID when targeting daily notes'),
 });
 
 export const completeTaskSchema = z.object({
@@ -119,7 +119,7 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
     // Check if target is a date (daily note) or a filename (project note)
     if (isDateTarget(params.target)) {
       // Target is a date - get or create the daily note for that date
-      note = store.ensureCalendarNote(params.target, params.teamspace);
+      note = store.ensureCalendarNote(params.target, params.space);
     } else {
       // Target is a filename - get the project note
       note = store.getNote({ filename: params.target });

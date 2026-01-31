@@ -12,7 +12,7 @@ import {
 } from '../utils/date-utils.js';
 
 export const getTodaySchema = z.object({
-  teamspace: z.string().optional().describe('Teamspace ID to get today from'),
+  space: z.string().optional().describe('Space ID to get today from'),
 });
 
 export const addToTodaySchema = z.object({
@@ -22,23 +22,23 @@ export const addToTodaySchema = z.object({
     .optional()
     .default('end')
     .describe('Where to add the content'),
-  teamspace: z.string().optional().describe('Teamspace ID'),
+  space: z.string().optional().describe('Space ID'),
 });
 
 export const getCalendarNoteSchema = z.object({
   date: z
     .string()
     .describe('Date in YYYYMMDD, YYYY-MM-DD format, or "today", "tomorrow", "yesterday"'),
-  teamspace: z.string().optional().describe('Teamspace ID'),
+  space: z.string().optional().describe('Space ID'),
 });
 
 export function getToday(params: z.infer<typeof getTodaySchema>) {
-  const note = store.getTodayNote(params.teamspace);
+  const note = store.getTodayNote(params.space);
 
   if (!note) {
     // Try to create it
     try {
-      const createdNote = store.ensureCalendarNote('today', params.teamspace);
+      const createdNote = store.ensureCalendarNote('today', params.space);
       return {
         success: true,
         note: {
@@ -79,7 +79,7 @@ export function addToToday(params: z.infer<typeof addToTodaySchema>) {
     const note = store.addToToday(
       params.content,
       params.position as 'start' | 'end',
-      params.teamspace
+      params.space
     );
 
     return {
@@ -100,7 +100,7 @@ export function addToToday(params: z.infer<typeof addToTodaySchema>) {
 
 export function getCalendarNote(params: z.infer<typeof getCalendarNoteSchema>) {
   const dateStr = parseFlexibleDate(params.date);
-  const note = store.getCalendarNote(dateStr, params.teamspace);
+  const note = store.getCalendarNote(dateStr, params.space);
 
   if (!note) {
     return {
@@ -133,7 +133,7 @@ export const getPeriodicNoteSchema = z.object({
   year: z.number().optional().describe('For weekly/yearly notes: specific year (e.g., 2025)'),
   month: z.number().optional().describe('For monthly notes: specific month (1-12). Use with year parameter.'),
   quarter: z.number().optional().describe('For quarterly notes: specific quarter (1-4). Use with year parameter.'),
-  teamspace: z.string().optional().describe('Teamspace ID'),
+  space: z.string().optional().describe('Space ID'),
 });
 
 export const getNotesInRangeSchema = z.object({
@@ -143,7 +143,7 @@ export const getNotesInRangeSchema = z.object({
   startDate: z.string().optional().describe('Start date for custom range (YYYY-MM-DD)'),
   endDate: z.string().optional().describe('End date for custom range (YYYY-MM-DD)'),
   includeContent: z.boolean().optional().describe('Include full note content (default: false for summaries only)'),
-  teamspace: z.string().optional().describe('Teamspace ID'),
+  space: z.string().optional().describe('Space ID'),
 });
 
 export const getNotesInFolderSchema = z.object({
@@ -296,7 +296,7 @@ export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
 
     for (const date of dates) {
       const dateStr = formatDateString(date);
-      const note = store.getCalendarNote(dateStr, params.teamspace);
+      const note = store.getCalendarNote(dateStr, params.space);
 
       if (note) {
         const entry: (typeof notes)[0] = {

@@ -12,7 +12,7 @@ import * as noteTools from './tools/notes.js';
 import * as searchTools from './tools/search.js';
 import * as taskTools from './tools/tasks.js';
 import * as calendarTools from './tools/calendar.js';
-import * as teamspaceTools from './tools/teamspaces.js';
+import * as spaceTools from './tools/spaces.js';
 import * as eventTools from './tools/events.js';
 import * as reminderTools from './tools/reminders.js';
 
@@ -53,16 +53,16 @@ export function createServer(): Server {
                 type: 'string',
                 description: 'Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID to search in',
+                description: 'Space ID to search in',
               },
             },
           },
         },
         {
           name: 'noteplan_list_notes',
-          description: 'List all project notes, optionally filtered by folder or teamspace.',
+          description: 'List all project notes, optionally filtered by folder or space.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -70,9 +70,9 @@ export function createServer(): Server {
                 type: 'string',
                 description: 'Filter by folder path',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID to list from',
+                description: 'Space ID to list from',
               },
             },
           },
@@ -135,9 +135,9 @@ If the user explicitly requests a "plain note" or "note without properties", omi
                 type: 'boolean',
                 description: 'Set to true to bypass smart matching and create a new folder with the exact name provided',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID to create in',
+                description: 'Space ID to create in',
               },
             },
             required: ['title'],
@@ -401,7 +401,7 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
         // Search
         {
           name: 'noteplan_search',
-          description: 'Full-text search across all notes (local and teamspace).',
+          description: 'Full-text search across all notes (local and space).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -419,9 +419,9 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
                 items: { type: 'string' },
                 description: 'Filter by folders',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID to search in',
+                description: 'Space ID to search in',
               },
               limit: {
                 type: 'number',
@@ -495,9 +495,9 @@ DO NOT use the >YYYY-MM-DD scheduling syntax unless the user explicitly wants th
                 type: 'string',
                 description: 'Heading to add task under (when position is after-heading)',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID when targeting daily notes',
+                description: 'Space ID when targeting daily notes',
               },
             },
             required: ['target', 'content'],
@@ -562,9 +562,9 @@ For crossing out NON-TASK text (regular bullets or paragraphs), use noteplan_edi
           inputSchema: {
             type: 'object',
             properties: {
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID to get today from',
+                description: 'Space ID to get today from',
               },
             },
           },
@@ -584,9 +584,9 @@ For crossing out NON-TASK text (regular bullets or paragraphs), use noteplan_edi
                 enum: ['start', 'end'],
                 description: 'Where to add the content (default: end)',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID',
+                description: 'Space ID',
               },
             },
             required: ['content'],
@@ -602,9 +602,9 @@ For crossing out NON-TASK text (regular bullets or paragraphs), use noteplan_edi
                 type: 'string',
                 description: 'Date in YYYYMMDD, YYYY-MM-DD format, or "today", "tomorrow", "yesterday"',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID',
+                description: 'Space ID',
               },
             },
             required: ['date'],
@@ -662,9 +662,9 @@ File formats: YYYY-Www.txt (weekly), YYYY-MM.txt (monthly), YYYY-Qq.txt (quarter
                 type: 'number',
                 description: 'Year (e.g., 2025). Defaults to current year.',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID',
+                description: 'Space ID',
               },
             },
             required: ['type'],
@@ -711,9 +711,9 @@ Set includeContent=true to get full content for AI summarization.`,
                 type: 'boolean',
                 description: 'Include full note content (default: false)',
               },
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID',
+                description: 'Space ID',
               },
             },
             required: ['period'],
@@ -749,10 +749,10 @@ Set includeContent=true for full content (use with smaller folders or for summar
           },
         },
 
-        // Teamspace & metadata operations
+        // Space & metadata operations
         {
-          name: 'noteplan_list_teamspaces',
-          description: 'List all available teamspaces.',
+          name: 'noteplan_list_spaces',
+          description: 'List all available spaces.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -764,9 +764,9 @@ Set includeContent=true for full content (use with smaller folders or for summar
           inputSchema: {
             type: 'object',
             properties: {
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID to list tags from',
+                description: 'Space ID to list tags from',
               },
             },
           },
@@ -777,9 +777,9 @@ Set includeContent=true for full content (use with smaller folders or for summar
           inputSchema: {
             type: 'object',
             properties: {
-              teamspace: {
+              space: {
                 type: 'string',
-                description: 'Teamspace ID to list folders from',
+                description: 'Space ID to list folders from',
               },
             },
           },
@@ -1119,15 +1119,15 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           result = calendarTools.getNotesInFolder(args as any);
           break;
 
-        // Teamspace & metadata operations
-        case 'noteplan_list_teamspaces':
-          result = teamspaceTools.listTeamspaces(args as any);
+        // Space & metadata operations
+        case 'noteplan_list_spaces':
+          result = spaceTools.listSpaces(args as any);
           break;
         case 'noteplan_list_tags':
-          result = teamspaceTools.listTags(args as any);
+          result = spaceTools.listTags(args as any);
           break;
         case 'noteplan_list_folders':
-          result = teamspaceTools.listFolders(args as any);
+          result = spaceTools.listFolders(args as any);
           break;
 
         // macOS Calendar events

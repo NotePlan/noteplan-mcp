@@ -1,6 +1,6 @@
-// Unified store that merges local and teamspace notes
+// Unified store that merges local and space notes
 
-import { Note, NoteType, Folder, Teamspace, SearchResult, SearchMatch } from './types.js';
+import { Note, NoteType, Folder, Space, SearchResult, SearchMatch } from './types.js';
 import * as fileReader from './file-reader.js';
 import * as fileWriter from './file-writer.js';
 import * as sqliteReader from './sqlite-reader.js';
@@ -35,39 +35,39 @@ export function getNote(options: {
   title?: string;
   filename?: string;
   date?: string;
-  teamspace?: string;
+  space?: string;
 }): Note | null {
-  const { title, filename, date, teamspace } = options;
+  const { title, filename, date, space } = options;
 
   // If date is specified, get calendar note
   if (date) {
     const dateStr = parseFlexibleDate(date);
-    if (teamspace) {
-      return sqliteReader.getTeamspaceCalendarNote(dateStr, teamspace);
+    if (space) {
+      return sqliteReader.getSpaceCalendarNote(dateStr, space);
     }
     return fileReader.getCalendarNote(dateStr);
   }
 
   // If filename is specified, try to get directly
   if (filename) {
-    // Check if it's a teamspace filename
+    // Check if it's a space filename
     if (filename.includes('%%NotePlanCloud%%')) {
-      return sqliteReader.getTeamspaceNote(filename);
+      return sqliteReader.getSpaceNote(filename);
     }
     return fileReader.readNoteFile(filename);
   }
 
   // If title is specified, search by title
   if (title) {
-    if (teamspace) {
-      return sqliteReader.getTeamspaceNoteByTitle(title, teamspace);
+    if (space) {
+      return sqliteReader.getSpaceNoteByTitle(title, space);
     }
     // Try local first
     const localNote = fileReader.getNoteByTitle(title);
     if (localNote) return localNote;
 
-    // Try teamspace
-    return sqliteReader.getTeamspaceNoteByTitle(title);
+    // Try space
+    return sqliteReader.getSpaceNoteByTitle(title);
   }
 
   return null;
@@ -78,14 +78,14 @@ export function getNote(options: {
  */
 export function listNotes(options: {
   folder?: string;
-  teamspace?: string;
+  space?: string;
   type?: NoteType;
 } = {}): Note[] {
-  const { folder, teamspace, type } = options;
+  const { folder, space, type } = options;
   const notes: Note[] = [];
 
   // Get local notes
-  if (!teamspace) {
+  if (!space) {
     if (!type || type === 'note') {
       notes.push(...fileReader.listProjectNotes(folder));
     }
@@ -94,9 +94,9 @@ export function listNotes(options: {
     }
   }
 
-  // Get teamspace notes
-  if (teamspace || !folder) {
-    notes.push(...sqliteReader.listTeamspaceNotes(teamspace));
+  // Get space notes
+  if (space || !folder) {
+    notes.push(...sqliteReader.listSpaceNotes(space));
   }
 
   // Sort by modified date (newest first)
@@ -117,16 +117,16 @@ export function searchNotes(
   options: {
     types?: NoteType[];
     folder?: string;
-    teamspace?: string;
+    space?: string;
     limit?: number;
   } = {}
 ): SearchResult[] {
-  const { types, folder, teamspace, limit = 50 } = options;
+  const { types, folder, space, limit = 50 } = options;
   const results: SearchResult[] = [];
   const lowerQuery = query.toLowerCase();
 
   // Search local notes
-  if (!teamspace) {
+  if (!space) {
     const localNotes = fileReader.searchLocalNotes(query, { types, folder, limit });
     for (const note of localNotes) {
       const matches = findMatches(note.content, lowerQuery);
@@ -138,12 +138,12 @@ export function searchNotes(
     }
   }
 
-  // Search teamspace notes
-  const teamspaceNotes = sqliteReader.searchTeamspaceNotes(query, {
-    teamspaceId: teamspace,
+  // Search space notes
+  const spaceNotes = sqliteReader.searchSpaceNotes(query, {
+    spaceId: space,
     limit,
   });
-  for (const note of teamspaceNotes) {
+  for (const note of spaceNotes) {
     const matches = findMatches(note.content, lowerQuery);
     results.push({
       note,
@@ -218,11 +218,11 @@ export function createNote(
   content?: string,
   options: {
     folder?: string;
-    teamspace?: string;
+    space?: string;
     createNewFolder?: boolean;
   } = {}
 ): CreateNoteResult {
-  const { folder, teamspace, createNewFolder = false } = options;
+  const { folder, space, createNewFolder = false } = options;
 
   // Initialize folder resolution info
   const folderResolution: FolderResolution = {
@@ -234,10 +234,10 @@ export function createNote(
     alternatives: [],
   };
 
-  if (teamspace) {
-    const filename = sqliteWriter.createTeamspaceNote(teamspace, title, content || `# ${title}\n\n`);
-    const note = sqliteReader.getTeamspaceNote(filename);
-    if (!note) throw new Error('Failed to create teamspace note');
+  if (space) {
+    const filename = sqliteWriter.createSpaceNote(space, title, content || `# ${title}\n\n`);
+    const note = sqliteReader.getSpaceNote(filename);
+    if (!note) throw new Error('Failed to create space note');
     return { note, folderResolution };
   }
 
@@ -269,8 +269,8 @@ export function createNote(
  */
 export function updateNote(filename: string, content: string): Note {
   if (filename.includes('%%NotePlanCloud%%')) {
-    sqliteWriter.updateTeamspaceNote(filename, content);
-    const note = sqliteReader.getTeamspaceNote(filename);
+    sqliteWriter.updateSpaceNote(filename, content);
+    const note = sqliteReader.getSpaceNote(filename);
     if (!note) throw new Error('Note not found after update');
     return note;
   }
@@ -286,7 +286,7 @@ export function updateNote(filename: string, content: string): Note {
  */
 export function deleteNote(filename: string): void {
   if (filename.includes('%%NotePlanCloud%%')) {
-    sqliteWriter.deleteTeamspaceNote(filename);
+    sqliteWriter.deleteSpaceNote(filename);
   } else {
     fileWriter.deleteNote(filename);
   }
@@ -295,19 +295,19 @@ export function deleteNote(filename: string): void {
 /**
  * Get today's daily note
  */
-export function getTodayNote(teamspace?: string): Note | null {
+export function getTodayNote(space?: string): Note | null {
   const dateStr = getTodayDateString();
-  return getCalendarNote(dateStr, teamspace);
+  return getCalendarNote(dateStr, space);
 }
 
 /**
  * Get a calendar note by date
  */
-export function getCalendarNote(date: string, teamspace?: string): Note | null {
+export function getCalendarNote(date: string, space?: string): Note | null {
   const dateStr = parseFlexibleDate(date);
 
-  if (teamspace) {
-    return sqliteReader.getTeamspaceCalendarNote(dateStr, teamspace);
+  if (space) {
+    return sqliteReader.getSpaceCalendarNote(dateStr, space);
   }
 
   return fileReader.getCalendarNote(dateStr);
@@ -316,16 +316,16 @@ export function getCalendarNote(date: string, teamspace?: string): Note | null {
 /**
  * Ensure a calendar note exists, create if not
  */
-export function ensureCalendarNote(date: string, teamspace?: string): Note {
+export function ensureCalendarNote(date: string, space?: string): Note {
   const dateStr = parseFlexibleDate(date);
 
-  if (teamspace) {
-    let note = sqliteReader.getTeamspaceCalendarNote(dateStr, teamspace);
+  if (space) {
+    let note = sqliteReader.getSpaceCalendarNote(dateStr, space);
     if (!note) {
-      sqliteWriter.createTeamspaceCalendarNote(teamspace, dateStr, '');
-      note = sqliteReader.getTeamspaceCalendarNote(dateStr, teamspace);
+      sqliteWriter.createSpaceCalendarNote(space, dateStr, '');
+      note = sqliteReader.getSpaceCalendarNote(dateStr, space);
     }
-    if (!note) throw new Error('Failed to create teamspace calendar note');
+    if (!note) throw new Error('Failed to create space calendar note');
     return note;
   }
 
@@ -341,9 +341,9 @@ export function ensureCalendarNote(date: string, teamspace?: string): Note {
 export function addToToday(
   content: string,
   position: 'start' | 'end' = 'end',
-  teamspace?: string
+  space?: string
 ): Note {
-  const note = ensureCalendarNote('today', teamspace);
+  const note = ensureCalendarNote('today', space);
 
   let newContent: string;
   if (position === 'start') {
@@ -368,23 +368,26 @@ export function addToToday(
 }
 
 /**
- * List all teamspaces
+ * List all spaces
  */
-export function listTeamspaces(): Teamspace[] {
-  return sqliteReader.listTeamspaces();
+export function listSpaces(): Space[] {
+  return sqliteReader.listSpaces();
 }
+
+// Keep old name for backwards compatibility
+export const listTeamspaces = listSpaces;
 
 /**
  * List all folders
  */
-export function listFolders(teamspace?: string): Folder[] {
+export function listFolders(space?: string): Folder[] {
   const folders: Folder[] = [];
 
-  if (!teamspace) {
+  if (!space) {
     folders.push(...fileReader.listFolders());
   }
 
-  folders.push(...sqliteReader.listTeamspaceFolders(teamspace));
+  folders.push(...sqliteReader.listSpaceFolders(space));
 
   return folders;
 }
@@ -392,14 +395,14 @@ export function listFolders(teamspace?: string): Folder[] {
 /**
  * List all tags
  */
-export function listTags(teamspace?: string): string[] {
+export function listTags(space?: string): string[] {
   const tags = new Set<string>();
 
-  if (!teamspace) {
+  if (!space) {
     fileReader.extractAllTags().forEach((tag) => tags.add(tag));
   }
 
-  sqliteReader.extractTeamspaceTags(teamspace).forEach((tag) => tags.add(tag));
+  sqliteReader.extractSpaceTags(space).forEach((tag) => tags.add(tag));
 
   return Array.from(tags).sort();
 }

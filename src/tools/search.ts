@@ -8,7 +8,7 @@ export const searchSchema = z.object({
   query: z.string().describe('Search query string'),
   types: z.array(z.enum(['calendar', 'note', 'trash'])).optional().describe('Filter by note types'),
   folders: z.array(z.string()).optional().describe('Filter by folders'),
-  teamspace: z.string().optional().describe('Teamspace ID to search in'),
+  space: z.string().optional().describe('Space ID to search in'),
   limit: z.number().optional().default(20).describe('Maximum number of results'),
 });
 
@@ -16,7 +16,7 @@ export function searchNotes(params: z.infer<typeof searchSchema>) {
   const results = store.searchNotes(params.query, {
     types: params.types as NoteType[] | undefined,
     folder: params.folders?.[0], // Currently only supports single folder
-    teamspace: params.teamspace,
+    space: params.space,
     limit: params.limit,
   });
 
@@ -31,7 +31,7 @@ export function searchNotes(params: z.infer<typeof searchSchema>) {
         type: result.note.type,
         source: result.note.source,
         folder: result.note.folder,
-        teamspaceId: result.note.teamspaceId,
+        spaceId: result.note.spaceId,
       },
       score: result.score,
       matchCount: result.matches.length,

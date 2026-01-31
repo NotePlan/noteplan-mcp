@@ -9,12 +9,12 @@ export const getNoteSchema = z.object({
   title: z.string().optional().describe('Note title to search for'),
   filename: z.string().optional().describe('Direct filename/path to the note'),
   date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
-  teamspace: z.string().optional().describe('Teamspace ID to search in'),
+  space: z.string().optional().describe('Space ID to search in'),
 });
 
 export const listNotesSchema = z.object({
   folder: z.string().optional().describe('Filter by folder path'),
-  teamspace: z.string().optional().describe('Teamspace ID to list from'),
+  space: z.string().optional().describe('Space ID to list from'),
 });
 
 export const createNoteSchema = z.object({
@@ -22,7 +22,7 @@ export const createNoteSchema = z.object({
   content: z.string().optional().describe('Initial content for the note. Can include YAML frontmatter between --- delimiters for styling (icon, icon-color, bg-color, bg-color-dark, bg-pattern, status, priority, summary, type, domain)'),
   folder: z.string().optional().describe('Folder to create the note in. Supports smart matching (e.g., "projects" matches "10 - Projects")'),
   create_new_folder: z.boolean().optional().describe('Set to true to create a new folder instead of matching existing ones'),
-  teamspace: z.string().optional().describe('Teamspace ID to create in'),
+  space: z.string().optional().describe('Space ID to create in'),
 });
 
 export const updateNoteSchema = z.object({
@@ -54,7 +54,7 @@ export function getNote(params: z.infer<typeof getNoteSchema>) {
       type: note.type,
       source: note.source,
       folder: note.folder,
-      teamspaceId: note.teamspaceId,
+      spaceId: note.spaceId,
       date: note.date,
       modifiedAt: note.modifiedAt?.toISOString(),
     },
@@ -73,7 +73,7 @@ export function listNotes(params: z.infer<typeof listNotesSchema>) {
       type: note.type,
       source: note.source,
       folder: note.folder,
-      teamspaceId: note.teamspaceId,
+      spaceId: note.spaceId,
       modifiedAt: note.modifiedAt?.toISOString(),
     })),
   };
@@ -83,7 +83,7 @@ export function createNote(params: z.infer<typeof createNoteSchema>) {
   try {
     const result = store.createNote(params.title, params.content, {
       folder: params.folder,
-      teamspace: params.teamspace,
+      space: params.space,
       createNewFolder: params.create_new_folder,
     });
 

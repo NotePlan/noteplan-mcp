@@ -1,7 +1,7 @@
 // NotePlan Types
 
 export type NoteType = 'calendar' | 'note' | 'trash';
-export type NoteSource = 'local' | 'teamspace';
+export type NoteSource = 'local' | 'space';
 
 export type TaskStatus = 'open' | 'done' | 'cancelled' | 'scheduled';
 
@@ -12,8 +12,8 @@ export interface Note {
   content: string;
   type: NoteType;
   source: NoteSource;
-  teamspaceId?: string;
-  teamspaceName?: string;
+  spaceId?: string;
+  spaceName?: string;
   folder?: string;
   date?: string; // For calendar notes: YYYYMMDD or YYYY-Www
   modifiedAt?: Date;
@@ -34,11 +34,14 @@ export interface Task {
   priority?: number;
 }
 
-export interface Teamspace {
+export interface Space {
   id: string;
   name: string;
   noteCount: number;
 }
+
+// Keep Teamspace as alias for backwards compatibility during transition
+export type Teamspace = Space;
 
 export interface SearchResult {
   note: Note;
@@ -57,7 +60,7 @@ export interface Folder {
   path: string;
   name: string;
   source: NoteSource;
-  teamspaceId?: string;
+  spaceId?: string;
 }
 
 // SQLite row types
@@ -75,6 +78,10 @@ export interface SQLiteNoteRow {
 
 // Note type constants from SQLite
 export const SQLITE_NOTE_TYPES = {
+  SPACE: 10,
+  SPACE_NOTE: 11,
+  SPACE_CALENDAR: 12,
+  // Keep old names as aliases
   TEAMSPACE: 10,
   TEAMSPACE_NOTE: 11,
   TEAMSPACE_CALENDAR: 12,

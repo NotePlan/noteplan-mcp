@@ -1,16 +1,44 @@
-// SQLite reader for teamspace notes
+// SQLite reader for space notes
 
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { Note, Teamspace, Folder, SQLiteNoteRow, SQLITE_NOTE_TYPES } from './types.js';
+import { Note, Space, Folder, SQLiteNoteRow, SQLITE_NOTE_TYPES } from './types.js';
 import { extractTitle } from './markdown-parser.js';
 
-const TEAMSPACE_DB_PATH = path.join(os.homedir(), 'Library/Caches/teamspace.db');
+// Possible NotePlan storage paths (same as file-reader.ts)
+const POSSIBLE_PATHS = [
+  // Direct local paths (AppStore version) - preferred for local dev
+  path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan3/Data/Library/Application Support/co.noteplan.NotePlan3'),
+  // Direct local paths (Setapp version)
+  path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan-setapp/Data/Library/Application Support/co.noteplan.NotePlan-setapp'),
+  // Today app iCloud
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~Today/Documents'),
+  // NotePlan 3 iCloud
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan3/Documents'),
+  // NotePlan iCloud
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan/Documents'),
+  // NotePlan Setapp iCloud
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan-setapp/Documents'),
+];
 
 let db: Database.Database | null = null;
 let dbChecked = false;
+let cachedDbPath: string | null = null;
+
+/**
+ * Find the spaces database path
+ */
+function findDatabasePath(): string | null {
+  for (const basePath of POSSIBLE_PATHS) {
+    const dbPath = path.join(basePath, 'Caches', 'teamspace.db');
+    if (fs.existsSync(dbPath)) {
+      return dbPath;
+    }
+  }
+  return null;
+}
 
 /**
  * Get or create the database connection
@@ -21,17 +49,18 @@ export function getDatabase(): Database.Database | null {
 
   dbChecked = true;
 
-  if (!fs.existsSync(TEAMSPACE_DB_PATH)) {
+  cachedDbPath = findDatabasePath();
+  if (!cachedDbPath) {
     // Only log once in stderr for MCP compatibility
-    console.error('Note: Teamspace database not found (teamspaces unavailable)');
+    console.error('Note: Spaces database not found (spaces unavailable)');
     return null;
   }
 
   try {
-    db = new Database(TEAMSPACE_DB_PATH, { readonly: false });
+    db = new Database(cachedDbPath, { readonly: false });
     return db;
   } catch (error) {
-    console.error('Failed to open teamspace database:', error);
+    console.error('Failed to open spaces database:', error);
     return null;
   }
 }
@@ -47,27 +76,27 @@ export function closeDatabase(): void {
 }
 
 /**
- * List all teamspaces
+ * List all spaces
  */
-export function listTeamspaces(): Teamspace[] {
+export function listSpaces(): Space[] {
   const database = getDatabase();
   if (!database) return [];
 
   try {
-    // Teamspaces are stored as note_type = 10
+    // Spaces are stored as note_type = 10 with is_dir = 1
     const rows = database
       .prepare(
         `
         SELECT
           id,
           title,
-          (SELECT COUNT(*) FROM notes n2 WHERE n2.filename LIKE '%%NotePlanCloud%%/' || notes.id || '/%') as note_count
+          (SELECT COUNT(*) FROM notes n2 WHERE n2.parent = notes.id AND n2.note_type IN (?, ?)) as note_count
         FROM notes
         WHERE note_type = ?
-        AND is_dir = 0
+        AND is_dir = 1
       `
       )
-      .all(SQLITE_NOTE_TYPES.TEAMSPACE) as { id: string; title: string; note_count: number }[];
+      .all(SQLITE_NOTE_TYPES.TEAMSPACE_NOTE, SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR, SQLITE_NOTE_TYPES.TEAMSPACE) as { id: string; title: string; note_count: number }[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -75,7 +104,7 @@ export function listTeamspaces(): Teamspace[] {
       noteCount: row.note_count,
     }));
   } catch (error) {
-    console.error('Error listing teamspaces:', error);
+    console.error('Error listing spaces:', error);
     return [];
   }
 }
@@ -83,7 +112,7 @@ export function listTeamspaces(): Teamspace[] {
 /**
  * Get teamspace ID from filename
  */
-function getTeamspaceIdFromFilename(filename: string): string | undefined {
+function getSpaceIdFromFilename(filename: string): string | undefined {
   // Pattern: %%NotePlanCloud%%/[teamspace-id]/[note-id]
   const match = filename.match(/%%NotePlanCloud%%\/([^/]+)\//);
   return match ? match[1] : undefined;
@@ -93,7 +122,7 @@ function getTeamspaceIdFromFilename(filename: string): string | undefined {
  * Convert SQLite row to Note object
  */
 function rowToNote(row: SQLiteNoteRow): Note {
-  const teamspaceId = getTeamspaceIdFromFilename(row.filename);
+  const spaceId = getSpaceIdFromFilename(row.filename);
   const isCalendar = row.note_type === SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR;
 
   return {
@@ -102,8 +131,8 @@ function rowToNote(row: SQLiteNoteRow): Note {
     filename: row.filename,
     content: row.content || '',
     type: isCalendar ? 'calendar' : 'note',
-    source: 'teamspace',
-    teamspaceId,
+    source: 'space',
+    spaceId,
     folder: row.parent || undefined,
     modifiedAt: row.updated_at ? new Date(row.updated_at) : undefined,
     createdAt: row.created_at ? new Date(row.created_at) : undefined,
@@ -113,7 +142,7 @@ function rowToNote(row: SQLiteNoteRow): Note {
 /**
  * List notes in a teamspace
  */
-export function listTeamspaceNotes(teamspaceId?: string): Note[] {
+export function listSpaceNotes(spaceId?: string): Note[] {
   const database = getDatabase();
   if (!database) return [];
 
@@ -129,9 +158,9 @@ export function listTeamspaceNotes(teamspaceId?: string): Note[] {
       SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR,
     ];
 
-    if (teamspaceId) {
+    if (spaceId) {
       query += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${teamspaceId}/%`);
+      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
     }
 
     const rows = database.prepare(query).all(...params) as SQLiteNoteRow[];
@@ -145,7 +174,7 @@ export function listTeamspaceNotes(teamspaceId?: string): Note[] {
 /**
  * Get a specific teamspace note by ID or filename
  */
-export function getTeamspaceNote(identifier: string): Note | null {
+export function getSpaceNote(identifier: string): Note | null {
   const database = getDatabase();
   if (!database) return null;
 
@@ -171,7 +200,7 @@ export function getTeamspaceNote(identifier: string): Note | null {
 /**
  * Get a teamspace note by title
  */
-export function getTeamspaceNoteByTitle(title: string, teamspaceId?: string): Note | null {
+export function getSpaceNoteByTitle(title: string, spaceId?: string): Note | null {
   const database = getDatabase();
   if (!database) return null;
 
@@ -189,9 +218,9 @@ export function getTeamspaceNoteByTitle(title: string, teamspaceId?: string): No
       SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR,
     ];
 
-    if (teamspaceId) {
+    if (spaceId) {
       query += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${teamspaceId}/%`);
+      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
     }
 
     const row = database.prepare(query).get(...params) as SQLiteNoteRow | undefined;
@@ -205,17 +234,17 @@ export function getTeamspaceNoteByTitle(title: string, teamspaceId?: string): No
 /**
  * Search teamspace notes
  */
-export function searchTeamspaceNotes(
+export function searchSpaceNotes(
   query: string,
   options: {
-    teamspaceId?: string;
+    spaceId?: string;
     limit?: number;
   } = {}
 ): Note[] {
   const database = getDatabase();
   if (!database) return [];
 
-  const { teamspaceId, limit = 50 } = options;
+  const { spaceId, limit = 50 } = options;
 
   try {
     let sql = `
@@ -233,9 +262,9 @@ export function searchTeamspaceNotes(
       SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR,
     ];
 
-    if (teamspaceId) {
+    if (spaceId) {
       sql += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${teamspaceId}/%`);
+      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
     }
 
     sql += ` LIMIT ?`;
@@ -252,7 +281,7 @@ export function searchTeamspaceNotes(
 /**
  * List folders in teamspace
  */
-export function listTeamspaceFolders(teamspaceId?: string): Folder[] {
+export function listSpaceFolders(spaceId?: string): Folder[] {
   const database = getDatabase();
   if (!database) return [];
 
@@ -264,9 +293,9 @@ export function listTeamspaceFolders(teamspaceId?: string): Folder[] {
     `;
     const params: string[] = [];
 
-    if (teamspaceId) {
+    if (spaceId) {
       query += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${teamspaceId}/%`);
+      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
     }
 
     const rows = database.prepare(query).all(...params) as { id: string; title: string; filename: string }[];
@@ -274,8 +303,8 @@ export function listTeamspaceFolders(teamspaceId?: string): Folder[] {
     return rows.map((row) => ({
       path: row.filename,
       name: row.title || row.id,
-      source: 'teamspace' as const,
-      teamspaceId: getTeamspaceIdFromFilename(row.filename),
+      source: 'space' as const,
+      spaceId: getSpaceIdFromFilename(row.filename),
     }));
   } catch (error) {
     console.error('Error listing teamspace folders:', error);
@@ -286,8 +315,8 @@ export function listTeamspaceFolders(teamspaceId?: string): Folder[] {
 /**
  * Extract all unique tags from teamspace notes
  */
-export function extractTeamspaceTags(teamspaceId?: string): string[] {
-  const notes = listTeamspaceNotes(teamspaceId);
+export function extractSpaceTags(spaceId?: string): string[] {
+  const notes = listSpaceNotes(spaceId);
   const tags = new Set<string>();
 
   for (const note of notes) {
@@ -303,7 +332,7 @@ export function extractTeamspaceTags(teamspaceId?: string): string[] {
 /**
  * Get calendar note from teamspace by date
  */
-export function getTeamspaceCalendarNote(dateStr: string, teamspaceId: string): Note | null {
+export function getSpaceCalendarNote(dateStr: string, spaceId: string): Note | null {
   const database = getDatabase();
   if (!database) return null;
 
@@ -322,7 +351,7 @@ export function getTeamspaceCalendarNote(dateStr: string, teamspaceId: string): 
       )
       .get(
         SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR,
-        `%%NotePlanCloud%%/${teamspaceId}/%`,
+        `%%NotePlanCloud%%/${spaceId}/%`,
         `%${dateStr}%`
       ) as SQLiteNoteRow | undefined;
 
