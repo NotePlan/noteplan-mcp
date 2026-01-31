@@ -55,7 +55,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 
 ### Metadata
 - `noteplan_search` - Full-text search
-- `noteplan_list_teamspaces` - List teamspaces
+- `noteplan_list_spaces` - List spaces
 - `noteplan_list_tags` - List all hashtags
 - `noteplan_list_folders` - List all folders
 
