@@ -1,0 +1,282 @@
+// macOS Calendar events operations via Swift/EventKit
+
+import { z } from 'zod';
+import { execFileSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+// Get the directory of this module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const COMPILED_HELPER = path.join(__dirname, '../../scripts/calendar-helper');
+const SWIFT_HELPER = path.join(__dirname, '../../scripts/calendar-helper.swift');
+
+/**
+ * Run the calendar helper (prefers compiled binary, falls back to swift interpreter)
+ */
+function runSwiftHelper(args: string[], timeoutMs = 15000): any {
+  try {
+    let result: string;
+
+    // Use compiled binary if it exists
+    if (fs.existsSync(COMPILED_HELPER)) {
+      result = execFileSync(COMPILED_HELPER, args, {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: timeoutMs,
+      }).trim();
+    } else {
+      // Fall back to swift interpreter
+      result = execFileSync('swift', [SWIFT_HELPER, ...args], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: timeoutMs,
+      }).trim();
+    }
+
+    if (!result) return null;
+    return JSON.parse(result);
+  } catch (error: any) {
+    if (error.killed) {
+      throw new Error('Calendar query timed out.');
+    }
+    // Try to parse error from output
+    try {
+      const parsed = JSON.parse(error.stdout || '{}');
+      if (parsed.error) throw new Error(parsed.error);
+    } catch {}
+    throw new Error(error.stderr || error.message || 'Calendar helper failed');
+  }
+}
+
+// Schema definitions
+export const getEventsSchema = z.object({
+  date: z.string().optional().describe('Date to get events for (YYYY-MM-DD, "today", "tomorrow"). Defaults to today.'),
+  days: z.number().optional().describe('Number of days to fetch (default: 1, use 7 for this week)'),
+  calendar: z.string().optional().describe('Filter by calendar name'),
+});
+
+export const createEventSchema = z.object({
+  title: z.string().describe('Event title'),
+  startDate: z.string().describe('Start date/time (YYYY-MM-DD HH:MM or YYYY-MM-DD for all-day)'),
+  endDate: z.string().optional().describe('End date/time (defaults to 1 hour after start, or end of day for all-day)'),
+  calendar: z.string().optional().describe('Calendar name (defaults to default calendar)'),
+  location: z.string().optional().describe('Event location'),
+  notes: z.string().optional().describe('Event notes'),
+  allDay: z.boolean().optional().describe('Whether this is an all-day event'),
+});
+
+export const updateEventSchema = z.object({
+  eventId: z.string().describe('Event ID (from get_events)'),
+  title: z.string().optional().describe('New event title'),
+  startDate: z.string().optional().describe('New start date/time'),
+  endDate: z.string().optional().describe('New end date/time'),
+  location: z.string().optional().describe('New location'),
+  notes: z.string().optional().describe('New notes'),
+});
+
+export const deleteEventSchema = z.object({
+  eventId: z.string().describe('Event ID to delete'),
+});
+
+export const listCalendarsSchema = z.object({});
+
+/**
+ * Parse flexible date input
+ */
+function parseDate(dateStr: string): Date {
+  const lower = dateStr.toLowerCase();
+  const now = new Date();
+
+  if (lower === 'today') {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
+  if (lower === 'tomorrow') {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  }
+  if (lower === 'yesterday') {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  }
+
+  return new Date(dateStr);
+}
+
+/**
+ * Get events from Calendar app using Swift/EventKit (fast)
+ */
+export function getEvents(params: z.infer<typeof getEventsSchema>) {
+  try {
+    const startDate = parseDate(params.date || 'today');
+    const days = params.days || 1;
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + days);
+
+    // Format date as YYYY-MM-DD for Swift helper
+    const startStr = startDate.toISOString().split('T')[0];
+
+    const args = ['list-events', startStr, String(days)];
+    if (params.calendar) {
+      args.push(params.calendar);
+    }
+
+    const events = runSwiftHelper(args) || [];
+
+    return {
+      success: true,
+      startDate: startStr,
+      endDate: endDate.toISOString().split('T')[0],
+      eventCount: events.length,
+      events,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get events',
+    };
+  }
+}
+
+/**
+ * Create a new calendar event using Swift/EventKit
+ */
+export function createEvent(params: z.infer<typeof createEventSchema>) {
+  try {
+    const isAllDay = params.allDay || !params.startDate.includes(':');
+    let startDate: Date;
+    let endDate: Date;
+
+    if (isAllDay) {
+      startDate = new Date(params.startDate.split(' ')[0] + 'T00:00:00');
+      if (params.endDate) {
+        endDate = new Date(params.endDate.split(' ')[0] + 'T23:59:59');
+      } else {
+        endDate = new Date(startDate);
+        endDate.setHours(23, 59, 59);
+      }
+    } else {
+      startDate = new Date(params.startDate.replace(' ', 'T'));
+      if (params.endDate) {
+        endDate = new Date(params.endDate.replace(' ', 'T'));
+      } else {
+        endDate = new Date(startDate.getTime() + 3600000); // 1 hour
+      }
+    }
+
+    // Format as ISO dates for Swift helper
+    const startStr = startDate.toISOString();
+    const endStr = endDate.toISOString();
+
+    const args = ['create-event', params.title, startStr, endStr];
+    if (params.calendar) {
+      args.push(params.calendar);
+    }
+    if (params.location) {
+      args.push(params.location);
+    }
+    if (params.notes) {
+      args.push(params.notes);
+    }
+    args.push(isAllDay ? 'true' : 'false');
+
+    const result = runSwiftHelper(args);
+
+    if (result?.error) {
+      return { success: false, error: result.error };
+    }
+
+    return {
+      success: true,
+      message: `Event "${params.title}" created`,
+      event: {
+        id: result?.id || '',
+        title: params.title,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create event',
+    };
+  }
+}
+
+/**
+ * Update an existing calendar event using Swift/EventKit
+ */
+export function updateEvent(params: z.infer<typeof updateEventSchema>) {
+  try {
+    // Build JSON payload for updates
+    const updates: Record<string, string> = {};
+    if (params.title) updates.title = params.title;
+    if (params.startDate) updates.startDate = new Date(params.startDate.replace(' ', 'T')).toISOString();
+    if (params.endDate) updates.endDate = new Date(params.endDate.replace(' ', 'T')).toISOString();
+    if (params.location !== undefined) updates.location = params.location;
+    if (params.notes !== undefined) updates.notes = params.notes;
+
+    if (Object.keys(updates).length === 0) {
+      return { success: false, error: 'No updates provided' };
+    }
+
+    const args = ['update-event', params.eventId, JSON.stringify(updates)];
+    const result = runSwiftHelper(args);
+
+    if (result?.error) {
+      return { success: false, error: result.error };
+    }
+
+    return {
+      success: true,
+      message: 'Event updated',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to update event',
+    };
+  }
+}
+
+/**
+ * Delete a calendar event using Swift/EventKit
+ */
+export function deleteEvent(params: z.infer<typeof deleteEventSchema>) {
+  try {
+    const result = runSwiftHelper(['delete-event', params.eventId]);
+
+    if (result?.error) {
+      return { success: false, error: result.error };
+    }
+
+    return {
+      success: true,
+      message: 'Event deleted',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete event',
+    };
+  }
+}
+
+/**
+ * List all calendars using Swift/EventKit
+ */
+export function listCalendars(_params: z.infer<typeof listCalendarsSchema>) {
+  try {
+    const calendars = runSwiftHelper(['list-calendars']) || [];
+
+    return {
+      success: true,
+      calendars,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to list calendars',
+    };
+  }
+}

@@ -1,0 +1,85 @@
+# NotePlan MCP Server
+
+An MCP (Model Context Protocol) server that exposes NotePlan's note and task management functionality to Claude Desktop.
+
+## Features
+
+- **Unified Access**: Search and manage both local notes (file system) and teamspace notes (SQLite)
+- **Full CRUD**: Create, read, update, and delete notes
+- **Task Management**: Add, complete, and update tasks
+- **Calendar Notes**: Access daily notes by date
+- **Search**: Full-text search across all notes
+
+## Installation
+
+```bash
+cd noteplan-mcp
+npm install
+npm run build
+```
+
+## Configuration
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "noteplan": {
+      "command": "node",
+      "args": ["/path/to/noteplan-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+## Available Tools
+
+### Note Operations
+- `noteplan_get_note` - Get note by title, filename, or date
+- `noteplan_list_notes` - List project notes
+- `noteplan_create_note` - Create a new note
+- `noteplan_update_note` - Update note content
+- `noteplan_delete_note` - Delete a note
+
+### Task Operations
+- `noteplan_get_tasks` - Get tasks from a note
+- `noteplan_add_task` - Add task to a note
+- `noteplan_complete_task` - Mark task as done
+- `noteplan_update_task` - Update task content/status
+
+### Calendar Operations
+- `noteplan_get_today` - Get today's daily note
+- `noteplan_add_to_today` - Add content to today
+- `noteplan_get_calendar_note` - Get note for specific date
+
+### Metadata
+- `noteplan_search` - Full-text search
+- `noteplan_list_teamspaces` - List teamspaces
+- `noteplan_list_tags` - List all hashtags
+- `noteplan_list_folders` - List all folders
+
+## Data Locations
+
+The server automatically detects NotePlan's storage location. Supported paths (in order of preference):
+
+**iCloud paths (preferred):**
+- `~/Library/Mobile Documents/iCloud~co~noteplan~Today/Documents/`
+- `~/Library/Mobile Documents/iCloud~co~noteplan~NotePlan3/Documents/`
+- `~/Library/Mobile Documents/iCloud~co~noteplan~NotePlan/Documents/`
+- `~/Library/Mobile Documents/iCloud~co~noteplan~NotePlan-setapp/Documents/`
+
+**Local paths:**
+- `~/Library/Containers/co.noteplan.NotePlan3/Data/Library/Application Support/co.noteplan.NotePlan3`
+- `~/Library/Containers/co.noteplan.NotePlan-setapp/Data/Library/Application Support/co.noteplan.NotePlan-setapp`
+
+**Teamspace Database:** `~/Library/Caches/teamspace.db`
+
+## How It Works
+
+- **Local notes**: Direct file system read/write. NotePlan auto-detects changes via FolderMonitor (~300ms delay)
+- **Teamspace notes**: SQLite queries/updates. NotePlan sees changes on next sync cycle or app restart
+
+## License
+
+MIT

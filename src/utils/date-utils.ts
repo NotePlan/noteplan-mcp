@@ -1,0 +1,300 @@
+// Date utilities for NotePlan filename conversions
+
+/**
+ * Get today's date in YYYYMMDD format
+ */
+export function getTodayDateString(): string {
+  const now = new Date();
+  return formatDateString(now);
+}
+
+/**
+ * Format a Date object to YYYYMMDD string
+ */
+export function formatDateString(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
+/**
+ * Parse YYYYMMDD string to Date object
+ */
+export function parseDateString(dateStr: string): Date | null {
+  const match = dateStr.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (!match) return null;
+
+  const [, year, month, day] = match;
+  return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+}
+
+/**
+ * Get the calendar note filename for a date
+ * Returns path like Calendar/2024/20240115.md
+ */
+export function getCalendarNotePath(dateStr: string): string {
+  const year = dateStr.substring(0, 4);
+  return `Calendar/${year}/${dateStr}.md`;
+}
+
+/**
+ * Get the weekly note filename for a date
+ * Returns path like Calendar/2024/2024-W03.md
+ */
+export function getWeeklyNotePath(date: Date): string {
+  const year = date.getFullYear();
+  const week = getWeekNumber(date);
+  const weekStr = String(week).padStart(2, '0');
+  return `Calendar/${year}/${year}-W${weekStr}.md`;
+}
+
+/**
+ * Get ISO week number for a date
+ */
+export function getWeekNumber(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+/**
+ * Get ISO week year for a date (can differ from calendar year at year boundaries)
+ * For example: Dec 30, 2024 is in Week 1 of 2025
+ */
+export function getISOWeekYear(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  return d.getUTCFullYear();
+}
+
+/**
+ * Get both ISO week number and year
+ */
+export function getISOWeek(date: Date): { week: number; year: number } {
+  return {
+    week: getWeekNumber(date),
+    year: getISOWeekYear(date),
+  };
+}
+
+/**
+ * Parse a date input string that could be:
+ * - YYYYMMDD
+ * - YYYY-MM-DD
+ * - today
+ * - tomorrow
+ * - yesterday
+ */
+export function parseFlexibleDate(input: string): string {
+  const lower = input.toLowerCase().trim();
+  const now = new Date();
+
+  if (lower === 'today') {
+    return formatDateString(now);
+  }
+
+  if (lower === 'tomorrow') {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return formatDateString(tomorrow);
+  }
+
+  if (lower === 'yesterday') {
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    return formatDateString(yesterday);
+  }
+
+  // YYYY-MM-DD format
+  const isoMatch = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}${isoMatch[2]}${isoMatch[3]}`;
+  }
+
+  // Already YYYYMMDD format
+  if (/^\d{8}$/.test(input)) {
+    return input;
+  }
+
+  // Default to input as-is
+  return input;
+}
+
+/**
+ * Format a date string for display
+ */
+export function formatDateForDisplay(dateStr: string): string {
+  const date = parseDateString(dateStr);
+  if (!date) return dateStr;
+
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}
+
+/**
+ * Check if a filename is a calendar note
+ */
+export function isCalendarNoteFilename(filename: string): boolean {
+  // Match patterns like 20240115.txt, 20240115.md, 2024-W03.txt, 2024-W03.md
+  return /^\d{8}\.\w+$/.test(filename) || /^\d{4}-W\d{2}\.\w+$/.test(filename);
+}
+
+/**
+ * Extract date from calendar note filename
+ */
+export function extractDateFromFilename(filename: string): string | null {
+  // Match YYYYMMDD with any extension
+  const dailyMatch = filename.match(/(\d{8})\.\w+$/);
+  if (dailyMatch) return dailyMatch[1];
+
+  // Match YYYY-Www (weekly) with any extension
+  const weeklyMatch = filename.match(/(\d{4}-W\d{2})\.\w+$/);
+  if (weeklyMatch) return weeklyMatch[1];
+
+  // Match YYYY-MM (monthly) with any extension
+  const monthlyMatch = filename.match(/(\d{4}-\d{2})\.\w+$/);
+  if (monthlyMatch) return monthlyMatch[1];
+
+  // Match YYYY-Qq (quarterly) with any extension
+  const quarterlyMatch = filename.match(/(\d{4}-Q[1-4])\.\w+$/);
+  if (quarterlyMatch) return quarterlyMatch[1];
+
+  // Match YYYY (yearly) with any extension
+  const yearlyMatch = filename.match(/(\d{4})\.\w+$/);
+  if (yearlyMatch) return yearlyMatch[1];
+
+  return null;
+}
+
+/**
+ * Calendar note types
+ */
+export type CalendarNoteType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+
+/**
+ * Get the type of calendar note from its filename
+ */
+export function getCalendarNoteType(filename: string): CalendarNoteType | null {
+  if (/\d{8}\.\w+$/.test(filename)) return 'daily';
+  if (/\d{4}-W\d{2}\.\w+$/.test(filename)) return 'weekly';
+  if (/\d{4}-\d{2}\.\w+$/.test(filename)) return 'monthly';
+  if (/\d{4}-Q[1-4]\.\w+$/.test(filename)) return 'quarterly';
+  if (/\d{4}\.\w+$/.test(filename)) return 'yearly';
+  return null;
+}
+
+/**
+ * Get the monthly note filename for a date
+ * Returns path like Calendar/2024/2024-01.md
+ */
+export function getMonthlyNotePath(date: Date, hasYearSubfolders: boolean = true): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const filename = `${year}-${month}.md`;
+  return hasYearSubfolders ? `Calendar/${year}/${filename}` : `Calendar/${filename}`;
+}
+
+/**
+ * Get the quarterly note filename for a date
+ * Returns path like Calendar/2024/2024-Q1.md
+ */
+export function getQuarterlyNotePath(date: Date, hasYearSubfolders: boolean = true): string {
+  const year = date.getFullYear();
+  const quarter = Math.floor(date.getMonth() / 3) + 1;
+  const filename = `${year}-Q${quarter}.md`;
+  return hasYearSubfolders ? `Calendar/${year}/${filename}` : `Calendar/${filename}`;
+}
+
+/**
+ * Get the yearly note filename for a date
+ * Returns path like Calendar/2024/2024.md
+ */
+export function getYearlyNotePath(date: Date, hasYearSubfolders: boolean = true): string {
+  const year = date.getFullYear();
+  const filename = `${year}.md`;
+  return hasYearSubfolders ? `Calendar/${year}/${filename}` : `Calendar/${filename}`;
+}
+
+/**
+ * Get a date range for a period
+ */
+export function getDateRange(
+  period: 'today' | 'yesterday' | 'this-week' | 'last-week' | 'this-month' | 'last-month' | string,
+  customStart?: string,
+  customEnd?: string
+): { start: Date; end: Date } {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  switch (period) {
+    case 'today':
+      return { start: now, end: now };
+
+    case 'yesterday': {
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      return { start: yesterday, end: yesterday };
+    }
+
+    case 'this-week': {
+      const start = new Date(now);
+      start.setDate(start.getDate() - start.getDay()); // Sunday
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6); // Saturday
+      return { start, end };
+    }
+
+    case 'last-week': {
+      const start = new Date(now);
+      start.setDate(start.getDate() - start.getDay() - 7);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      return { start, end };
+    }
+
+    case 'this-month': {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      return { start, end };
+    }
+
+    case 'last-month': {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 0);
+      return { start, end };
+    }
+
+    default:
+      // Custom range
+      if (customStart && customEnd) {
+        return {
+          start: new Date(customStart),
+          end: new Date(customEnd),
+        };
+      }
+      return { start: now, end: now };
+  }
+}
+
+/**
+ * Generate all dates in a range
+ */
+export function getDatesInRange(start: Date, end: Date): Date[] {
+  const dates: Date[] = [];
+  const current = new Date(start);
+
+  while (current <= end) {
+    dates.push(new Date(current));
+    current.setDate(current.getDate() + 1);
+  }
+
+  return dates;
+}
