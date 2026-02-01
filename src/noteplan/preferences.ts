@@ -126,3 +126,52 @@ export function isTaskMarker(char: string): boolean {
 
   return false;
 }
+
+/**
+ * Read an integer preference from NotePlan's UserDefaults
+ */
+function readIntPref(key: string, defaultValue: number): number {
+  try {
+    const result = execFileSync('defaults', ['read', 'co.noteplan.NotePlan3', key], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const parsed = parseInt(result, 10);
+    return isNaN(parsed) ? defaultValue : parsed;
+  } catch {
+    return defaultValue;
+  }
+}
+
+/**
+ * Get the first day of week preference from NotePlan
+ * Returns 0-6 where 0 = Sunday, 1 = Monday, etc. (JavaScript convention)
+ *
+ * NotePlan stores this using NSCalendar convention: 1 = Sunday, 2 = Monday, ..., 7 = Saturday
+ * We convert to JavaScript's getDay() convention: 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+ */
+export function getFirstDayOfWeek(): number {
+  // NotePlan uses NSCalendar weekday: 1 = Sunday, 2 = Monday, ..., 7 = Saturday
+  // Default to 2 (Monday) if not set
+  const notePlanValue = readIntPref('firstDayOfWeek', 2);
+
+  // Convert to JavaScript convention: 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  // NSCalendar 1 → JS 0, NSCalendar 2 → JS 1, etc.
+  return (notePlanValue - 1) % 7;
+}
+
+// Cache for first day of week
+let cachedFirstDayOfWeek: number | null = null;
+let firstDayOfWeekCacheTime = 0;
+
+/**
+ * Get cached first day of week
+ */
+export function getFirstDayOfWeekCached(): number {
+  const now = Date.now();
+  if (cachedFirstDayOfWeek === null || now - firstDayOfWeekCacheTime > CACHE_TTL) {
+    cachedFirstDayOfWeek = getFirstDayOfWeek();
+    firstDayOfWeekCacheTime = now;
+  }
+  return cachedFirstDayOfWeek;
+}

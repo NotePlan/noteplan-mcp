@@ -73,7 +73,7 @@ export interface SQLiteNoteRow {
   parent: string | null;
   is_dir: number;
   created_at?: string;
-  updated_at?: string;
+  modified_at?: string;
 }
 
 // Note type constants from SQLite

@@ -1,5 +1,6 @@
 // Unified store that merges local and space notes
 
+import * as path from 'path';
 import { Note, NoteType, Folder, Space, SearchResult, SearchMatch } from './types.js';
 import * as fileReader from './file-reader.js';
 import * as fileWriter from './file-writer.js';
@@ -7,6 +8,12 @@ import * as sqliteReader from './sqlite-reader.js';
 import * as sqliteWriter from './sqlite-writer.js';
 import { getTodayDateString, parseFlexibleDate } from '../utils/date-utils.js';
 import { matchFolder, FolderMatchResult } from '../utils/folder-matcher.js';
+import { searchWithRipgrep, isRipgrepAvailable, RipgrepMatch } from './ripgrep-search.js';
+import { fuzzySearch } from './fuzzy-search.js';
+import { parseFlexibleDateFilter, isDateInRange } from '../utils/date-filters.js';
+
+// Cache ripgrep availability check
+let ripgrepAvailable: boolean | null = null;
 
 /**
  * Result of folder resolution during note creation
@@ -32,12 +39,18 @@ export interface CreateNoteResult {
  * Get a note by various identifiers
  */
 export function getNote(options: {
+  id?: string;
   title?: string;
   filename?: string;
   date?: string;
   space?: string;
 }): Note | null {
-  const { title, filename, date, space } = options;
+  const { id, title, filename, date, space } = options;
+
+  // If ID is specified, get directly (best for space notes)
+  if (id) {
+    return sqliteReader.getSpaceNote(id);
+  }
 
   // If date is specified, get calendar note
   if (date) {
@@ -110,51 +123,234 @@ export function listNotes(options: {
 }
 
 /**
- * Search across all notes
+ * Enhanced search options
  */
-export function searchNotes(
+export interface SearchOptions {
+  types?: NoteType[];
+  folder?: string;
+  space?: string;
+  limit?: number;
+  fuzzy?: boolean;
+  caseSensitive?: boolean;
+  contextLines?: number;
+  // Date filters
+  modifiedAfter?: string;
+  modifiedBefore?: string;
+  createdAfter?: string;
+  createdBefore?: string;
+}
+
+/**
+ * Search across all notes with enhanced options
+ */
+export async function searchNotes(
   query: string,
-  options: {
-    types?: NoteType[];
-    folder?: string;
-    space?: string;
-    limit?: number;
-  } = {}
-): SearchResult[] {
-  const { types, folder, space, limit = 50 } = options;
-  const results: SearchResult[] = [];
+  options: SearchOptions = {}
+): Promise<SearchResult[]> {
+  const { types, folder, space, limit = 50, fuzzy = false } = options;
+  let results: SearchResult[] = [];
   const lowerQuery = query.toLowerCase();
+
+  // Parse date filters
+  const modifiedAfter = options.modifiedAfter
+    ? parseFlexibleDateFilter(options.modifiedAfter)
+    : null;
+  const modifiedBefore = options.modifiedBefore
+    ? parseFlexibleDateFilter(options.modifiedBefore)
+    : null;
+  const createdAfter = options.createdAfter
+    ? parseFlexibleDateFilter(options.createdAfter)
+    : null;
+  const createdBefore = options.createdBefore
+    ? parseFlexibleDateFilter(options.createdBefore)
+    : null;
+
+  // Check ripgrep availability (cached)
+  if (ripgrepAvailable === null) {
+    ripgrepAvailable = await isRipgrepAvailable();
+    if (!ripgrepAvailable) {
+      console.error('Note: ripgrep not found, using fallback search for local notes');
+    }
+  }
 
   // Search local notes
   if (!space) {
-    const localNotes = fileReader.searchLocalNotes(query, { types, folder, limit });
-    for (const note of localNotes) {
-      const matches = findMatches(note.content, lowerQuery);
-      results.push({
-        note,
-        matches,
-        score: calculateScore(note, matches, lowerQuery),
+    if (ripgrepAvailable) {
+      try {
+        const searchPaths = folder
+          ? [path.join(fileReader.getNotesPath(), folder)]
+          : undefined;
+
+        const rgMatches = await searchWithRipgrep(query, {
+          caseSensitive: options.caseSensitive,
+          contextLines: options.contextLines,
+          paths: searchPaths,
+          maxResults: limit * 2, // Get extra for filtering
+        });
+
+        results.push(...convertRipgrepToSearchResults(rgMatches));
+      } catch (error) {
+        console.error('Ripgrep search failed:', error);
+        // Fall back to simple search
+        const localNotes = fileReader.searchLocalNotes(query, {
+          types,
+          folder,
+          limit: limit * 2,
+        });
+        results.push(...localNotes.map((note) => noteToSearchResult(note, lowerQuery)));
+      }
+    } else {
+      // Fallback to original search method
+      const localNotes = fileReader.searchLocalNotes(query, {
+        types,
+        folder,
+        limit: limit * 2,
       });
+      results.push(...localNotes.map((note) => noteToSearchResult(note, lowerQuery)));
     }
   }
 
   // Search space notes
-  const spaceNotes = sqliteReader.searchSpaceNotes(query, {
-    spaceId: space,
-    limit,
-  });
+  const spaceNotes = sqliteReader.searchSpaceNotesFTS(query, { spaceId: space, limit: limit * 2 });
   for (const note of spaceNotes) {
-    const matches = findMatches(note.content, lowerQuery);
     results.push({
       note,
-      matches,
-      score: calculateScore(note, matches, lowerQuery),
+      matches: findMatches(note.content, lowerQuery),
+      score: 50, // Base score, will be enhanced below
     });
+  }
+
+  // Apply date filters
+  if (modifiedAfter || modifiedBefore || createdAfter || createdBefore) {
+    results = results.filter((r) => {
+      const modifiedOk = isDateInRange(r.note.modifiedAt, modifiedAfter, modifiedBefore);
+      const createdOk = isDateInRange(r.note.createdAt, createdAfter, createdBefore);
+
+      // If both filter types specified, both must pass; if only one, just that one
+      if ((modifiedAfter || modifiedBefore) && (createdAfter || createdBefore)) {
+        return modifiedOk && createdOk;
+      }
+      if (modifiedAfter || modifiedBefore) return modifiedOk;
+      if (createdAfter || createdBefore) return createdOk;
+      return true;
+    });
+  }
+
+  // Apply enhanced scoring with recency boost
+  results = results.map((r) => ({
+    ...r,
+    score: calculateEnhancedScore(r, lowerQuery),
+  }));
+
+  // Apply fuzzy re-ranking if enabled
+  if (fuzzy && results.length > 0) {
+    const allNotes = results.map((r) => r.note);
+    return fuzzySearch(allNotes, query, limit);
   }
 
   // Sort by score and limit
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, limit);
+}
+
+/**
+ * Convert a note to a SearchResult
+ */
+function noteToSearchResult(note: Note, query: string): SearchResult {
+  const matches = findMatches(note.content, query);
+  return {
+    note,
+    matches,
+    score: calculateScore(note, matches, query),
+  };
+}
+
+/**
+ * Convert ripgrep matches to SearchResults
+ */
+function convertRipgrepToSearchResults(matches: RipgrepMatch[]): SearchResult[] {
+  // Group matches by file
+  const byFile = new Map<string, RipgrepMatch[]>();
+  for (const m of matches) {
+    const existing = byFile.get(m.file) || [];
+    existing.push(m);
+    byFile.set(m.file, existing);
+  }
+
+  const results: SearchResult[] = [];
+  for (const [file, fileMatches] of byFile) {
+    const note = fileReader.readNoteFile(file);
+    if (note) {
+      results.push({
+        note,
+        matches: fileMatches.map((m) => ({
+          lineNumber: m.line,
+          lineContent: m.content,
+          matchStart: m.matchStart,
+          matchEnd: m.matchEnd,
+        })),
+        score: fileMatches.length * 10, // Score by match count
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Enhanced scoring with recency boost
+ */
+function calculateEnhancedScore(result: SearchResult, query: string): number {
+  let score = result.matches.length; // Base: match count
+
+  const note = result.note;
+
+  // Title match bonuses
+  const lowerTitle = note.title.toLowerCase();
+  if (lowerTitle === query) {
+    score += 30; // Exact title match
+  } else if (lowerTitle.includes(query)) {
+    score += 15; // Partial title match
+  }
+
+  // Recency bonus (modified date) - significant boost for recent notes
+  if (note.modifiedAt) {
+    const daysSinceModified = (Date.now() - note.modifiedAt.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceModified < 1) {
+      score += 20; // Today
+    } else if (daysSinceModified < 7) {
+      score += 15; // This week
+    } else if (daysSinceModified < 30) {
+      score += 8; // This month
+    } else if (daysSinceModified < 90) {
+      score += 3; // Last 3 months
+    }
+    // Older notes get no boost
+  }
+
+  // Creation date bonus (smaller, for "newer" content)
+  if (note.createdAt) {
+    const daysSinceCreated = (Date.now() - note.createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceCreated < 7) {
+      score += 5; // Recently created
+    } else if (daysSinceCreated < 30) {
+      score += 2;
+    }
+  }
+
+  // Penalty for @Archive and @Trash folders (push to bottom of results)
+  if (note.folder) {
+    const folderLower = note.folder.toLowerCase();
+    if (folderLower.includes('@archive') || folderLower.includes('@trash')) {
+      score -= 50; // Significant penalty to push these to the bottom
+    }
+  }
+
+  // Also check note type for trash
+  if (note.type === 'trash') {
+    score -= 50;
+  }
+
+  return score;
 }
 
 /**

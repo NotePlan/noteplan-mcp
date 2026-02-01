@@ -1,5 +1,21 @@
 // Date utilities for NotePlan filename conversions
 
+import { getFirstDayOfWeekCached } from '../noteplan/preferences.js';
+
+/**
+ * Get the start of the week for a given date, respecting NotePlan's firstDayOfWeek setting
+ * @param date The reference date
+ * @param firstDayOfWeek 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+ */
+function getStartOfWeekDate(date: Date, firstDayOfWeek: number): Date {
+  const day = date.getDay();
+  const daysToSubtract = (day - firstDayOfWeek + 7) % 7;
+  const weekStart = new Date(date);
+  weekStart.setDate(date.getDate() - daysToSubtract);
+  weekStart.setHours(0, 0, 0, 0);
+  return weekStart;
+}
+
 /**
  * Get today's date in YYYYMMDD format
  */
@@ -245,16 +261,18 @@ export function getDateRange(
     }
 
     case 'this-week': {
-      const start = new Date(now);
-      start.setDate(start.getDate() - start.getDay()); // Sunday
+      const firstDayOfWeek = getFirstDayOfWeekCached();
+      const start = getStartOfWeekDate(now, firstDayOfWeek);
       const end = new Date(start);
-      end.setDate(end.getDate() + 6); // Saturday
+      end.setDate(end.getDate() + 6);
       return { start, end };
     }
 
     case 'last-week': {
-      const start = new Date(now);
-      start.setDate(start.getDate() - start.getDay() - 7);
+      const firstDayOfWeek = getFirstDayOfWeekCached();
+      const thisWeekStart = getStartOfWeekDate(now, firstDayOfWeek);
+      const start = new Date(thisWeekStart);
+      start.setDate(start.getDate() - 7);
       const end = new Date(start);
       end.setDate(end.getDate() + 6);
       return { start, end };

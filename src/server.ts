@@ -37,17 +37,27 @@ export function createServer(): Server {
         // Note operations
         {
           name: 'noteplan_get_note',
-          description: 'Get a note by title, filename, or date. Returns the note content and metadata.',
+          description: `Get a note by ID, title, filename, or date. Returns the note content and metadata.
+
+IMPORTANT for space notes: Use the 'id' parameter (get it from search results). Space notes often have generic filenames like "Untitled.md" that aren't unique.
+
+Recommended approach:
+1. Search for a note with noteplan_search
+2. Use the 'id' from search results to get the full note content`,
           inputSchema: {
             type: 'object',
             properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (BEST for space notes - get this from search results)',
+              },
               title: {
                 type: 'string',
                 description: 'Note title to search for',
               },
               filename: {
                 type: 'string',
-                description: 'Direct filename/path to the note',
+                description: 'Direct filename/path (for local notes only)',
               },
               date: {
                 type: 'string',
@@ -401,13 +411,30 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
         // Search
         {
           name: 'noteplan_search',
-          description: 'Full-text search across all notes (local and space).',
+          description: `Full-text search across all notes. Results include note ID for retrieval.
+
+SEARCH STRATEGY - Follow this approach:
+1. Start with the SHORTEST, most UNIQUE identifier (e.g., "3.20" not "version 3.20 features")
+2. Use OR patterns for variations: "v3.20|3.20|version 3.20"
+3. More words = stricter matching (ALL words must appear)
+4. Avoid common words that might not be in the title
+
+Examples:
+- User asks about "version 3.20 features" → search "v3.20|3.20" first
+- User asks about "project kickoff meeting" → search "kickoff" or "kickoff|project"
+- User asks about "Q1 planning notes" → search "Q1 planning|Q1"
+
+Features:
+- OR patterns: "meeting|standup|sync" finds notes with ANY of these terms
+- Fuzzy matching: Enable fuzzy=true for typo tolerance
+- Date filtering: modifiedAfter="this week" for recent notes
+- Recency boost: Recent notes rank higher, @Archive/@Trash notes rank lower`,
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
-                description: 'Search query string',
+                description: 'Search query. Supports OR patterns like "meeting|standup"',
               },
               types: {
                 type: 'array',
@@ -426,6 +453,34 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
               limit: {
                 type: 'number',
                 description: 'Maximum number of results (default: 20)',
+              },
+              fuzzy: {
+                type: 'boolean',
+                description: 'Enable fuzzy/typo-tolerant matching (default: false)',
+              },
+              caseSensitive: {
+                type: 'boolean',
+                description: 'Case-sensitive search (default: false)',
+              },
+              contextLines: {
+                type: 'number',
+                description: 'Lines of context around matches (0-5, default: 0)',
+              },
+              modifiedAfter: {
+                type: 'string',
+                description: 'Filter notes modified after date (ISO date or "today", "yesterday", "this week", "this month")',
+              },
+              modifiedBefore: {
+                type: 'string',
+                description: 'Filter notes modified before date',
+              },
+              createdAfter: {
+                type: 'string',
+                description: 'Filter notes created after date',
+              },
+              createdBefore: {
+                type: 'string',
+                description: 'Filter notes created before date',
               },
             },
             required: ['query'],
@@ -1082,7 +1137,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
 
         // Search
         case 'noteplan_search':
-          result = searchTools.searchNotes(args as any);
+          result = await searchTools.searchNotes(args as any);
           break;
 
         // Task operations

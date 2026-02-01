@@ -6,8 +6,9 @@ import * as frontmatter from '../noteplan/frontmatter-parser.js';
 
 // Schema definitions
 export const getNoteSchema = z.object({
+  id: z.string().optional().describe('Note ID (use this for space notes - get it from search results)'),
   title: z.string().optional().describe('Note title to search for'),
-  filename: z.string().optional().describe('Direct filename/path to the note'),
+  filename: z.string().optional().describe('Direct filename/path to the note (for local notes)'),
   date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
   space: z.string().optional().describe('Space ID to search in'),
 });
@@ -48,6 +49,7 @@ export function getNote(params: z.infer<typeof getNoteSchema>) {
   return {
     success: true,
     note: {
+      id: note.id,
       title: note.title,
       filename: note.filename,
       content: note.content,
@@ -68,6 +70,7 @@ export function listNotes(params: z.infer<typeof listNotesSchema>) {
     success: true,
     count: notes.length,
     notes: notes.map((note) => ({
+      id: note.id,
       title: note.title,
       filename: note.filename,
       type: note.type,

@@ -57,11 +57,19 @@ export function getDatabase(): Database.Database | null {
   }
 
   try {
+    // Try read-write first (needed for sqlite-writer operations)
     db = new Database(cachedDbPath, { readonly: false });
     return db;
   } catch (error) {
-    console.error('Failed to open spaces database:', error);
-    return null;
+    // If read-write fails (e.g., database locked), try read-only
+    try {
+      console.error('Note: Opening spaces database in read-only mode');
+      db = new Database(cachedDbPath, { readonly: true });
+      return db;
+    } catch (readOnlyError) {
+      console.error('Failed to open spaces database:', readOnlyError);
+      return null;
+    }
   }
 }
 
@@ -110,19 +118,56 @@ export function listSpaces(): Space[] {
 }
 
 /**
- * Get teamspace ID from filename
+ * Get all descendant IDs of a space (folders and notes)
+ * Uses recursive CTE to traverse parent hierarchy
  */
-function getSpaceIdFromFilename(filename: string): string | undefined {
-  // Pattern: %%NotePlanCloud%%/[teamspace-id]/[note-id]
-  const match = filename.match(/%%NotePlanCloud%%\/([^/]+)\//);
-  return match ? match[1] : undefined;
+function getSpaceDescendantIds(database: Database.Database, spaceId: string): string[] {
+  try {
+    const rows = database.prepare(`
+      WITH RECURSIVE space_tree AS (
+        -- Base case: direct children of the space
+        SELECT id FROM notes WHERE parent = ?
+        UNION ALL
+        -- Recursive: children of folders in the tree
+        SELECT n.id FROM notes n
+        INNER JOIN space_tree st ON n.parent = st.id
+      )
+      SELECT id FROM space_tree
+    `).all(spaceId) as { id: string }[];
+
+    return rows.map(r => r.id);
+  } catch (error) {
+    console.error('Error getting space descendants:', error);
+    return [];
+  }
+}
+
+/**
+ * Find the root space ID by traversing parent chain
+ */
+function findRootSpaceId(database: Database.Database, noteId: string): string | undefined {
+  try {
+    const row = database.prepare(`
+      WITH RECURSIVE parent_chain AS (
+        SELECT id, parent, note_type FROM notes WHERE id = ?
+        UNION ALL
+        SELECT n.id, n.parent, n.note_type FROM notes n
+        INNER JOIN parent_chain pc ON n.id = pc.parent
+      )
+      SELECT id FROM parent_chain WHERE note_type = ?
+    `).get(noteId, SQLITE_NOTE_TYPES.TEAMSPACE) as { id: string } | undefined;
+
+    return row?.id;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
  * Convert SQLite row to Note object
  */
-function rowToNote(row: SQLiteNoteRow): Note {
-  const spaceId = getSpaceIdFromFilename(row.filename);
+function rowToNote(row: SQLiteNoteRow, database?: Database.Database): Note {
+  const spaceId = database ? findRootSpaceId(database, row.id) : undefined;
   const isCalendar = row.note_type === SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR;
 
   return {
@@ -134,7 +179,7 @@ function rowToNote(row: SQLiteNoteRow): Note {
     source: 'space',
     spaceId,
     folder: row.parent || undefined,
-    modifiedAt: row.updated_at ? new Date(row.updated_at) : undefined,
+    modifiedAt: row.modified_at ? new Date(row.modified_at) : undefined,
     createdAt: row.created_at ? new Date(row.created_at) : undefined,
   };
 }
@@ -148,7 +193,7 @@ export function listSpaceNotes(spaceId?: string): Note[] {
 
   try {
     let query = `
-      SELECT id, content, note_type, title, filename, parent, is_dir, created_at, updated_at
+      SELECT id, content, note_type, title, filename, parent, is_dir, created_at, modified_at
       FROM notes
       WHERE note_type IN (?, ?)
       AND is_dir = 0
@@ -159,12 +204,16 @@ export function listSpaceNotes(spaceId?: string): Note[] {
     ];
 
     if (spaceId) {
-      query += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
+      const descendantIds = getSpaceDescendantIds(database, spaceId);
+      if (descendantIds.length === 0) return [];
+
+      const placeholders = descendantIds.map(() => '?').join(',');
+      query += ` AND id IN (${placeholders})`;
+      params.push(...descendantIds);
     }
 
     const rows = database.prepare(query).all(...params) as SQLiteNoteRow[];
-    return rows.map(rowToNote);
+    return rows.map(row => rowToNote(row, database));
   } catch (error) {
     console.error('Error listing teamspace notes:', error);
     return [];
@@ -182,7 +231,7 @@ export function getSpaceNote(identifier: string): Note | null {
     const row = database
       .prepare(
         `
-        SELECT id, content, note_type, title, filename, parent, is_dir, created_at, updated_at
+        SELECT id, content, note_type, title, filename, parent, is_dir, created_at, modified_at
         FROM notes
         WHERE (id = ? OR filename = ?)
         AND is_dir = 0
@@ -190,7 +239,7 @@ export function getSpaceNote(identifier: string): Note | null {
       )
       .get(identifier, identifier) as SQLiteNoteRow | undefined;
 
-    return row ? rowToNote(row) : null;
+    return row ? rowToNote(row, database) : null;
   } catch (error) {
     console.error('Error getting teamspace note:', error);
     return null;
@@ -206,7 +255,7 @@ export function getSpaceNoteByTitle(title: string, spaceId?: string): Note | nul
 
   try {
     let query = `
-      SELECT id, content, note_type, title, filename, parent, is_dir, created_at, updated_at
+      SELECT id, content, note_type, title, filename, parent, is_dir, created_at, modified_at
       FROM notes
       WHERE title = ?
       AND note_type IN (?, ?)
@@ -219,12 +268,16 @@ export function getSpaceNoteByTitle(title: string, spaceId?: string): Note | nul
     ];
 
     if (spaceId) {
-      query += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
+      const descendantIds = getSpaceDescendantIds(database, spaceId);
+      if (descendantIds.length === 0) return null;
+
+      const placeholders = descendantIds.map(() => '?').join(',');
+      query += ` AND id IN (${placeholders})`;
+      params.push(...descendantIds);
     }
 
     const row = database.prepare(query).get(...params) as SQLiteNoteRow | undefined;
-    return row ? rowToNote(row) : null;
+    return row ? rowToNote(row, database) : null;
   } catch (error) {
     console.error('Error getting teamspace note by title:', error);
     return null;
@@ -232,7 +285,7 @@ export function getSpaceNoteByTitle(title: string, spaceId?: string): Note | nul
 }
 
 /**
- * Search teamspace notes
+ * Search teamspace notes using LIKE pattern (fallback)
  */
 export function searchSpaceNotes(
   query: string,
@@ -248,7 +301,7 @@ export function searchSpaceNotes(
 
   try {
     let sql = `
-      SELECT id, content, note_type, title, filename, parent, is_dir, created_at, updated_at
+      SELECT id, content, note_type, title, filename, parent, is_dir, created_at, modified_at
       FROM notes
       WHERE (content LIKE ? OR title LIKE ?)
       AND note_type IN (?, ?)
@@ -263,17 +316,89 @@ export function searchSpaceNotes(
     ];
 
     if (spaceId) {
-      sql += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
+      const descendantIds = getSpaceDescendantIds(database, spaceId);
+      if (descendantIds.length === 0) return [];
+
+      const placeholders = descendantIds.map(() => '?').join(',');
+      sql += ` AND id IN (${placeholders})`;
+      params.push(...descendantIds);
     }
 
     sql += ` LIMIT ?`;
     params.push(limit);
 
     const rows = database.prepare(sql).all(...params) as SQLiteNoteRow[];
-    return rows.map(rowToNote);
+    return rows.map(row => rowToNote(row, database));
   } catch (error) {
     console.error('Error searching teamspace notes:', error);
+    return [];
+  }
+}
+
+/**
+ * Build search patterns from user input
+ * Handles OR patterns: "meeting|standup" -> ['meeting', 'standup']
+ */
+function parseSearchPatterns(input: string): string[] {
+  // Split by | for OR patterns
+  return input.split('|').map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+/**
+ * Search space notes using LIKE with OR pattern support
+ * This is the primary search method - we don't modify NotePlan's database
+ */
+export function searchSpaceNotesFTS(
+  query: string,
+  options: { spaceId?: string; limit?: number } = {}
+): Note[] {
+  const database = getDatabase();
+  if (!database) return [];
+
+  const { spaceId, limit = 50 } = options;
+
+  // Parse OR patterns
+  const patterns = parseSearchPatterns(query);
+  if (patterns.length === 0) return [];
+
+  try {
+    // Build OR conditions for multiple patterns
+    const orConditions = patterns
+      .map(() => '(content LIKE ? OR title LIKE ?)')
+      .join(' OR ');
+
+    let sql = `
+      SELECT id, content, note_type, title, filename, parent, is_dir, created_at, modified_at
+      FROM notes
+      WHERE (${orConditions})
+      AND note_type IN (?, ?)
+      AND is_dir = 0
+    `;
+
+    // Build params: each pattern needs two placeholders (content, title)
+    const params: (string | number)[] = [];
+    for (const pattern of patterns) {
+      const searchPattern = `%${pattern}%`;
+      params.push(searchPattern, searchPattern);
+    }
+    params.push(SQLITE_NOTE_TYPES.TEAMSPACE_NOTE, SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR);
+
+    if (spaceId) {
+      const descendantIds = getSpaceDescendantIds(database, spaceId);
+      if (descendantIds.length === 0) return [];
+      const placeholders = descendantIds.map(() => '?').join(',');
+      sql += ` AND id IN (${placeholders})`;
+      params.push(...descendantIds);
+    }
+
+    // Order by modified_at (most recent first) for relevance
+    sql += ` ORDER BY modified_at DESC LIMIT ?`;
+    params.push(limit);
+
+    const rows = database.prepare(sql).all(...params) as SQLiteNoteRow[];
+    return rows.map((row) => rowToNote(row, database));
+  } catch (error) {
+    console.error('Error searching space notes:', error);
     return [];
   }
 }
@@ -287,24 +412,28 @@ export function listSpaceFolders(spaceId?: string): Folder[] {
 
   try {
     let query = `
-      SELECT id, title, filename
+      SELECT id, title, filename, parent
       FROM notes
       WHERE is_dir = 1
     `;
     const params: string[] = [];
 
     if (spaceId) {
-      query += ` AND filename LIKE ?`;
-      params.push(`%%NotePlanCloud%%/${spaceId}/%`);
+      const descendantIds = getSpaceDescendantIds(database, spaceId);
+      if (descendantIds.length === 0) return [];
+
+      const placeholders = descendantIds.map(() => '?').join(',');
+      query += ` AND id IN (${placeholders})`;
+      params.push(...descendantIds);
     }
 
-    const rows = database.prepare(query).all(...params) as { id: string; title: string; filename: string }[];
+    const rows = database.prepare(query).all(...params) as { id: string; title: string; filename: string; parent: string }[];
 
     return rows.map((row) => ({
       path: row.filename,
       name: row.title || row.id,
       source: 'space' as const,
-      spaceId: getSpaceIdFromFilename(row.filename),
+      spaceId: findRootSpaceId(database, row.id),
     }));
   } catch (error) {
     console.error('Error listing teamspace folders:', error);
@@ -337,25 +466,29 @@ export function getSpaceCalendarNote(dateStr: string, spaceId: string): Note | n
   if (!database) return null;
 
   try {
-    // Calendar notes in teamspace have filename containing the date
+    // Get descendants first
+    const descendantIds = getSpaceDescendantIds(database, spaceId);
+    if (descendantIds.length === 0) return null;
+
+    const placeholders = descendantIds.map(() => '?').join(',');
     const row = database
       .prepare(
         `
-        SELECT id, content, note_type, title, filename, parent, is_dir, created_at, updated_at
+        SELECT id, content, note_type, title, filename, parent, is_dir, created_at, modified_at
         FROM notes
         WHERE note_type = ?
-        AND filename LIKE ?
+        AND id IN (${placeholders})
         AND filename LIKE ?
         AND is_dir = 0
       `
       )
       .get(
         SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR,
-        `%%NotePlanCloud%%/${spaceId}/%`,
+        ...descendantIds,
         `%${dateStr}%`
       ) as SQLiteNoteRow | undefined;
 
-    return row ? rowToNote(row) : null;
+    return row ? rowToNote(row, database) : null;
   } catch (error) {
     console.error('Error getting teamspace calendar note:', error);
     return null;
