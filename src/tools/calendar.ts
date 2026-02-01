@@ -9,6 +9,7 @@ import {
   getDateRange,
   getDatesInRange,
   getISOWeek,
+  getWeekRespectingPreference,
 } from '../utils/date-utils.js';
 
 export const getTodaySchema = z.object({
@@ -174,10 +175,10 @@ export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>) {
           weekNum = params.week;
           weekYear = params.year || currentYear;
         } else {
-          // Use ISO week from reference date
-          const isoWeek = getISOWeek(refDate);
-          weekNum = isoWeek.week;
-          weekYear = isoWeek.year;
+          // Use week calculation that respects NotePlan's firstDayOfWeek preference
+          const weekInfo = getWeekRespectingPreference(refDate);
+          weekNum = weekInfo.week;
+          weekYear = weekInfo.year;
         }
 
         const weekStr = String(weekNum).padStart(2, '0');

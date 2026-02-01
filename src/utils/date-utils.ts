@@ -98,6 +98,78 @@ export function getISOWeek(date: Date): { week: number; year: number } {
 }
 
 /**
+ * Get week number respecting a custom first day of week
+ * @param date The date to get the week for
+ * @param firstDayOfWeek 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+ * @returns Week number and year
+ *
+ * Week 1 is defined as the week containing January 1
+ */
+export function getWeekWithFirstDay(
+  date: Date,
+  firstDayOfWeek: number
+): { week: number; year: number } {
+  // Find the start of the week containing the given date
+  const day = date.getDay();
+  const daysToSubtract = (day - firstDayOfWeek + 7) % 7;
+  const weekStart = new Date(date);
+  weekStart.setDate(date.getDate() - daysToSubtract);
+  weekStart.setHours(0, 0, 0, 0);
+
+  // Determine which year this week belongs to
+  // A week belongs to the year that contains the majority of its days
+  // For simplicity, we use the year of the week's Thursday (or mid-week)
+  const midWeek = new Date(weekStart);
+  midWeek.setDate(weekStart.getDate() + 3); // Thursday of the week
+  const weekYear = midWeek.getFullYear();
+
+  // Find the start of week 1 of that year
+  // Week 1 is the week containing January 1
+  const jan1 = new Date(weekYear, 0, 1);
+  const jan1Day = jan1.getDay();
+  const daysToWeekStart = (jan1Day - firstDayOfWeek + 7) % 7;
+  const week1Start = new Date(jan1);
+  week1Start.setDate(jan1.getDate() - daysToWeekStart);
+  week1Start.setHours(0, 0, 0, 0);
+
+  // Calculate the week number
+  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+  const weeksDiff = Math.floor((weekStart.getTime() - week1Start.getTime()) / msPerWeek);
+  const weekNum = weeksDiff + 1;
+
+  // Handle edge case: if week number is 0 or negative, it's the last week of the previous year
+  if (weekNum <= 0) {
+    // Recalculate for previous year
+    const prevYearDec31 = new Date(weekYear - 1, 11, 31);
+    return getWeekWithFirstDay(prevYearDec31, firstDayOfWeek);
+  }
+
+  // Handle edge case: check if this might be week 1 of next year
+  // (if the week mostly falls in the next year)
+  const nextJan1 = new Date(weekYear + 1, 0, 1);
+  if (weekStart.getTime() >= nextJan1.getTime() - 3 * 24 * 60 * 60 * 1000) {
+    // This week might belong to next year - check if Jan 1 is in this week
+    const nextJan1Day = nextJan1.getDay();
+    const daysToNextWeekStart = (nextJan1Day - firstDayOfWeek + 7) % 7;
+    const nextWeek1Start = new Date(nextJan1);
+    nextWeek1Start.setDate(nextJan1.getDate() - daysToNextWeekStart);
+    if (weekStart.getTime() === nextWeek1Start.getTime()) {
+      return { week: 1, year: weekYear + 1 };
+    }
+  }
+
+  return { week: weekNum, year: weekYear };
+}
+
+/**
+ * Get week number and year respecting NotePlan's firstDayOfWeek preference
+ */
+export function getWeekRespectingPreference(date: Date): { week: number; year: number } {
+  const firstDayOfWeek = getFirstDayOfWeekCached();
+  return getWeekWithFirstDay(date, firstDayOfWeek);
+}
+
+/**
  * Parse a date input string that could be:
  * - YYYYMMDD
  * - YYYY-MM-DD
