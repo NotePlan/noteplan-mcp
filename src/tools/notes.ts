@@ -105,6 +105,24 @@ function buildLineWindow(allLines: string[], options: LineWindowOptions): LineWi
   };
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findParagraphBounds(lines: string[], lineIndex: number): { startIndex: number; endIndex: number } {
+  let startIndex = lineIndex;
+  while (startIndex > 0 && lines[startIndex - 1].trim() !== '') {
+    startIndex -= 1;
+  }
+
+  let endIndex = lineIndex;
+  while (endIndex < lines.length - 1 && lines[endIndex + 1].trim() !== '') {
+    endIndex += 1;
+  }
+
+  return { startIndex, endIndex };
+}
+
 // Schema definitions
 export const getNoteSchema = z.object({
   id: z.string().optional().describe('Note ID (use this for space notes - get it from search results)'),
@@ -550,6 +568,30 @@ export const getParagraphsSchema = z.object({
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
+export const searchParagraphsSchema = z.object({
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  title: z.string().optional().describe('Note title to search for'),
+  filename: z.string().optional().describe('Direct filename/path to the note'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  space: z.string().optional().describe('Space ID to search in'),
+  query: z.string().describe('Text to find in note lines/paragraphs'),
+  caseSensitive: z.boolean().optional().default(false).describe('Case-sensitive match (default: false)'),
+  wholeWord: z.boolean().optional().default(false).describe('Require whole-word matches (default: false)'),
+  startLine: z.number().min(1).optional().describe('First line to search (1-indexed, inclusive)'),
+  endLine: z.number().min(1).optional().describe('Last line to search (1-indexed, inclusive)'),
+  contextLines: z.number().min(0).max(5).optional().default(1).describe('Context lines before/after each match'),
+  paragraphMaxChars: z
+    .number()
+    .min(50)
+    .max(5000)
+    .optional()
+    .default(600)
+    .describe('Maximum paragraph text chars per match'),
+  limit: z.number().min(1).max(200).optional().default(20).describe('Maximum matches to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+});
+
 export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
   const note = store.getNote({ filename: params.filename });
 
@@ -600,6 +642,125 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
     !params.offset
   ) {
     result.performanceHints = [PROGRESSIVE_READ_HINT];
+  }
+
+  return result;
+}
+
+export function searchParagraphs(params: z.infer<typeof searchParagraphsSchema>) {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required',
+    };
+  }
+  if (!params.id && !params.title && !params.filename && !params.date) {
+    return {
+      success: false,
+      error: 'Provide one note reference: id, title, filename, or date',
+    };
+  }
+
+  const note = store.getNote({
+    id: params.id,
+    title: params.title,
+    filename: params.filename,
+    date: params.date,
+    space: params.space,
+  });
+
+  if (!note) {
+    return {
+      success: false,
+      error: 'Note not found',
+    };
+  }
+
+  const allLines = note.content.split('\n');
+  const lineWindow = buildLineWindow(allLines, {
+    startLine: params.startLine,
+    endLine: params.endLine,
+    defaultLimit: allLines.length,
+    maxLimit: allLines.length,
+  });
+  const caseSensitive = params.caseSensitive ?? false;
+  const wholeWord = params.wholeWord ?? false;
+  const contextLines = toBoundedInt(params.contextLines, 1, 0, 5);
+  const paragraphMaxChars = toBoundedInt(params.paragraphMaxChars, 600, 50, 5000);
+  const normalizedQuery = caseSensitive ? query : query.toLowerCase();
+  const matcher = wholeWord
+    ? new RegExp(`\\b${escapeRegExp(query)}\\b`, caseSensitive ? '' : 'i')
+    : null;
+
+  const allMatches = lineWindow.lines
+    .map((line) => {
+      const haystack = caseSensitive ? line.content : line.content.toLowerCase();
+      const isMatch = matcher ? matcher.test(line.content) : haystack.includes(normalizedQuery);
+      if (!isMatch) return null;
+
+      const paragraphBounds = findParagraphBounds(allLines, line.lineIndex);
+      const paragraphRaw = allLines
+        .slice(paragraphBounds.startIndex, paragraphBounds.endIndex + 1)
+        .join('\n');
+      const paragraphTruncated = paragraphRaw.length > paragraphMaxChars;
+      const paragraph = paragraphTruncated
+        ? `${paragraphRaw.slice(0, Math.max(0, paragraphMaxChars - 3))}...`
+        : paragraphRaw;
+      const contextStart = Math.max(0, line.lineIndex - contextLines);
+      const contextEnd = Math.min(allLines.length - 1, line.lineIndex + contextLines);
+
+      return {
+        line: line.line,
+        lineIndex: line.lineIndex,
+        content: line.content,
+        paragraphStartLine: paragraphBounds.startIndex + 1,
+        paragraphEndLine: paragraphBounds.endIndex + 1,
+        paragraph,
+        paragraphTruncated,
+        contextBefore: allLines.slice(contextStart, line.lineIndex),
+        contextAfter: allLines.slice(line.lineIndex + 1, contextEnd + 1),
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+  const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(params.limit, 20, 1, 200);
+  const page = allMatches.slice(offset, offset + limit);
+  const hasMore = offset + page.length < allMatches.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
+
+  const result: Record<string, unknown> = {
+    success: true,
+    query,
+    count: page.length,
+    totalCount: allMatches.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    rangeStartLine: lineWindow.rangeStartLine,
+    rangeEndLine: lineWindow.rangeEndLine,
+    searchedLineCount: lineWindow.rangeLineCount,
+    note: {
+      id: note.id,
+      title: note.title,
+      filename: note.filename,
+      type: note.type,
+      source: note.source,
+      folder: note.folder,
+      spaceId: note.spaceId,
+      date: note.date,
+    },
+    matches: page,
+  };
+
+  if (hasMore) {
+    result.performanceHints = [NEXT_CURSOR_HINT];
+  } else if (allMatches.length === 0) {
+    result.performanceHints = [
+      'Try caseSensitive=false, wholeWord=false, or broaden startLine/endLine range.',
+    ];
   }
 
   return result;

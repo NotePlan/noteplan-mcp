@@ -44,8 +44,15 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 - `noteplan_get_note` - Get note metadata by title/filename/date, with optional paged content retrieval
 - `noteplan_list_notes` - List notes with filtering/pagination
 - `noteplan_create_note` - Create a new note
-- `noteplan_update_note` - Update note content
+- `noteplan_update_note` - Replace full note content (prefer targeted paragraph/line tools when possible)
 - `noteplan_delete_note` - Delete a note
+
+### Note Structure and Granular Edits
+- `noteplan_get_paragraphs` - Get paged line/paragraph content with line references
+- `noteplan_search_paragraphs` - Find matching lines/paragraph blocks inside a note
+- `noteplan_edit_line` - Update one specific line
+- `noteplan_insert_content` - Insert content at start/end/heading/line
+- `noteplan_delete_lines` - Delete a line range
 
 ### Task Operations
 - `noteplan_get_tasks` - Get tasks from a note
@@ -68,6 +75,20 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 - `noteplan_resolve_note` - Resolve one canonical note target with confidence/ambiguity output
 - `noteplan_search_tools` - Search tool catalog by keyword and return small ranked matches
 - `noteplan_get_tool_details` - Fetch full descriptions/input schemas on demand for selected tools (max 10 names/call)
+
+## Preferred Usage Flow
+
+Prefer granular edits to avoid large context payloads and accidental full-note rewrites.
+
+1. Resolve target note: `noteplan_resolve_note`
+2. Inspect/find target content:
+   - `noteplan_search_paragraphs` for text lookup inside the note
+   - `noteplan_get_paragraphs` for precise line references and pagination
+3. Apply targeted mutation:
+   - `noteplan_edit_line` for one-line changes
+   - `noteplan_insert_content` for adding content at a position
+   - `noteplan_delete_lines` for removals
+4. Use `noteplan_update_note` only when a full rewrite is intentional
 
 ## Data Locations
 

@@ -117,6 +117,20 @@ const PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   content: { type: 'string' },
   lines: { type: 'array', items: { type: 'object' } },
 });
+const SEARCH_PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  rangeStartLine: { type: 'number' },
+  rangeEndLine: { type: 'number' },
+  searchedLineCount: { type: 'number' },
+  note: { type: 'object' },
+  matches: { type: 'array', items: { type: 'object' } },
+});
 const SEARCH_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
   query: { type: 'string' },
   count: { type: 'number' },
@@ -256,6 +270,8 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
       return CREATE_NOTE_OUTPUT_SCHEMA;
     case 'noteplan_get_paragraphs':
       return PARAGRAPHS_OUTPUT_SCHEMA;
+    case 'noteplan_search_paragraphs':
+      return SEARCH_PARAGRAPHS_OUTPUT_SCHEMA;
     case 'noteplan_search':
       return SEARCH_NOTES_OUTPUT_SCHEMA;
     case 'noteplan_get_tasks':
@@ -386,6 +402,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_list_notes',
     'noteplan_resolve_note',
     'noteplan_get_paragraphs',
+    'noteplan_search_paragraphs',
     'noteplan_search',
     'noteplan_get_tasks',
     'noteplan_get_calendar_note',
@@ -466,6 +483,8 @@ const QUERY_SYNONYMS: Record<string, string[]> = {
   edit: ['update', 'modify', 'change'],
   delete: ['remove', 'erase', 'clear'],
   create: ['add', 'new', 'make'],
+  paragraph: ['line', 'block', 'section', 'text'],
+  lines: ['line', 'paragraph', 'content'],
 };
 
 function getToolSearchAliases(toolName: string): string[] {
@@ -502,6 +521,9 @@ function getToolSearchAliases(toolName: string): string[] {
   }
   if (toolName.includes('get_tasks') || toolName.includes('add_task') || toolName.includes('update_task') || toolName.includes('complete_task')) {
     aliases.push('tasks', 'todos', 'checklist', 'task management');
+  }
+  if (toolName.includes('search_paragraphs')) {
+    aliases.push('search paragraph', 'find paragraph', 'find matching lines', 'paragraph lookup');
   }
   if (toolName.includes('get_note') || toolName.includes('list_notes') || toolName.includes('create_note') || toolName.includes('update_note')) {
     aliases.push('notes', 'documents', 'markdown');
@@ -585,6 +607,14 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
     return {
       code: 'ERR_QUERY_REQUIRED',
       hint: 'Provide a non-empty query string to run this operation.',
+    };
+  }
+
+  if (message.includes('provide one note reference')) {
+    return {
+      code: 'ERR_INVALID_ARGUMENT',
+      hint: 'Pass one of: id, filename, title, or date to identify the note target.',
+      suggestedTool: 'noteplan_resolve_note',
     };
   }
 
@@ -706,7 +736,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_get_note',
           description:
-            'Get a note by ID, title, filename, or date. Default is metadata/preview only; set includeContent=true for paged line content. Prefer ID from noteplan_search for space notes.',
+            'Get a note by ID, title, filename, or date. Default is metadata/preview only; set includeContent=true for paged line content. For targeted edits, prefer noteplan_search_paragraphs/noteplan_get_paragraphs plus line-level mutation tools. Prefer ID from noteplan_search for space notes.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -875,7 +905,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_update_note',
           description:
-            'Replace all note content. Include YAML frontmatter in content when changing note properties. Empty content is blocked unless allowEmptyContent=true. Recommended flow: resolve note -> get note -> update.',
+            'Replace all note content. Use only when rewriting the full note is intentional. Prefer noteplan_search_paragraphs + noteplan_edit_line / noteplan_insert_content / noteplan_delete_lines for targeted updates. Empty content is blocked unless allowEmptyContent=true.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -955,6 +985,83 @@ For large notes, use startLine/endLine and cursor pagination to fetch progressiv
               },
             },
             required: ['filename'],
+          },
+        },
+        {
+          name: 'noteplan_search_paragraphs',
+          description: `Find matching lines/paragraph blocks inside one note, with pagination and line references for targeted edits.
+
+Recommended flow:
+1. noteplan_resolve_note
+2. noteplan_search_paragraphs (or noteplan_get_paragraphs)
+3. noteplan_edit_line / noteplan_insert_content / noteplan_delete_lines
+
+Prefer this over full note rewrites when only part of a note should change.`,
+          inputSchema: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for space notes)',
+              },
+              title: {
+                type: 'string',
+                description: 'Note title to search for',
+              },
+              filename: {
+                type: 'string',
+                description: 'Direct filename/path to the note',
+              },
+              date: {
+                type: 'string',
+                description: 'Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID to search in',
+              },
+              query: {
+                type: 'string',
+                description: 'Text to find in note lines/paragraphs',
+              },
+              caseSensitive: {
+                type: 'boolean',
+                description: 'Case-sensitive match (default: false)',
+              },
+              wholeWord: {
+                type: 'boolean',
+                description: 'Require whole-word matches (default: false)',
+              },
+              startLine: {
+                type: 'number',
+                description: 'First line to search (1-indexed, inclusive)',
+              },
+              endLine: {
+                type: 'number',
+                description: 'Last line to search (1-indexed, inclusive)',
+              },
+              contextLines: {
+                type: 'number',
+                description: 'Context lines before/after each match (default: 1, max: 5)',
+              },
+              paragraphMaxChars: {
+                type: 'number',
+                description: 'Maximum paragraph text chars per match (default: 600, max: 5000)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum matches to return (default: 20, max: 200)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+            },
+            required: ['query'],
           },
         },
 
@@ -1097,7 +1204,7 @@ This is SAFER than reading and rewriting the whole note.
 
 Recommended flow:
 1. noteplan_resolve_note
-2. noteplan_get_paragraphs
+2. noteplan_search_paragraphs or noteplan_get_paragraphs
 3. noteplan_delete_lines`,
           inputSchema: {
             type: 'object',
@@ -1138,7 +1245,7 @@ This is SAFER than noteplan_update_note which replaces the entire note.
 
 Recommended flow:
 1. noteplan_resolve_note
-2. noteplan_get_paragraphs
+2. noteplan_search_paragraphs or noteplan_get_paragraphs
 3. noteplan_edit_line`,
           inputSchema: {
             type: 'object',
@@ -2063,6 +2170,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         // Note structure
         case 'noteplan_get_paragraphs':
           result = noteTools.getParagraphs(args as any);
+          break;
+        case 'noteplan_search_paragraphs':
+          result = noteTools.searchParagraphs(args as any);
           break;
 
         // Granular note operations
