@@ -21,6 +21,7 @@ type ToolDefinition = {
   description: string;
   inputSchema: Record<string, unknown>;
   annotations?: ToolAnnotations;
+  outputSchema?: Record<string, unknown>;
 };
 
 type ToolAnnotations = {
@@ -31,6 +32,14 @@ type ToolAnnotations = {
 };
 
 const TOOLS_LIST_PAGE_SIZE = 20;
+const GENERIC_TOOL_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    error: { type: 'string' },
+  },
+  required: ['success'],
+};
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -70,6 +79,7 @@ function compactToolDefinition(tool: ToolDefinition): ToolDefinition {
     description: compactDescription(tool.description),
     inputSchema: stripDescriptions(tool.inputSchema) as Record<string, unknown>,
     annotations: tool.annotations,
+    outputSchema: tool.outputSchema,
   };
 }
 
@@ -1346,6 +1356,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
   const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
     ...tool,
     annotations: getToolAnnotations(tool.name),
+    outputSchema: GENERIC_TOOL_OUTPUT_SCHEMA,
   }));
   const toolDefinitionByName = new Map(annotatedToolDefinitions.map((tool) => [tool.name, tool]));
   const discoveryToolNames = ['noteplan_search_tools', 'noteplan_get_tool_details'];
