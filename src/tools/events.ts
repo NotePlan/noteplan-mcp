@@ -12,6 +12,12 @@ const __dirname = path.dirname(__filename);
 const COMPILED_HELPER = path.join(__dirname, '../../scripts/calendar-helper');
 const SWIFT_HELPER = path.join(__dirname, '../../scripts/calendar-helper.swift');
 
+function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return defaultValue;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
 /**
  * Run the calendar helper (prefers compiled binary, falls back to swift interpreter)
  */
@@ -53,8 +59,11 @@ function runSwiftHelper(args: string[], timeoutMs = 15000): any {
 // Schema definitions
 export const getEventsSchema = z.object({
   date: z.string().optional().describe('Date to get events for (YYYY-MM-DD, "today", "tomorrow"). Defaults to today.'),
-  days: z.number().optional().describe('Number of days to fetch (default: 1, use 7 for this week)'),
+  days: z.number().min(1).max(365).optional().describe('Number of days to fetch (default: 1, max: 365)'),
   calendar: z.string().optional().describe('Filter by calendar name'),
+  limit: z.number().min(1).max(500).optional().default(100).describe('Maximum events to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
 export const createEventSchema = z.object({
@@ -107,8 +116,11 @@ function parseDate(dateStr: string): Date {
  */
 export function getEvents(params: z.infer<typeof getEventsSchema>) {
   try {
-    const startDate = parseDate(params.date || 'today');
-    const days = params.days || 1;
+    const input = params ?? ({} as z.infer<typeof getEventsSchema>);
+    const startDate = parseDate(input.date || 'today');
+    const days = toBoundedInt(input.days, 1, 1, 365);
+    const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = toBoundedInt(input.limit, 100, 1, 500);
     const endDate = new Date(startDate);
     endDate.setDate(endDate.getDate() + days);
 
@@ -116,17 +128,25 @@ export function getEvents(params: z.infer<typeof getEventsSchema>) {
     const startStr = startDate.toISOString().split('T')[0];
 
     const args = ['list-events', startStr, String(days)];
-    if (params.calendar) {
-      args.push(params.calendar);
+    if (input.calendar) {
+      args.push(input.calendar);
     }
 
-    const events = runSwiftHelper(args) || [];
+    const allEvents = runSwiftHelper(args) || [];
+    const events = allEvents.slice(offset, offset + limit);
+    const hasMore = offset + events.length < allEvents.length;
+    const nextCursor = hasMore ? String(offset + events.length) : null;
 
     return {
       success: true,
       startDate: startStr,
       endDate: endDate.toISOString().split('T')[0],
       eventCount: events.length,
+      totalCount: allEvents.length,
+      offset,
+      limit,
+      hasMore,
+      nextCursor,
       events,
     };
   } catch (error) {

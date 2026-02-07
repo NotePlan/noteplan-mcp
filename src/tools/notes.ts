@@ -4,6 +4,12 @@ import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
 import * as frontmatter from '../noteplan/frontmatter-parser.js';
 
+function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return defaultValue;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
 // Schema definitions
 export const getNoteSchema = z.object({
   id: z.string().optional().describe('Note ID (use this for space notes - get it from search results)'),
@@ -16,6 +22,14 @@ export const getNoteSchema = z.object({
 export const listNotesSchema = z.object({
   folder: z.string().optional().describe('Filter by folder path'),
   space: z.string().optional().describe('Space ID to list from'),
+  types: z
+    .array(z.enum(['calendar', 'note', 'trash']))
+    .optional()
+    .describe('Filter by note types'),
+  query: z.string().optional().describe('Filter notes by title/filename/folder substring'),
+  limit: z.number().min(1).max(500).optional().default(50).describe('Maximum number of notes to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
 export const createNoteSchema = z.object({
@@ -63,13 +77,38 @@ export function getNote(params: z.infer<typeof getNoteSchema>) {
   };
 }
 
-export function listNotes(params: z.infer<typeof listNotesSchema>) {
-  const notes = store.listNotes(params);
+export function listNotes(params?: z.infer<typeof listNotesSchema>) {
+  const input = params ?? ({} as z.infer<typeof listNotesSchema>);
+  const notes = store.listNotes({
+    folder: input.folder,
+    space: input.space,
+  });
+  const allowedTypes = input.types ? new Set(input.types) : null;
+  const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
+
+  const filtered = notes.filter((note) => {
+    if (allowedTypes && !allowedTypes.has(note.type)) return false;
+    if (!query) return true;
+
+    const haystack = `${note.title} ${note.filename} ${note.folder || ''}`.toLowerCase();
+    return haystack.includes(query);
+  });
+
+  const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(input.limit, 50, 1, 500);
+  const page = filtered.slice(offset, offset + limit);
+  const hasMore = offset + page.length < filtered.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
 
   return {
     success: true,
-    count: notes.length,
-    notes: notes.map((note) => ({
+    count: page.length,
+    totalCount: filtered.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    notes: page.map((note) => ({
       id: note.id,
       title: note.title,
       filename: note.filename,

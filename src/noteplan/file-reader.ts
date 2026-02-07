@@ -432,24 +432,32 @@ export function getNoteByTitle(title: string): Note | null {
 /**
  * List all folders in the Notes directory
  */
-export function listFolders(): Folder[] {
+export function listFolders(maxDepth?: number): Folder[] {
   const folders: Folder[] = [];
 
-  function scanDir(dirPath: string, relativePath: string = '') {
+  function scanDir(dirPath: string, relativePath: string = '', depth: number = 0) {
     try {
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
 
       for (const entry of entries) {
         if (entry.isDirectory() && !entry.name.startsWith('.') &&
             entry.name !== '@Trash' && entry.name !== '@Archive') {
+          const nextDepth = depth + 1;
+          if (typeof maxDepth === 'number' && nextDepth > maxDepth) {
+            continue;
+          }
+
           const folderRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
           folders.push({
             path: folderRelPath,
             name: entry.name,
             source: 'local',
           });
-          // Recurse
-          scanDir(path.join(dirPath, entry.name), folderRelPath);
+
+          // Recurse unless max depth reached
+          if (typeof maxDepth !== 'number' || nextDepth < maxDepth) {
+            scanDir(path.join(dirPath, entry.name), folderRelPath, nextDepth);
+          }
         }
       }
     } catch (error) {
@@ -457,7 +465,7 @@ export function listFolders(): Folder[] {
     }
   }
 
-  scanDir(getNotesPath());
+  scanDir(getNotesPath(), '', 0);
   return folders;
 }
 

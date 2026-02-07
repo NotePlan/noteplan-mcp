@@ -9,6 +9,7 @@ An MCP (Model Context Protocol) server that exposes NotePlan's note and task man
 - **Task Management**: Add, complete, and update tasks
 - **Calendar Notes**: Access daily notes by date
 - **Search**: Full-text search across all notes
+- **Progressive Tool Discovery**: `tools/list` is paginated and detailed schemas are fetched on demand
 
 ## Installation
 
@@ -37,7 +38,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 
 ### Note Operations
 - `noteplan_get_note` - Get note by title, filename, or date
-- `noteplan_list_notes` - List project notes
+- `noteplan_list_notes` - List notes with filtering/pagination
 - `noteplan_create_note` - Create a new note
 - `noteplan_update_note` - Update note content
 - `noteplan_delete_note` - Delete a note
@@ -55,9 +56,12 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 
 ### Metadata
 - `noteplan_search` - Full-text search
-- `noteplan_list_spaces` - List spaces
-- `noteplan_list_tags` - List all hashtags
-- `noteplan_list_folders` - List all folders
+- `noteplan_list_spaces` - List spaces with filtering/pagination
+- `noteplan_list_tags` - List tags with filtering/pagination
+- `noteplan_list_folders` - List folders with pagination/filtering (default local depth: 1)
+- `noteplan_find_folders` - Find likely folder matches by query
+- `noteplan_search_tools` - Search tool catalog by keyword and return small ranked matches
+- `noteplan_get_tool_details` - Fetch full descriptions/input schemas on demand for selected tools (max 10 names/call)
 
 ## Data Locations
 

@@ -4,6 +4,12 @@ import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
 import { NoteType } from '../noteplan/types.js';
 
+function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return defaultValue;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
 export const searchSchema = z.object({
   query: z.string().describe('Search query. Supports OR patterns like "meeting|standup"'),
   types: z
@@ -12,7 +18,7 @@ export const searchSchema = z.object({
     .describe('Filter by note types'),
   folders: z.array(z.string()).optional().describe('Filter by folders'),
   space: z.string().optional().describe('Space ID to search in'),
-  limit: z.number().optional().default(20).describe('Maximum number of results'),
+  limit: z.number().min(1).max(200).optional().default(20).describe('Maximum number of results'),
   // Enhanced options
   fuzzy: z
     .boolean()
@@ -49,11 +55,20 @@ export const searchSchema = z.object({
 });
 
 export async function searchNotes(params: z.infer<typeof searchSchema>) {
-  const results = await store.searchNotes(params.query, {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required',
+    };
+  }
+
+  const limit = toBoundedInt(params.limit, 20, 1, 200);
+  const results = await store.searchNotes(query, {
     types: params.types as NoteType[] | undefined,
     folder: params.folders?.[0], // Currently only supports single folder
     space: params.space,
-    limit: params.limit,
+    limit,
     fuzzy: params.fuzzy,
     caseSensitive: params.caseSensitive,
     contextLines: params.contextLines,
@@ -65,7 +80,7 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
 
   return {
     success: true,
-    query: params.query,
+    query,
     count: results.length,
     results: results.map((result) => ({
       note: {

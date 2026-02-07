@@ -12,6 +12,12 @@ import {
   getWeekRespectingPreference,
 } from '../utils/date-utils.js';
 
+function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return defaultValue;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
 export const getTodaySchema = z.object({
   space: z.string().optional().describe('Space ID to get today from'),
 });
@@ -145,12 +151,18 @@ export const getNotesInRangeSchema = z.object({
   endDate: z.string().optional().describe('End date for custom range (YYYY-MM-DD)'),
   includeContent: z.boolean().optional().describe('Include full note content (default: false for summaries only)'),
   space: z.string().optional().describe('Space ID'),
+  maxDays: z.number().min(1).max(366).optional().default(90).describe('Maximum number of days to scan'),
+  limit: z.number().min(1).max(200).optional().default(50).describe('Maximum number of days to return in this page'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset within scanned days'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
 export const getNotesInFolderSchema = z.object({
   folder: z.string().describe('Folder path (e.g., "Projects", "10 - Projects")'),
   includeContent: z.boolean().optional().describe('Include full note content (default: false)'),
-  limit: z.number().optional().describe('Maximum number of notes to return (default: 50)'),
+  limit: z.number().min(1).max(200).optional().describe('Maximum number of notes to return (default: 50)'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
 /**
@@ -283,7 +295,15 @@ export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
   try {
     const { start, end } = getDateRange(params.period, params.startDate, params.endDate);
     const dates = getDatesInRange(start, end);
-    const includeContent = params.includeContent ?? false;
+    const includeContent = params.includeContent === true;
+    const maxDays = toBoundedInt(params.maxDays, 90, 1, 366);
+    const scannedDates = dates.slice(0, maxDays);
+    const truncatedByMaxDays = dates.length > scannedDates.length;
+    const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = toBoundedInt(params.limit, 50, 1, 200);
+    const pageDates = scannedDates.slice(offset, offset + limit);
+    const hasMore = offset + pageDates.length < scannedDates.length;
+    const nextCursor = hasMore ? String(offset + pageDates.length) : null;
 
     const notes: Array<{
       date: string;
@@ -295,7 +315,7 @@ export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
       exists: boolean;
     }> = [];
 
-    for (const date of dates) {
+    for (const date of pageDates) {
       const dateStr = formatDateString(date);
       const note = store.getCalendarNote(dateStr, params.space);
 
@@ -328,6 +348,13 @@ export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
       endDate: formatDateString(end),
       noteCount: notes.length,
       totalDays: dates.length,
+      scannedDays: scannedDates.length,
+      truncatedByMaxDays,
+      maxDays,
+      offset,
+      limit,
+      hasMore,
+      nextCursor,
       notes,
     };
   } catch (error) {
@@ -343,13 +370,14 @@ export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
  */
 export function getNotesInFolder(params: z.infer<typeof getNotesInFolderSchema>) {
   try {
-    const limit = params.limit ?? 50;
-    const includeContent = params.includeContent ?? false;
+    const limit = toBoundedInt(params.limit, 50, 1, 200);
+    const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const includeContent = params.includeContent === true;
 
     const allNotes = store.listNotes({ folder: params.folder });
-    const limitedNotes = allNotes.slice(0, limit);
+    const pagedNotes = allNotes.slice(offset, offset + limit);
 
-    const notes = limitedNotes.map((note) => {
+    const notes = pagedNotes.map((note) => {
       const entry: {
         title: string;
         filename: string;
@@ -374,12 +402,18 @@ export function getNotesInFolder(params: z.infer<typeof getNotesInFolderSchema>)
       return entry;
     });
 
+    const hasMore = offset + notes.length < allNotes.length;
+    const nextCursor = hasMore ? String(offset + notes.length) : null;
+
     return {
       success: true,
       folder: params.folder,
       noteCount: notes.length,
       totalInFolder: allNotes.length,
-      hasMore: allNotes.length > limit,
+      offset,
+      limit,
+      hasMore,
+      nextCursor,
       notes,
     };
   } catch (error) {

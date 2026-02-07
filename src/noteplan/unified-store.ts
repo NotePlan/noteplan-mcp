@@ -573,19 +573,53 @@ export function listSpaces(): Space[] {
 // Keep old name for backwards compatibility
 export const listTeamspaces = listSpaces;
 
+export interface ListFoldersOptions {
+  space?: string;
+  includeLocal?: boolean;
+  includeSpaces?: boolean;
+  query?: string;
+  maxDepth?: number;
+}
+
 /**
- * List all folders
+ * List folders with optional source/depth/query filtering
  */
-export function listFolders(space?: string): Folder[] {
+export function listFolders(options: ListFoldersOptions = {}): Folder[] {
+  const {
+    space,
+    includeLocal = !options.space,
+    includeSpaces = Boolean(options.space),
+    query,
+    maxDepth,
+  } = options;
   const folders: Folder[] = [];
 
-  if (!space) {
-    folders.push(...fileReader.listFolders());
+  if (includeLocal) {
+    folders.push(...fileReader.listFolders(maxDepth));
   }
 
-  folders.push(...sqliteReader.listSpaceFolders(space));
+  if (includeSpaces) {
+    folders.push(...sqliteReader.listSpaceFolders(space));
+  }
 
-  return folders;
+  const deduped = folders.filter((folder, index, arr) => {
+    const key = `${folder.source}:${folder.spaceId || ''}:${folder.path}`;
+    return arr.findIndex((candidate) =>
+      `${candidate.source}:${candidate.spaceId || ''}:${candidate.path}` === key
+    ) === index;
+  });
+
+  const normalizedQuery = query?.trim().toLowerCase();
+  const filtered = normalizedQuery
+    ? deduped.filter((folder) => {
+        const path = folder.path.toLowerCase();
+        const name = folder.name.toLowerCase();
+        return path.includes(normalizedQuery) || name.includes(normalizedQuery);
+      })
+    : deduped;
+
+  filtered.sort((a, b) => a.path.localeCompare(b.path));
+  return filtered;
 }
 
 /**

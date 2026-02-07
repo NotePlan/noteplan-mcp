@@ -12,6 +12,12 @@ const __dirname = path.dirname(__filename);
 const COMPILED_HELPER = path.join(__dirname, '../../scripts/reminders-helper');
 const SWIFT_HELPER = path.join(__dirname, '../../scripts/reminders-helper.swift');
 
+function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return defaultValue;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
 /**
  * Run the reminders helper (prefers compiled binary, falls back to swift interpreter)
  */
@@ -54,6 +60,10 @@ function runSwiftHelper(args: string[], timeoutMs = 30000): any {
 export const getRemindersSchema = z.object({
   list: z.string().optional().describe('Filter by reminder list name'),
   includeCompleted: z.boolean().optional().describe('Include completed reminders (default: false)'),
+  query: z.string().optional().describe('Filter reminders by title/notes/list substring'),
+  limit: z.number().min(1).max(500).optional().default(100).describe('Maximum reminders to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
 export const createReminderSchema = z.object({
@@ -80,26 +90,50 @@ export const deleteReminderSchema = z.object({
   reminderId: z.string().describe('Reminder ID to delete'),
 });
 
-export const listReminderListsSchema = z.object({});
+export const listReminderListsSchema = z.object({
+  query: z.string().optional().describe('Filter reminder lists by name substring'),
+  limit: z.number().min(1).max(200).optional().default(100).describe('Maximum reminder lists to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+});
 
 /**
  * Get reminders using Swift/EventKit
  */
 export function getReminders(params: z.infer<typeof getRemindersSchema>) {
   try {
+    const input = params ?? ({} as z.infer<typeof getRemindersSchema>);
     const args = ['list-reminders'];
-    if (params.list) {
-      args.push(params.list);
+    if (input.list) {
+      args.push(input.list);
     } else {
       args.push('');
     }
-    args.push(params.includeCompleted ? 'true' : 'false');
+    args.push(input.includeCompleted === true ? 'true' : 'false');
 
-    const reminders = runSwiftHelper(args) || [];
+    const allReminders = runSwiftHelper(args) || [];
+    const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
+    const filtered = query
+      ? allReminders.filter((reminder: any) =>
+          `${reminder.title || ''} ${reminder.notes || ''} ${reminder.list || ''}`
+            .toLowerCase()
+            .includes(query)
+        )
+      : allReminders;
+    const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = toBoundedInt(input.limit, 100, 1, 500);
+    const reminders = filtered.slice(offset, offset + limit);
+    const hasMore = offset + reminders.length < filtered.length;
+    const nextCursor = hasMore ? String(offset + reminders.length) : null;
 
     return {
       success: true,
       reminderCount: reminders.length,
+      totalCount: filtered.length,
+      offset,
+      limit,
+      hasMore,
+      nextCursor,
       reminders,
     };
   } catch (error) {
@@ -234,12 +268,28 @@ export function deleteReminder(params: z.infer<typeof deleteReminderSchema>) {
 /**
  * List all reminder lists using Swift/EventKit
  */
-export function listReminderLists(_params: z.infer<typeof listReminderListsSchema>) {
+export function listReminderLists(params: z.infer<typeof listReminderListsSchema>) {
   try {
-    const lists = runSwiftHelper(['list-lists']) || [];
+    const input = params ?? ({} as z.infer<typeof listReminderListsSchema>);
+    const allLists = runSwiftHelper(['list-lists']) || [];
+    const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
+    const filtered = query
+      ? allLists.filter((list: string) => list.toLowerCase().includes(query))
+      : allLists;
+    const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = toBoundedInt(input.limit, 100, 1, 200);
+    const lists = filtered.slice(offset, offset + limit);
+    const hasMore = offset + lists.length < filtered.length;
+    const nextCursor = hasMore ? String(offset + lists.length) : null;
 
     return {
       success: true,
+      count: lists.length,
+      totalCount: filtered.length,
+      offset,
+      limit,
+      hasMore,
+      nextCursor,
       lists,
     };
   } catch (error) {

@@ -16,6 +16,85 @@ import * as spaceTools from './tools/spaces.js';
 import * as eventTools from './tools/events.js';
 import * as reminderTools from './tools/reminders.js';
 
+type ToolDefinition = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+};
+
+const TOOLS_LIST_PAGE_SIZE = 20;
+
+function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return defaultValue;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
+function compactDescription(description: string, maxLength = 120): string {
+  const firstLine = description
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? '';
+  if (firstLine.length <= maxLength) return firstLine;
+  return `${firstLine.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function stripDescriptions(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripDescriptions(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const input = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(input)) {
+    if (key === 'description') continue;
+    output[key] = stripDescriptions(nested);
+  }
+  return output;
+}
+
+function compactToolDefinition(tool: ToolDefinition): ToolDefinition {
+  return {
+    name: tool.name,
+    description: compactDescription(tool.description),
+    inputSchema: stripDescriptions(tool.inputSchema) as Record<string, unknown>,
+  };
+}
+
+function scoreToolMatch(tool: ToolDefinition, query: string): number {
+  const q = query.toLowerCase();
+  const name = tool.name.toLowerCase();
+  const description = tool.description.toLowerCase();
+
+  if (name === q) return 1.0;
+  if (name.startsWith(q)) return 0.95;
+  if (name.includes(q)) return 0.9;
+  if (description.includes(q)) return 0.75;
+
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return 0;
+  const tokenHits = tokens.filter((token) => name.includes(token) || description.includes(token)).length;
+  return tokenHits > 0 ? tokenHits / tokens.length * 0.6 : 0;
+}
+
+function searchToolDefinitions(
+  tools: ToolDefinition[],
+  query: string,
+  limit: number
+): Array<{ tool: ToolDefinition; score: number }> {
+  return tools
+    .map((tool) => ({ tool, score: scoreToolMatch(tool, query) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => {
+      if (Math.abs(a.score - b.score) > 0.001) return b.score - a.score;
+      return a.tool.name.localeCompare(b.tool.name);
+    })
+    .slice(0, limit);
+}
+
 // Create the server
 export function createServer(): Server {
   const server = new Server(
@@ -30,20 +109,11 @@ export function createServer(): Server {
     }
   );
 
-  // Register tool listing handler
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: [
+  const toolDefinitions: ToolDefinition[] = [
         // Note operations
         {
           name: 'noteplan_get_note',
-          description: `Get a note by ID, title, filename, or date. Returns the note content and metadata.
-
-IMPORTANT for space notes: Use the 'id' parameter (get it from search results). Space notes often have generic filenames like "Untitled.md" that aren't unique.
-
-Recommended approach:
-1. Search for a note with noteplan_search
-2. Use the 'id' from search results to get the full note content`,
+          description: 'Get a note by ID, title, filename, or date. Prefer ID from noteplan_search for space notes.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -72,7 +142,7 @@ Recommended approach:
         },
         {
           name: 'noteplan_list_notes',
-          description: 'List all project notes, optionally filtered by folder or space.',
+          description: 'List notes with filtering and pagination.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -84,48 +154,34 @@ Recommended approach:
                 type: 'string',
                 description: 'Space ID to list from',
               },
+              types: {
+                type: 'array',
+                items: { type: 'string', enum: ['calendar', 'note', 'trash'] },
+                description: 'Filter by note types',
+              },
+              query: {
+                type: 'string',
+                description: 'Filter by title/filename/folder substring',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum notes to return (default: 50)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
             },
           },
         },
         {
           name: 'noteplan_create_note',
-          description: `Create a new project note.
-
-FOLDER MATCHING: If the user specifies a vague folder name (like "projects" or "inbox"), first call noteplan_list_folders to see available folders. If multiple folders could match, ASK THE USER to clarify which one they mean before creating the note.
-
-FRONTMATTER/PROPERTIES: NotePlan notes support YAML frontmatter for styling and metadata. You are ENCOURAGED to add properties when creating notes to make them visually distinctive. Start the content with frontmatter between --- delimiters, BEFORE the title heading.
-
-Available frontmatter properties:
-- icon: FontAwesome icon name (e.g., "seedling", "rocket", "star", "lightbulb", "book", "code", "heart")
-- icon-color: Tailwind color for the icon. Use 500 shades for best visibility (e.g., "red-500", "blue-500", "green-500", "purple-500")
-- icon-style: "regular" (default), "solid", or "light"
-- bg-color: Light mode background. Use light shades 50-200 (e.g., "red-50", "blue-100")
-- bg-color-dark: Dark mode background. Use dark shades 800-950 (e.g., "red-950", "blue-900")
-- bg-pattern: Background pattern - "dotted", "lined", "squared", or "mini-squared"
-- status: "To-Do", "Doing", or "Done"
-- priority: "High", "Medium", or "Low"
-- summary: Brief description of the note's purpose
-- type: Note category (e.g., "Strategy", "Meeting", "Project", "Idea")
-- domain: Context/area (e.g., "work", "personal", "noteplan")
-- order: Number for manual ordering
-
-Tailwind colors: slate, gray, zinc, neutral, stone, red, orange, amber, yellow, lime, green, emerald, teal, cyan, sky, blue, indigo, violet, purple, fuchsia, pink, rose
-
-Example note content with frontmatter:
----
-icon: rocket
-icon-color: blue-500
-bg-color: blue-50
-bg-color-dark: blue-950
-status: To-Do
-type: Project
-summary: Launch the new feature
----
-# Project Launch Plan
-
-Content here...
-
-If the user explicitly requests a "plain note" or "note without properties", omit the frontmatter.`,
+          description:
+            'Create a project note. Supports smart folder matching and optional YAML frontmatter in content.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -135,11 +191,13 @@ If the user explicitly requests a "plain note" or "note without properties", omi
               },
               content: {
                 type: 'string',
-                description: 'Initial content for the note. Can include YAML frontmatter between --- delimiters at the start for styling (icon, colors, etc.)',
+                description:
+                  'Initial content. Can include YAML frontmatter between --- delimiters at the start.',
               },
               folder: {
                 type: 'string',
-                description: 'Folder path to create the note in. Use the exact path from noteplan_list_folders for best results. Supports smart matching but may be ambiguous if multiple folders have similar names.',
+                description:
+                  'Folder path. Smart matching is built in; use folder listing/search only when ambiguous.',
               },
               create_new_folder: {
                 type: 'boolean',
@@ -155,11 +213,8 @@ If the user explicitly requests a "plain note" or "note without properties", omi
         },
         {
           name: 'noteplan_update_note',
-          description: `Update the content of an existing note. When updating, preserve or modify the YAML frontmatter (properties) at the start of the note.
-
-If the user asks to "change the icon", "add properties", "change the background color", etc., modify the frontmatter section between --- delimiters. See noteplan_create_note for available frontmatter properties.
-
-Example: To change just the icon of a note, read it first, then update with modified frontmatter while preserving the rest of the content.`,
+          description:
+            'Update a note. Include YAML frontmatter in content when you need to change note properties.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -411,24 +466,8 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
         // Search
         {
           name: 'noteplan_search',
-          description: `Full-text search across all notes. Results include note ID for retrieval.
-
-SEARCH STRATEGY - Follow this approach:
-1. Start with the SHORTEST, most UNIQUE identifier (e.g., "3.20" not "version 3.20 features")
-2. Use OR patterns for variations: "v3.20|3.20|version 3.20"
-3. More words = stricter matching (ALL words must appear)
-4. Avoid common words that might not be in the title
-
-Examples:
-- User asks about "version 3.20 features" → search "v3.20|3.20" first
-- User asks about "project kickoff meeting" → search "kickoff" or "kickoff|project"
-- User asks about "Q1 planning notes" → search "Q1 planning|Q1"
-
-Features:
-- OR patterns: "meeting|standup|sync" finds notes with ANY of these terms
-- Fuzzy matching: Enable fuzzy=true for typo tolerance
-- Date filtering: modifiedAfter="this week" for recent notes
-- Recency boost: Recent notes rank higher, @Archive/@Trash notes rank lower`,
+          description:
+            'Full-text search across notes. Returns IDs to retrieve full notes with noteplan_get_note.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -452,7 +491,7 @@ Features:
               },
               limit: {
                 type: 'number',
-                description: 'Maximum number of results (default: 20)',
+                description: 'Maximum number of results (default: 20, max: 200)',
               },
               fuzzy: {
                 type: 'boolean',
@@ -509,27 +548,8 @@ Features:
         },
         {
           name: 'noteplan_add_task',
-          description: `Add a new task to a note. This tool WILL CREATE the daily note if it doesn't exist yet.
-
-IMPORTANT - SMART TASK PLACEMENT:
-Before adding a task, FIRST check the note's structure using noteplan_get_paragraphs or noteplan_get_note to see its headings. Then:
-1. Look for task-related headings like "Tasks", "To-Do", "Todo", "Action Items", "Today", or similar
-2. If found, use position="after-heading" with that heading name
-3. If no task heading exists but there are other headings, consider the context (e.g., add work tasks under "Work", personal under "Personal")
-4. Only use position="end" if the note has no headings or no suitable section
-
-Example workflow:
-1. Call noteplan_get_paragraphs to see the note structure
-2. Identify heading like "## Tasks" or "## Today"
-3. Call noteplan_add_task with position="after-heading" and heading="Tasks"
-
-SCHEDULING TASKS: When the user wants to schedule a task for a specific date (e.g., "add this task to next Monday", "schedule this for February 7th"), the PREFERRED approach is to add the task directly to that date's daily note. The daily note will be created automatically if it doesn't exist.
-
-Target can be:
-- A date: "today", "tomorrow", "yesterday", "YYYY-MM-DD", "YYYYMMDD" → adds to that daily note (creates it if needed)
-- A filename: "Notes/Projects/MyProject.md" → adds to that project note
-
-DO NOT use the >YYYY-MM-DD scheduling syntax unless the user explicitly wants the task stored in a project note. The preferred approach is always to add directly to the target date's daily note.`,
+          description:
+            'Add a task to a daily note date or project note file. Daily note target dates are auto-created if missing.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -578,13 +598,7 @@ DO NOT use the >YYYY-MM-DD scheduling syntax unless the user explicitly wants th
         },
         {
           name: 'noteplan_update_task',
-          description: `Update a task's content or status.
-
-Use status="cancelled" to cross out/strikethrough a task (changes [ ] to [-]).
-Use status="done" to mark complete (changes [ ] to [x]).
-Use status="open" to uncheck a task.
-
-For crossing out NON-TASK text (regular bullets or paragraphs), use noteplan_edit_line instead with ~~strikethrough~~ markdown.`,
+          description: 'Update a task content or status (open, done, cancelled, scheduled).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -667,28 +681,8 @@ For crossing out NON-TASK text (regular bullets or paragraphs), use noteplan_edi
         },
         {
           name: 'noteplan_get_periodic_note',
-          description: `Get a weekly, monthly, quarterly, or yearly note.
-
-IMPORTANT: NotePlan users plan and review at different time scales. When the user asks about plans, goals, reviews, or summaries for a specific period, CHECK THE CORRESPONDING PERIODIC NOTE.
-
-HOW TO SPECIFY THE PERIOD:
-- For "this week/month/quarter/year" → just set type, no other params needed (uses current date)
-- For "last week" → set type=weekly, date=(today minus 7 days in YYYY-MM-DD format)
-- For "last month" → set type=monthly, date=(first day of previous month)
-- For specific week → set type=weekly, week=NUMBER, year=CURRENT_YEAR
-- For specific month → set type=monthly, month=NUMBER, year=CURRENT_YEAR
-
-CRITICAL: Always use the CURRENT year unless user explicitly mentions a different year. "Last week" and "last month" are still in the CURRENT year (unless it's January and last month was December of previous year).
-
-Examples (assuming current date):
-- "this week" → type=weekly
-- "last week" → type=weekly, date=(7 days ago)
-- "week 4" → type=weekly, week=4, year=(current year)
-- "this month" → type=monthly
-- "last month" → type=monthly, date=(any date from previous month)
-- "Q1 goals" → type=quarterly, quarter=1, year=(current year)
-
-File formats: YYYY-Www.txt (weekly), YYYY-MM.txt (monthly), YYYY-Qq.txt (quarterly), YYYY.txt (yearly)`,
+          description:
+            'Get weekly, monthly, quarterly, or yearly periodic notes by type and optional date/week/month/quarter/year.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -727,25 +721,8 @@ File formats: YYYY-Www.txt (weekly), YYYY-MM.txt (monthly), YYYY-Qq.txt (quarter
         },
         {
           name: 'noteplan_get_notes_in_range',
-          description: `Get multiple DAILY notes in a date range.
-
-NOTE: This returns the collection of daily notes, NOT the periodic planning note.
-- For "what did I DO this week" → use this tool (gets all daily notes)
-- For "what did I PLAN for this week" → use noteplan_get_periodic_note instead
-
-Use this to summarize what actually happened:
-- "What did I accomplish this week?" → get daily notes with includeContent=true
-- "Summarize my activities last month" → get daily notes for last-month
-- "What tasks did I complete this week?" → get daily notes
-
-Periods:
-- "this-week": All daily notes from current week
-- "last-week": All daily notes from previous week
-- "this-month": All daily notes from current month
-- "last-month": All daily notes from previous month
-- "custom": Specify startDate and endDate
-
-Set includeContent=true to get full content for AI summarization.`,
+          description:
+            'Get daily notes for a predefined period or custom date range, with optional full content.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -766,6 +743,22 @@ Set includeContent=true to get full content for AI summarization.`,
                 type: 'boolean',
                 description: 'Include full note content (default: false)',
               },
+              maxDays: {
+                type: 'number',
+                description: 'Maximum days to scan (default: 90, max: 366)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum days to return in this page (default: 50)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset within scanned days (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
               space: {
                 type: 'string',
                 description: 'Space ID',
@@ -776,14 +769,8 @@ Set includeContent=true to get full content for AI summarization.`,
         },
         {
           name: 'noteplan_get_notes_in_folder',
-          description: `Get all notes in a folder with optional content.
-
-Use this to summarize or review project notes:
-- Get all notes in a folder
-- Optionally include full content for summarization
-- Limited to 50 notes by default
-
-Set includeContent=true for full content (use with smaller folders or for summarization tasks).`,
+          description:
+            'Get notes in a folder with optional content. Results are limited (default 50).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -799,6 +786,14 @@ Set includeContent=true for full content (use with smaller folders or for summar
                 type: 'number',
                 description: 'Max notes to return (default: 50)',
               },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
             },
             required: ['folder'],
           },
@@ -807,15 +802,32 @@ Set includeContent=true for full content (use with smaller folders or for summar
         // Space & metadata operations
         {
           name: 'noteplan_list_spaces',
-          description: 'List all available spaces.',
+          description: 'List spaces with optional filtering and pagination.',
           inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Filter by space name/id substring',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum spaces to return (default: 50)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+            },
           },
         },
         {
           name: 'noteplan_list_tags',
-          description: 'List all hashtags used across notes.',
+          description: 'List tags with optional filtering and pagination.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -823,12 +835,29 @@ Set includeContent=true for full content (use with smaller folders or for summar
                 type: 'string',
                 description: 'Space ID to list tags from',
               },
+              query: {
+                type: 'string',
+                description: 'Filter tags by substring',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum tags to return (default: 100)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
             },
           },
         },
         {
           name: 'noteplan_list_folders',
-          description: 'List all folders in the notes directory. IMPORTANT: Call this BEFORE creating a note if the user mentions a folder by a partial or informal name (like "projects", "inbox", "resources"). This lets you see the actual folder structure and ask the user to clarify if multiple folders could match.',
+          description:
+            'List folders with pagination and optional filtering. Defaults to local folders only.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -836,7 +865,70 @@ Set includeContent=true for full content (use with smaller folders or for summar
                 type: 'string',
                 description: 'Space ID to list folders from',
               },
+              includeLocal: {
+                type: 'boolean',
+                description: 'Include local filesystem folders',
+              },
+              includeSpaces: {
+                type: 'boolean',
+                description: 'Include space folders',
+              },
+              query: {
+                type: 'string',
+                description: 'Filter by folder name/path substring',
+              },
+              maxDepth: {
+                type: 'number',
+                description: 'Max local folder depth (1 = top level, default: 1)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum folders to return (default: 50)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
             },
+          },
+        },
+        {
+          name: 'noteplan_find_folders',
+          description:
+            'Find likely folder matches for a query and return a small ranked result set.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Folder query, e.g. "project" or "inbox"',
+              },
+              space: {
+                type: 'string',
+                description: 'Restrict to a specific space ID',
+              },
+              includeLocal: {
+                type: 'boolean',
+                description: 'Include local filesystem folders',
+              },
+              includeSpaces: {
+                type: 'boolean',
+                description: 'Include space folders',
+              },
+              maxDepth: {
+                type: 'number',
+                description: 'Max local folder depth (1 = top level, default: 2)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum matches to return (default: 10)',
+              },
+            },
+            required: ['query'],
           },
         },
 
@@ -856,11 +948,23 @@ For "this week", use days=7.`,
               },
               days: {
                 type: 'number',
-                description: 'Number of days to fetch (default: 1, use 7 for this week)',
+                description: 'Number of days to fetch (default: 1, max: 365)',
               },
               calendar: {
                 type: 'string',
                 description: 'Filter by calendar name',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum events to return (default: 100)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
               },
             },
           },
@@ -980,6 +1084,22 @@ By default, returns only incomplete reminders. Set includeCompleted=true to see 
                 type: 'boolean',
                 description: 'Include completed reminders (default: false)',
               },
+              query: {
+                type: 'string',
+                description: 'Filter reminders by title/notes/list substring',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum reminders to return (default: 100)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
             },
           },
         },
@@ -1078,10 +1198,81 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           description: 'List all reminder lists in macOS Reminders app.',
           inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Filter reminder lists by name substring',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum reminder lists to return (default: 100)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+            },
           },
         },
-      ],
+        {
+          name: 'noteplan_search_tools',
+          description: 'Search tool names and descriptions and return a small ranked set of matches.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Tool query keywords, e.g. "folder list" or "reminder update"',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum matches to return (default: 8, max: 25)',
+              },
+            },
+            required: ['query'],
+          },
+        },
+        {
+          name: 'noteplan_get_tool_details',
+          description: 'Get detailed tool descriptions and full input schemas for selected tool names.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              names: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Tool names to fetch details for (max: 10 per call)',
+              },
+            },
+            required: ['names'],
+          },
+        },
+      ];
+  const toolDefinitionByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]));
+  const discoveryToolNames = ['noteplan_search_tools', 'noteplan_get_tool_details'];
+  const prioritizedTools = discoveryToolNames
+    .map((name) => toolDefinitionByName.get(name))
+    .filter((tool): tool is ToolDefinition => Boolean(tool));
+  const orderedToolDefinitions = [
+    ...prioritizedTools,
+    ...toolDefinitions.filter((tool) => !discoveryToolNames.includes(tool.name)),
+  ];
+  const compactToolDefinitions = orderedToolDefinitions.map((tool) => compactToolDefinition(tool));
+
+  // Register tool listing handler
+  server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+    const offset = toBoundedInt(request.params?.cursor, 0, 0, Number.MAX_SAFE_INTEGER);
+    const tools = compactToolDefinitions.slice(offset, offset + TOOLS_LIST_PAGE_SIZE);
+    const nextOffset = offset + tools.length;
+    const hasMore = nextOffset < compactToolDefinitions.length;
+
+    return {
+      tools,
+      ...(hasMore ? { nextCursor: String(nextOffset) } : {}),
     };
   });
 
@@ -1184,6 +1375,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_list_folders':
           result = spaceTools.listFolders(args as any);
           break;
+        case 'noteplan_find_folders':
+          result = spaceTools.findFolders(args as any);
+          break;
 
         // macOS Calendar events
         case 'calendar_get_events':
@@ -1221,6 +1415,64 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'reminders_list_lists':
           result = reminderTools.listReminderLists(args as any);
           break;
+        case 'noteplan_search_tools': {
+          const input = (args ?? {}) as { query?: unknown; limit?: unknown };
+          const query = typeof input.query === 'string' ? input.query.trim() : '';
+          if (!query) {
+            result = {
+              success: false,
+              error: 'query is required',
+            };
+            break;
+          }
+
+          const limit = toBoundedInt(input.limit, 8, 1, 25);
+          const matches = searchToolDefinitions(toolDefinitions, query, limit);
+          result = {
+            success: true,
+            query,
+            count: matches.length,
+            tools: matches.map((entry) => ({
+              name: entry.tool.name,
+              score: Number(entry.score.toFixed(3)),
+              description: compactDescription(entry.tool.description, 180),
+            })),
+          };
+          break;
+        }
+        case 'noteplan_get_tool_details': {
+          const input = (args ?? {}) as { names?: unknown };
+          const names = Array.isArray(input.names)
+            ? input.names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+            : [];
+          const uniqueNames = Array.from(new Set(names));
+          if (uniqueNames.length === 0) {
+            result = {
+              success: false,
+              error: 'names must include at least one tool name',
+            };
+            break;
+          }
+          if (uniqueNames.length > 10) {
+            result = {
+              success: false,
+              error: 'Too many tool names requested. Provide up to 10 names per call.',
+            };
+            break;
+          }
+
+          const tools = uniqueNames
+            .map((name) => toolDefinitionByName.get(name))
+            .filter((tool): tool is ToolDefinition => Boolean(tool));
+          const missing = uniqueNames.filter((name) => !toolDefinitionByName.has(name));
+          result = {
+            success: missing.length === 0,
+            count: tools.length,
+            missing,
+            tools,
+          };
+          break;
+        }
 
         default:
           throw new Error(`Unknown tool: ${name}`);
@@ -1230,7 +1482,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         content: [
           {
             type: 'text',
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
