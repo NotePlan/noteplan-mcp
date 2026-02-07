@@ -88,6 +88,14 @@ const CREATE_NOTE_OUTPUT_SCHEMA = outputSchemaWithErrors({
 const PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   note: { type: 'object' },
   lineCount: { type: 'number' },
+  rangeStartLine: { type: 'number' },
+  rangeEndLine: { type: 'number' },
+  rangeLineCount: { type: 'number' },
+  returnedLineCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
   lines: { type: 'array', items: { type: 'object' } },
 });
 const SEARCH_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
@@ -857,7 +865,7 @@ export function createServer(): Server {
         // Note structure
         {
           name: 'noteplan_get_paragraphs',
-          description: `Get a note's content with line numbers.
+          description: `Get note content with line numbers, optional line-range filters, and pagination.
 
 Returns each line with:
 - line: 1-indexed line number (for display/user communication)
@@ -867,13 +875,35 @@ Returns each line with:
 Use this when you need to:
 - See exactly which line contains what content
 - Find the correct lineIndex for task operations
-- Determine line numbers for insert_content or delete_lines`,
+- Determine line numbers for insert_content or delete_lines
+
+For large notes, use startLine/endLine and cursor pagination to fetch progressively.`,
           inputSchema: {
             type: 'object',
             properties: {
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              startLine: {
+                type: 'number',
+                description: 'First line to include (1-indexed, inclusive)',
+              },
+              endLine: {
+                type: 'number',
+                description: 'Last line to include (1-indexed, inclusive)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum lines to return (default: 200, max: 1000)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset within selected range (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
               },
             },
             required: ['filename'],

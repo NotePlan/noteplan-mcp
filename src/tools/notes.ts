@@ -391,6 +391,11 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
 // Get note with line numbers
 export const getParagraphsSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
+  startLine: z.number().min(1).optional().describe('First line to include (1-indexed, inclusive)'),
+  endLine: z.number().min(1).optional().describe('Last line to include (1-indexed, inclusive)'),
+  limit: z.number().min(1).max(1000).optional().default(200).describe('Maximum lines to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset within selected range'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
 export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
@@ -404,20 +409,52 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
   }
 
   const lines = note.content.split('\n');
+  const totalLineCount = lines.length;
+  const requestedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, totalLineCount));
+  const requestedEndLine = toBoundedInt(
+    params.endLine,
+    totalLineCount,
+    requestedStartLine,
+    Math.max(requestedStartLine, totalLineCount)
+  );
+  const rangeStartIndex = requestedStartLine - 1;
+  const rangeEndIndexExclusive = requestedEndLine;
+  const rangeLines = lines.slice(rangeStartIndex, rangeEndIndexExclusive);
+  const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(params.limit, 200, 1, 1000);
+  const page = rangeLines.slice(offset, offset + limit);
+  const hasMore = offset + page.length < rangeLines.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
 
-  return {
+  const result: Record<string, unknown> = {
     success: true,
     note: {
       title: note.title,
       filename: note.filename,
     },
-    lineCount: lines.length,
-    lines: lines.map((content, index) => ({
-      line: index + 1, // 1-indexed for user clarity
-      lineIndex: index, // 0-indexed for API calls
+    lineCount: totalLineCount,
+    rangeStartLine: requestedStartLine,
+    rangeEndLine: requestedEndLine,
+    rangeLineCount: rangeLines.length,
+    returnedLineCount: page.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    lines: page.map((content, index) => ({
+      line: requestedStartLine + offset + index, // 1-indexed for user clarity
+      lineIndex: rangeStartIndex + offset + index, // 0-indexed for API calls
       content,
     })),
   };
+
+  if (totalLineCount > 500 && !params.startLine && !params.endLine && !params.cursor && !params.offset) {
+    result.performanceHints = [
+      'Use startLine/endLine or pagination cursor to fetch note content progressively.',
+    ];
+  }
+
+  return result;
 }
 
 // Granular note operation schemas
