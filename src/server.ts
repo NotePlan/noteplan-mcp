@@ -735,7 +735,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_create_note',
           description:
-            'Create a project note. Supports smart folder matching and optional YAML frontmatter in content.',
+            'Create a project note. Supports smart folder matching and optional YAML frontmatter in content. Recommended flow: resolve folder first when ambiguous.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -768,7 +768,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_update_note',
           description:
-            'Replace all note content. Include YAML frontmatter in content when changing note properties. Empty content is blocked unless allowEmptyContent=true.',
+            'Replace all note content. Include YAML frontmatter in content when changing note properties. Empty content is blocked unless allowEmptyContent=true. Recommended flow: resolve note -> get note -> update.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -790,7 +790,7 @@ export function createServer(): Server {
         },
         {
           name: 'noteplan_delete_note',
-          description: 'Delete a note (moves to trash).',
+          description: 'Delete a note (moves to trash). Recommended flow: resolve note first, then delete canonical target.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -964,7 +964,12 @@ Use this when the user wants to:
 - Remove specific lines from a note
 - Delete a section of content
 
-This is SAFER than reading and rewriting the whole note.`,
+This is SAFER than reading and rewriting the whole note.
+
+Recommended flow:
+1. noteplan_resolve_note
+2. noteplan_get_paragraphs
+3. noteplan_delete_lines`,
           inputSchema: {
             type: 'object',
             properties: {
@@ -1000,7 +1005,12 @@ Example: To cross out "Buy milk" on line 5:
 1. Get current line content via noteplan_get_paragraphs
 2. Call noteplan_edit_line with line=5, content="~~Buy milk~~"
 
-This is SAFER than noteplan_update_note which replaces the entire note.`,
+This is SAFER than noteplan_update_note which replaces the entire note.
+
+Recommended flow:
+1. noteplan_resolve_note
+2. noteplan_get_paragraphs
+3. noteplan_edit_line`,
           inputSchema: {
             type: 'object',
             properties: {
@@ -1160,7 +1170,7 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
         },
         {
           name: 'noteplan_update_task',
-          description: 'Update a task content or status (open, done, cancelled, scheduled).',
+          description: 'Update a task content or status (open, done, cancelled, scheduled). Recommended flow: resolve note -> get tasks -> update task by lineIndex.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1621,7 +1631,7 @@ For timed events, include time (YYYY-MM-DD HH:MM).`,
         },
         {
           name: 'calendar_update_event',
-          description: 'Update an existing calendar event. Get the eventId from calendar_get_events.',
+          description: 'Update an existing calendar event. Recommended flow: calendar_get_events first, then update using eventId.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1655,7 +1665,7 @@ For timed events, include time (YYYY-MM-DD HH:MM).`,
         },
         {
           name: 'calendar_delete_event',
-          description: 'Delete a calendar event. Get the eventId from calendar_get_events.',
+          description: 'Delete a calendar event. Recommended flow: calendar_get_events first, then delete using eventId.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1760,7 +1770,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         },
         {
           name: 'reminders_update',
-          description: 'Update an existing reminder. Get the reminderId from reminders_get.',
+          description: 'Update an existing reminder. Recommended flow: reminders_get first, then update using reminderId.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1790,7 +1800,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         },
         {
           name: 'reminders_delete',
-          description: 'Delete a reminder. Get the reminderId from reminders_get.',
+          description: 'Delete a reminder. Recommended flow: reminders_get first, then delete using reminderId.',
           inputSchema: {
             type: 'object',
             properties: {
