@@ -32,167 +32,244 @@ type ToolAnnotations = {
 };
 
 const TOOLS_LIST_PAGE_SIZE = 20;
-const GENERIC_TOOL_OUTPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    error: { type: 'string' },
-    code: { type: 'string' },
-    hint: { type: 'string' },
-    suggestedTool: { type: 'string' },
-    retryable: { type: 'boolean' },
-  },
-  required: ['success'],
-};
 
-const SEARCH_TOOLS_OUTPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    query: { type: 'string' },
-    count: { type: 'number' },
-    tools: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name: { type: 'string' },
-          score: { type: 'number' },
-          description: { type: 'string' },
-        },
-        required: ['name', 'score', 'description'],
-      },
+function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: {
+      success: { type: 'boolean' },
+      ...properties,
+      error: { type: 'string' },
+      code: { type: 'string' },
+      hint: { type: 'string' },
+      suggestedTool: { type: 'string' },
+      retryable: { type: 'boolean' },
     },
-    error: { type: 'string' },
-    code: { type: 'string' },
-    hint: { type: 'string' },
-    suggestedTool: { type: 'string' },
-    retryable: { type: 'boolean' },
-  },
-  required: ['success'],
-};
+    required: ['success'],
+  };
+}
 
-const GET_TOOL_DETAILS_OUTPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    count: { type: 'number' },
-    missing: { type: 'array', items: { type: 'string' } },
-    tools: { type: 'array', items: { type: 'object' } },
-    error: { type: 'string' },
-    code: { type: 'string' },
-    hint: { type: 'string' },
-    suggestedTool: { type: 'string' },
-    retryable: { type: 'boolean' },
-  },
-  required: ['success'],
-};
-
-const RESOLVE_FOLDER_OUTPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    query: { type: 'string' },
-    count: { type: 'number' },
-    exactMatch: { type: 'boolean' },
-    ambiguous: { type: 'boolean' },
-    confidence: { type: 'number' },
-    confidenceDelta: { type: 'number' },
-    resolved: { type: ['object', 'null'] },
-    suggestedToolArgs: { type: ['object', 'null'] },
-    candidates: { type: 'array', items: { type: 'object' } },
-    error: { type: 'string' },
-    code: { type: 'string' },
-    hint: { type: 'string' },
-    suggestedTool: { type: 'string' },
-    retryable: { type: 'boolean' },
-  },
-  required: ['success'],
-};
-
-const RESOLVE_NOTE_OUTPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    query: { type: 'string' },
-    count: { type: 'number' },
-    exactMatch: { type: 'boolean' },
-    ambiguous: { type: 'boolean' },
-    confidence: { type: 'number' },
-    confidenceDelta: { type: 'number' },
-    resolved: { type: ['object', 'null'] },
-    suggestedGetNoteArgs: { type: ['object', 'null'] },
-    candidates: { type: 'array', items: { type: 'object' } },
-    error: { type: 'string' },
-    code: { type: 'string' },
-    hint: { type: 'string' },
-    suggestedTool: { type: 'string' },
-    retryable: { type: 'boolean' },
-  },
-  required: ['success'],
-};
-
-const LIST_FOLDERS_OUTPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    count: { type: 'number' },
-    totalCount: { type: 'number' },
-    offset: { type: 'number' },
-    limit: { type: 'number' },
-    maxDepth: { type: 'number' },
-    hasMore: { type: 'boolean' },
-    nextCursor: { type: ['string', 'null'] },
-    folders: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          path: { type: 'string' },
-          name: { type: 'string' },
-          source: { type: 'string' },
-          spaceId: { type: ['string', 'null'] },
-        },
-        required: ['path', 'name', 'source'],
-      },
-    },
-    error: { type: 'string' },
-    code: { type: 'string' },
-    hint: { type: 'string' },
-    suggestedTool: { type: 'string' },
-    retryable: { type: 'boolean' },
-  },
-  required: ['success'],
-};
-
-const GET_NOTE_OUTPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    note: { type: 'object' },
-    error: { type: 'string' },
-    code: { type: 'string' },
-    hint: { type: 'string' },
-    suggestedTool: { type: 'string' },
-    retryable: { type: 'boolean' },
-  },
-  required: ['success'],
-};
+const GENERIC_TOOL_OUTPUT_SCHEMA = outputSchemaWithErrors();
+const MESSAGE_OUTPUT_SCHEMA = outputSchemaWithErrors({ message: { type: 'string' } });
+const NOTE_OUTPUT_SCHEMA = outputSchemaWithErrors({ note: { type: 'object' }, created: { type: 'boolean' } });
+const NOTES_LIST_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  notes: { type: 'array', items: { type: 'object' } },
+});
+const RESOLVE_NOTE_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  count: { type: 'number' },
+  exactMatch: { type: 'boolean' },
+  ambiguous: { type: 'boolean' },
+  confidence: { type: 'number' },
+  confidenceDelta: { type: 'number' },
+  resolved: { type: ['object', 'null'] },
+  suggestedGetNoteArgs: { type: ['object', 'null'] },
+  candidates: { type: 'array', items: { type: 'object' } },
+});
+const CREATE_NOTE_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  note: { type: 'object' },
+  folderResolution: { type: 'object' },
+});
+const PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  note: { type: 'object' },
+  lineCount: { type: 'number' },
+  lines: { type: 'array', items: { type: 'object' } },
+});
+const SEARCH_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  count: { type: 'number' },
+  results: { type: 'array', items: { type: 'object' } },
+});
+const TASKS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  note: { type: 'object' },
+  taskCount: { type: 'number' },
+  tasks: { type: 'array', items: { type: 'object' } },
+});
+const RANGE_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  period: { type: 'string' },
+  startDate: { type: 'string' },
+  endDate: { type: 'string' },
+  noteCount: { type: 'number' },
+  totalDays: { type: 'number' },
+  scannedDays: { type: 'number' },
+  truncatedByMaxDays: { type: 'boolean' },
+  maxDays: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  notes: { type: 'array', items: { type: 'object' } },
+});
+const FOLDER_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  folder: { type: 'string' },
+  noteCount: { type: 'number' },
+  totalInFolder: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  notes: { type: 'array', items: { type: 'object' } },
+});
+const SPACES_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  spaces: { type: 'array', items: { type: 'object' } },
+});
+const TAGS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  tags: { type: 'array', items: { type: 'string' } },
+});
+const LIST_FOLDERS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  maxDepth: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  folders: { type: 'array', items: { type: 'object' } },
+});
+const FIND_FOLDERS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  maxDepth: { type: 'number' },
+  count: { type: 'number' },
+  matches: { type: 'array', items: { type: 'object' } },
+});
+const RESOLVE_FOLDER_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  count: { type: 'number' },
+  exactMatch: { type: 'boolean' },
+  ambiguous: { type: 'boolean' },
+  confidence: { type: 'number' },
+  confidenceDelta: { type: 'number' },
+  resolved: { type: ['object', 'null'] },
+  suggestedToolArgs: { type: ['object', 'null'] },
+  candidates: { type: 'array', items: { type: 'object' } },
+});
+const EVENTS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  startDate: { type: 'string' },
+  endDate: { type: 'string' },
+  eventCount: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  events: { type: 'array', items: { type: 'object' } },
+});
+const CALENDARS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  calendars: { type: 'array', items: { type: 'object' } },
+});
+const REMINDERS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  reminderCount: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  reminders: { type: 'array', items: { type: 'object' } },
+});
+const REMINDER_LISTS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  lists: { type: 'array', items: { type: 'string' } },
+});
+const SEARCH_TOOLS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  count: { type: 'number' },
+  tools: { type: 'array', items: { type: 'object' } },
+});
+const GET_TOOL_DETAILS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  missing: { type: 'array', items: { type: 'string' } },
+  tools: { type: 'array', items: { type: 'object' } },
+});
 
 function getToolOutputSchema(toolName: string): Record<string, unknown> {
   switch (toolName) {
+    case 'noteplan_get_note':
+    case 'noteplan_get_today':
+    case 'noteplan_get_calendar_note':
+    case 'noteplan_get_periodic_note':
+      return NOTE_OUTPUT_SCHEMA;
+    case 'noteplan_list_notes':
+      return NOTES_LIST_OUTPUT_SCHEMA;
+    case 'noteplan_resolve_note':
+      return RESOLVE_NOTE_OUTPUT_SCHEMA;
+    case 'noteplan_create_note':
+      return CREATE_NOTE_OUTPUT_SCHEMA;
+    case 'noteplan_get_paragraphs':
+      return PARAGRAPHS_OUTPUT_SCHEMA;
+    case 'noteplan_search':
+      return SEARCH_NOTES_OUTPUT_SCHEMA;
+    case 'noteplan_get_tasks':
+      return TASKS_OUTPUT_SCHEMA;
+    case 'noteplan_add_task':
+    case 'noteplan_complete_task':
+    case 'noteplan_update_task':
+    case 'noteplan_update_note':
+    case 'noteplan_delete_note':
+    case 'noteplan_set_property':
+    case 'noteplan_remove_property':
+    case 'noteplan_insert_content':
+    case 'noteplan_append_content':
+    case 'noteplan_delete_lines':
+    case 'noteplan_edit_line':
+    case 'noteplan_add_to_today':
+    case 'calendar_create_event':
+    case 'calendar_update_event':
+    case 'calendar_delete_event':
+    case 'reminders_create':
+    case 'reminders_complete':
+    case 'reminders_update':
+    case 'reminders_delete':
+      return MESSAGE_OUTPUT_SCHEMA;
+    case 'noteplan_get_notes_in_range':
+      return RANGE_NOTES_OUTPUT_SCHEMA;
+    case 'noteplan_get_notes_in_folder':
+      return FOLDER_NOTES_OUTPUT_SCHEMA;
+    case 'noteplan_list_spaces':
+      return SPACES_OUTPUT_SCHEMA;
+    case 'noteplan_list_tags':
+      return TAGS_OUTPUT_SCHEMA;
+    case 'noteplan_list_folders':
+      return LIST_FOLDERS_OUTPUT_SCHEMA;
+    case 'noteplan_find_folders':
+      return FIND_FOLDERS_OUTPUT_SCHEMA;
+    case 'noteplan_resolve_folder':
+      return RESOLVE_FOLDER_OUTPUT_SCHEMA;
+    case 'calendar_get_events':
+      return EVENTS_OUTPUT_SCHEMA;
+    case 'calendar_list_calendars':
+      return CALENDARS_OUTPUT_SCHEMA;
+    case 'reminders_get':
+      return REMINDERS_OUTPUT_SCHEMA;
+    case 'reminders_list_lists':
+      return REMINDER_LISTS_OUTPUT_SCHEMA;
     case 'noteplan_search_tools':
       return SEARCH_TOOLS_OUTPUT_SCHEMA;
     case 'noteplan_get_tool_details':
       return GET_TOOL_DETAILS_OUTPUT_SCHEMA;
-    case 'noteplan_resolve_folder':
-      return RESOLVE_FOLDER_OUTPUT_SCHEMA;
-    case 'noteplan_resolve_note':
-      return RESOLVE_NOTE_OUTPUT_SCHEMA;
-    case 'noteplan_list_folders':
-      return LIST_FOLDERS_OUTPUT_SCHEMA;
-    case 'noteplan_get_note':
-      return GET_NOTE_OUTPUT_SCHEMA;
     default:
       return GENERIC_TOOL_OUTPUT_SCHEMA;
   }
