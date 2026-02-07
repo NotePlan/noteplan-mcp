@@ -37,9 +37,166 @@ const GENERIC_TOOL_OUTPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     success: { type: 'boolean' },
     error: { type: 'string' },
+    code: { type: 'string' },
+    hint: { type: 'string' },
+    suggestedTool: { type: 'string' },
+    retryable: { type: 'boolean' },
   },
   required: ['success'],
 };
+
+const SEARCH_TOOLS_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    query: { type: 'string' },
+    count: { type: 'number' },
+    tools: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          score: { type: 'number' },
+          description: { type: 'string' },
+        },
+        required: ['name', 'score', 'description'],
+      },
+    },
+    error: { type: 'string' },
+    code: { type: 'string' },
+    hint: { type: 'string' },
+    suggestedTool: { type: 'string' },
+    retryable: { type: 'boolean' },
+  },
+  required: ['success'],
+};
+
+const GET_TOOL_DETAILS_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    count: { type: 'number' },
+    missing: { type: 'array', items: { type: 'string' } },
+    tools: { type: 'array', items: { type: 'object' } },
+    error: { type: 'string' },
+    code: { type: 'string' },
+    hint: { type: 'string' },
+    suggestedTool: { type: 'string' },
+    retryable: { type: 'boolean' },
+  },
+  required: ['success'],
+};
+
+const RESOLVE_FOLDER_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    query: { type: 'string' },
+    count: { type: 'number' },
+    exactMatch: { type: 'boolean' },
+    ambiguous: { type: 'boolean' },
+    confidence: { type: 'number' },
+    confidenceDelta: { type: 'number' },
+    resolved: { type: ['object', 'null'] },
+    suggestedToolArgs: { type: ['object', 'null'] },
+    candidates: { type: 'array', items: { type: 'object' } },
+    error: { type: 'string' },
+    code: { type: 'string' },
+    hint: { type: 'string' },
+    suggestedTool: { type: 'string' },
+    retryable: { type: 'boolean' },
+  },
+  required: ['success'],
+};
+
+const RESOLVE_NOTE_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    query: { type: 'string' },
+    count: { type: 'number' },
+    exactMatch: { type: 'boolean' },
+    ambiguous: { type: 'boolean' },
+    confidence: { type: 'number' },
+    confidenceDelta: { type: 'number' },
+    resolved: { type: ['object', 'null'] },
+    suggestedGetNoteArgs: { type: ['object', 'null'] },
+    candidates: { type: 'array', items: { type: 'object' } },
+    error: { type: 'string' },
+    code: { type: 'string' },
+    hint: { type: 'string' },
+    suggestedTool: { type: 'string' },
+    retryable: { type: 'boolean' },
+  },
+  required: ['success'],
+};
+
+const LIST_FOLDERS_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    count: { type: 'number' },
+    totalCount: { type: 'number' },
+    offset: { type: 'number' },
+    limit: { type: 'number' },
+    maxDepth: { type: 'number' },
+    hasMore: { type: 'boolean' },
+    nextCursor: { type: ['string', 'null'] },
+    folders: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          name: { type: 'string' },
+          source: { type: 'string' },
+          spaceId: { type: ['string', 'null'] },
+        },
+        required: ['path', 'name', 'source'],
+      },
+    },
+    error: { type: 'string' },
+    code: { type: 'string' },
+    hint: { type: 'string' },
+    suggestedTool: { type: 'string' },
+    retryable: { type: 'boolean' },
+  },
+  required: ['success'],
+};
+
+const GET_NOTE_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    note: { type: 'object' },
+    error: { type: 'string' },
+    code: { type: 'string' },
+    hint: { type: 'string' },
+    suggestedTool: { type: 'string' },
+    retryable: { type: 'boolean' },
+  },
+  required: ['success'],
+};
+
+function getToolOutputSchema(toolName: string): Record<string, unknown> {
+  switch (toolName) {
+    case 'noteplan_search_tools':
+      return SEARCH_TOOLS_OUTPUT_SCHEMA;
+    case 'noteplan_get_tool_details':
+      return GET_TOOL_DETAILS_OUTPUT_SCHEMA;
+    case 'noteplan_resolve_folder':
+      return RESOLVE_FOLDER_OUTPUT_SCHEMA;
+    case 'noteplan_resolve_note':
+      return RESOLVE_NOTE_OUTPUT_SCHEMA;
+    case 'noteplan_list_folders':
+      return LIST_FOLDERS_OUTPUT_SCHEMA;
+    case 'noteplan_get_note':
+      return GET_NOTE_OUTPUT_SCHEMA;
+    default:
+      return GENERIC_TOOL_OUTPUT_SCHEMA;
+  }
+}
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -155,20 +312,100 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
   };
 }
 
+const QUERY_SYNONYMS: Record<string, string[]> = {
+  todo: ['task', 'tasks', 'reminder', 'reminders', 'checklist'],
+  tasks: ['task', 'todo', 'reminder'],
+  meeting: ['calendar', 'event', 'schedule', 'appointment'],
+  events: ['event', 'calendar', 'schedule', 'meeting'],
+  workspace: ['space', 'spaces', 'teamspace'],
+  teamspace: ['space', 'workspace', 'spaces'],
+  folder: ['folders', 'directory', 'path', 'project'],
+  projects: ['project', 'folder'],
+  resolve: ['disambiguate', 'canonical', 'match'],
+  disambiguate: ['resolve', 'canonical', 'match'],
+  edit: ['update', 'modify', 'change'],
+  delete: ['remove', 'erase', 'clear'],
+  create: ['add', 'new', 'make'],
+};
+
+function getToolSearchAliases(toolName: string): string[] {
+  const aliases: string[] = [];
+
+  if (toolName.startsWith('calendar_')) {
+    aliases.push('calendar', 'event', 'events', 'schedule', 'meeting', 'appointment');
+  }
+
+  if (toolName.startsWith('reminders_')) {
+    aliases.push('reminder', 'reminders', 'todo', 'task', 'checklist');
+  }
+
+  if (toolName.includes('resolve_folder')) {
+    aliases.push('resolve folder', 'canonical folder', 'disambiguate folder', 'choose folder path');
+  }
+  if (toolName.includes('resolve_note')) {
+    aliases.push('resolve note', 'canonical note', 'disambiguate note', 'choose note target');
+  }
+  if (toolName.includes('find_folders')) {
+    aliases.push('find folder', 'search folder', 'folder lookup');
+  }
+  if (toolName.includes('list_folders')) {
+    aliases.push('list folders', 'browse folders', 'folder tree');
+  }
+  if (toolName.includes('list_spaces')) {
+    aliases.push('list spaces', 'workspaces', 'teamspaces');
+  }
+  if (toolName.includes('search_tools')) {
+    aliases.push('find tool', 'discover tools', 'tool lookup');
+  }
+  if (toolName.includes('get_tool_details')) {
+    aliases.push('tool schema', 'tool details', 'tool arguments');
+  }
+  if (toolName.includes('get_tasks') || toolName.includes('add_task') || toolName.includes('update_task') || toolName.includes('complete_task')) {
+    aliases.push('tasks', 'todos', 'checklist', 'task management');
+  }
+  if (toolName.includes('get_note') || toolName.includes('list_notes') || toolName.includes('create_note') || toolName.includes('update_note')) {
+    aliases.push('notes', 'documents', 'markdown');
+  }
+
+  return aliases;
+}
+
+function expandQueryTokens(query: string): string[] {
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const expanded = new Set(tokens);
+  for (const token of tokens) {
+    const synonyms = QUERY_SYNONYMS[token];
+    if (!synonyms) continue;
+    synonyms.forEach((synonym) => expanded.add(synonym));
+  }
+
+  return Array.from(expanded);
+}
+
 function scoreToolMatch(tool: ToolDefinition, query: string): number {
   const q = query.toLowerCase();
   const name = tool.name.toLowerCase();
   const description = tool.description.toLowerCase();
+  const aliases = getToolSearchAliases(tool.name);
+  const aliasText = aliases.join(' ').toLowerCase();
+  const searchable = `${name} ${description} ${aliasText}`;
+  const queryTokens = expandQueryTokens(q);
 
   if (name === q) return 1.0;
   if (name.startsWith(q)) return 0.95;
   if (name.includes(q)) return 0.9;
+  if (aliases.some((alias) => alias.toLowerCase() === q)) return 0.88;
   if (description.includes(q)) return 0.75;
+  if (aliasText.includes(q)) return 0.74;
 
-  const tokens = q.split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return 0;
-  const tokenHits = tokens.filter((token) => name.includes(token) || description.includes(token)).length;
-  return tokenHits > 0 ? tokenHits / tokens.length * 0.6 : 0;
+  if (queryTokens.length === 0) return 0;
+  const tokenHits = queryTokens.filter((token) => searchable.includes(token)).length;
+  return tokenHits > 0 ? tokenHits / queryTokens.length * 0.62 : 0;
 }
 
 function searchToolDefinitions(
@@ -184,6 +421,115 @@ function searchToolDefinitions(
       return a.tool.name.localeCompare(b.tool.name);
     })
     .slice(0, limit);
+}
+
+type ToolErrorMeta = {
+  code: string;
+  hint?: string;
+  suggestedTool?: string;
+  retryable?: boolean;
+};
+
+function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMeta {
+  const message = errorMessage.toLowerCase();
+
+  if (message.includes('unknown tool')) {
+    return {
+      code: 'ERR_UNKNOWN_TOOL',
+      hint: 'Use noteplan_search_tools to find the right tool name first.',
+      suggestedTool: 'noteplan_search_tools',
+    };
+  }
+
+  if (message.includes('query is required')) {
+    return {
+      code: 'ERR_QUERY_REQUIRED',
+      hint: 'Provide a non-empty query string to run this operation.',
+    };
+  }
+
+  if (message.includes('names must include at least one tool name')) {
+    return {
+      code: 'ERR_INVALID_ARGUMENT',
+      hint: 'Pass at least one valid tool name in names[].',
+      suggestedTool: 'noteplan_search_tools',
+    };
+  }
+
+  if (message.includes('too many tool names requested')) {
+    return {
+      code: 'ERR_LIMIT_EXCEEDED',
+      hint: 'Split requests into chunks of up to 10 tool names.',
+      suggestedTool: 'noteplan_get_tool_details',
+    };
+  }
+
+  if (message.includes('empty content is blocked') || message.includes('empty line content is blocked') || message.includes('empty task content is blocked')) {
+    return {
+      code: 'ERR_EMPTY_CONTENT_BLOCKED',
+      hint: 'Use allowEmptyContent=true for intentional clears, or use a delete-oriented tool.',
+      suggestedTool: 'noteplan_delete_lines',
+    };
+  }
+
+  if (message.includes('line') && (message.includes('does not exist') || message.includes('invalid line index'))) {
+    return {
+      code: 'ERR_INVALID_LINE_REFERENCE',
+      hint: 'Fetch valid line numbers first with noteplan_get_paragraphs or noteplan_get_tasks.',
+      suggestedTool: 'noteplan_get_paragraphs',
+    };
+  }
+
+  if (message.includes('ambiguous')) {
+    return {
+      code: 'ERR_AMBIGUOUS_TARGET',
+      hint: 'Resolve the target first, then retry with the canonical identifier.',
+      suggestedTool: toolName.includes('folder') ? 'noteplan_resolve_folder' : 'noteplan_resolve_note',
+    };
+  }
+
+  if (message.includes('not found')) {
+    if (toolName.includes('folder')) {
+      return {
+        code: 'ERR_NOT_FOUND',
+        hint: 'Resolve the folder first to a canonical path, then retry.',
+        suggestedTool: 'noteplan_resolve_folder',
+      };
+    }
+    return {
+      code: 'ERR_NOT_FOUND',
+      hint: 'Resolve the note first to a canonical ID/filename, then retry.',
+      suggestedTool: 'noteplan_resolve_note',
+    };
+  }
+
+  if (message.includes('timed out') || message.includes('timeout')) {
+    return {
+      code: 'ERR_TIMEOUT',
+      hint: 'Try a narrower query or smaller range and retry.',
+      retryable: true,
+    };
+  }
+
+  return {
+    code: 'ERR_TOOL_EXECUTION',
+  };
+}
+
+function enrichErrorResult(result: unknown, toolName: string): unknown {
+  if (!result || typeof result !== 'object') return result;
+  const typed = result as Record<string, unknown>;
+  if (typed.success !== false) return result;
+  if (typeof typed.error !== 'string') return result;
+
+  const meta = inferToolErrorMeta(toolName, typed.error);
+  return {
+    ...typed,
+    code: typeof typed.code === 'string' ? typed.code : meta.code,
+    hint: typeof typed.hint === 'string' ? typed.hint : meta.hint,
+    suggestedTool: typeof typed.suggestedTool === 'string' ? typed.suggestedTool : meta.suggestedTool,
+    retryable: typeof typed.retryable === 'boolean' ? typed.retryable : meta.retryable,
+  };
 }
 
 // Create the server
@@ -1441,7 +1787,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
   const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
     ...tool,
     annotations: getToolAnnotations(tool.name),
-    outputSchema: GENERIC_TOOL_OUTPUT_SCHEMA,
+    outputSchema: getToolOutputSchema(tool.name),
   }));
   const toolDefinitionByName = new Map(annotatedToolDefinitions.map((tool) => [tool.name, tool]));
   const discoveryToolNames = ['noteplan_search_tools', 'noteplan_get_tool_details'];
@@ -1675,22 +2021,29 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           throw new Error(`Unknown tool: ${name}`);
       }
 
+      const enrichedResult = enrichErrorResult(result, name);
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(result),
+            text: JSON.stringify(enrichedResult),
           },
         ],
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const meta = inferToolErrorMeta(name, errorMessage);
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({
               success: false,
-              error: error instanceof Error ? error.message : 'Unknown error',
+              error: errorMessage,
+              code: meta.code,
+              hint: meta.hint,
+              suggestedTool: meta.suggestedTool,
+              retryable: meta.retryable,
             }),
           },
         ],

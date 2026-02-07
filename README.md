@@ -10,6 +10,8 @@ An MCP (Model Context Protocol) server that exposes NotePlan's note and task man
 - **Calendar Notes**: Access daily notes by date
 - **Search**: Full-text search across all notes
 - **Progressive Tool Discovery**: `tools/list` is paginated and detailed schemas are fetched on demand
+- **Structured Errors**: Tool failures include machine-readable `code` plus `hint`/`suggestedTool`
+- **Fast Repeated Lookups**: Short-lived in-memory caching for expensive list/resolve paths
 
 ## Installation
 

@@ -14,6 +14,39 @@ import { parseFlexibleDateFilter, isDateInRange } from '../utils/date-filters.js
 
 // Cache ripgrep availability check
 let ripgrepAvailable: boolean | null = null;
+const LIST_NOTES_CACHE_TTL_MS = 5000;
+const LIST_FOLDERS_CACHE_TTL_MS = 15000;
+
+type CacheEntry<T> = {
+  value: T;
+  expiresAt: number;
+};
+
+const listNotesCache = new Map<string, CacheEntry<Note[]>>();
+const listFoldersCache = new Map<string, CacheEntry<Folder[]>>();
+
+function getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number): T {
+  cache.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
+  return value;
+}
+
+function invalidateListingCaches(): void {
+  listNotesCache.clear();
+  listFoldersCache.clear();
+}
 
 /**
  * Result of folder resolution during note creation
@@ -95,6 +128,16 @@ export function listNotes(options: {
   type?: NoteType;
 } = {}): Note[] {
   const { folder, space, type } = options;
+  const cacheKey = JSON.stringify({
+    folder: folder || '',
+    space: space || '',
+    type: type || '',
+  });
+  const cached = getCachedValue(listNotesCache, cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const notes: Note[] = [];
 
   // Get local notes
@@ -119,7 +162,7 @@ export function listNotes(options: {
     return dateB - dateA;
   });
 
-  return notes;
+  return setCachedValue(listNotesCache, cacheKey, notes, LIST_NOTES_CACHE_TTL_MS);
 }
 
 /**
@@ -434,6 +477,7 @@ export function createNote(
     const filename = sqliteWriter.createSpaceNote(space, title, content || `# ${title}\n\n`);
     const note = sqliteReader.getSpaceNote(filename);
     if (!note) throw new Error('Failed to create space note');
+    invalidateListingCaches();
     return { note, folderResolution };
   }
 
@@ -457,6 +501,7 @@ export function createNote(
   const filename = fileWriter.createProjectNote(title, content, resolvedFolder);
   const note = fileReader.readNoteFile(filename);
   if (!note) throw new Error('Failed to create note');
+  invalidateListingCaches();
   return { note, folderResolution };
 }
 
@@ -468,12 +513,14 @@ export function updateNote(filename: string, content: string): Note {
     sqliteWriter.updateSpaceNote(filename, content);
     const note = sqliteReader.getSpaceNote(filename);
     if (!note) throw new Error('Note not found after update');
+    invalidateListingCaches();
     return note;
   }
 
   fileWriter.updateNote(filename, content);
   const note = fileReader.readNoteFile(filename);
   if (!note) throw new Error('Note not found after update');
+  invalidateListingCaches();
   return note;
 }
 
@@ -486,6 +533,7 @@ export function deleteNote(filename: string): void {
   } else {
     fileWriter.deleteNote(filename);
   }
+  invalidateListingCaches();
 }
 
 /**
@@ -520,6 +568,7 @@ export function ensureCalendarNote(date: string, space?: string): Note {
     if (!note) {
       sqliteWriter.createSpaceCalendarNote(space, dateStr, '');
       note = sqliteReader.getSpaceCalendarNote(dateStr, space);
+      invalidateListingCaches();
     }
     if (!note) throw new Error('Failed to create space calendar note');
     return note;
@@ -528,6 +577,7 @@ export function ensureCalendarNote(date: string, space?: string): Note {
   const filename = fileWriter.ensureCalendarNote(dateStr);
   const note = fileReader.readNoteFile(filename);
   if (!note) throw new Error('Failed to create calendar note');
+  invalidateListingCaches();
   return note;
 }
 
@@ -592,6 +642,18 @@ export function listFolders(options: ListFoldersOptions = {}): Folder[] {
     query,
     maxDepth,
   } = options;
+  const normalizedQuery = query?.trim().toLowerCase() || '';
+  const cacheKey = JSON.stringify({
+    space: space || '',
+    includeLocal,
+    includeSpaces,
+    query: normalizedQuery,
+    maxDepth: typeof maxDepth === 'number' ? maxDepth : null,
+  });
+  const cached = getCachedValue(listFoldersCache, cacheKey);
+  if (cached) {
+    return cached;
+  }
   const folders: Folder[] = [];
 
   if (includeLocal) {
@@ -609,7 +671,6 @@ export function listFolders(options: ListFoldersOptions = {}): Folder[] {
     ) === index;
   });
 
-  const normalizedQuery = query?.trim().toLowerCase();
   const filtered = normalizedQuery
     ? deduped.filter((folder) => {
         const path = folder.path.toLowerCase();
@@ -619,7 +680,7 @@ export function listFolders(options: ListFoldersOptions = {}): Folder[] {
     : deduped;
 
   filtered.sort((a, b) => a.path.localeCompare(b.path));
-  return filtered;
+  return setCachedValue(listFoldersCache, cacheKey, filtered, LIST_FOLDERS_CACHE_TTL_MS);
 }
 
 /**
