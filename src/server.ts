@@ -20,6 +20,14 @@ type ToolDefinition = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: ToolAnnotations;
+};
+
+type ToolAnnotations = {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
 };
 
 const TOOLS_LIST_PAGE_SIZE = 20;
@@ -61,6 +69,77 @@ function compactToolDefinition(tool: ToolDefinition): ToolDefinition {
     name: tool.name,
     description: compactDescription(tool.description),
     inputSchema: stripDescriptions(tool.inputSchema) as Record<string, unknown>,
+    annotations: tool.annotations,
+  };
+}
+
+function getToolAnnotations(toolName: string): ToolAnnotations {
+  const readOnlyTools = new Set([
+    'noteplan_get_note',
+    'noteplan_list_notes',
+    'noteplan_get_paragraphs',
+    'noteplan_search',
+    'noteplan_get_tasks',
+    'noteplan_get_calendar_note',
+    'noteplan_get_periodic_note',
+    'noteplan_get_notes_in_range',
+    'noteplan_get_notes_in_folder',
+    'noteplan_list_spaces',
+    'noteplan_list_tags',
+    'noteplan_list_folders',
+    'noteplan_find_folders',
+    'noteplan_search_tools',
+    'noteplan_get_tool_details',
+    'calendar_get_events',
+    'calendar_list_calendars',
+    'reminders_get',
+    'reminders_list_lists',
+  ]);
+
+  const destructiveTools = new Set([
+    'noteplan_delete_note',
+    'noteplan_delete_lines',
+    'noteplan_remove_property',
+    'noteplan_update_note',
+    'noteplan_edit_line',
+    'noteplan_update_task',
+    'calendar_delete_event',
+    'reminders_delete',
+  ]);
+
+  const nonIdempotentTools = new Set([
+    'noteplan_create_note',
+    'noteplan_insert_content',
+    'noteplan_append_content',
+    'noteplan_delete_note',
+    'noteplan_delete_lines',
+    'noteplan_add_task',
+    'noteplan_add_to_today',
+    'calendar_create_event',
+    'calendar_delete_event',
+    'reminders_create',
+    'reminders_delete',
+  ]);
+
+  const openWorldTools = new Set([
+    'calendar_get_events',
+    'calendar_create_event',
+    'calendar_update_event',
+    'calendar_delete_event',
+    'calendar_list_calendars',
+    'reminders_get',
+    'reminders_create',
+    'reminders_complete',
+    'reminders_update',
+    'reminders_delete',
+    'reminders_list_lists',
+  ]);
+
+  return {
+    readOnlyHint: readOnlyTools.has(toolName),
+    destructiveHint: destructiveTools.has(toolName),
+    idempotentHint: !nonIdempotentTools.has(toolName),
+    openWorldHint: openWorldTools.has(toolName),
   };
 }
 
@@ -1252,14 +1331,18 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           },
         },
       ];
-  const toolDefinitionByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]));
+  const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
+    ...tool,
+    annotations: getToolAnnotations(tool.name),
+  }));
+  const toolDefinitionByName = new Map(annotatedToolDefinitions.map((tool) => [tool.name, tool]));
   const discoveryToolNames = ['noteplan_search_tools', 'noteplan_get_tool_details'];
   const prioritizedTools = discoveryToolNames
     .map((name) => toolDefinitionByName.get(name))
     .filter((tool): tool is ToolDefinition => Boolean(tool));
   const orderedToolDefinitions = [
     ...prioritizedTools,
-    ...toolDefinitions.filter((tool) => !discoveryToolNames.includes(tool.name)),
+    ...annotatedToolDefinitions.filter((tool) => !discoveryToolNames.includes(tool.name)),
   ];
   const compactToolDefinitions = orderedToolDefinitions.map((tool) => compactToolDefinition(tool));
 
