@@ -38,6 +38,7 @@ function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Recor
     type: 'object',
     properties: {
       success: { type: 'boolean' },
+      durationMs: { type: 'number' },
       ...properties,
       error: { type: 'string' },
       code: { type: 'string' },
@@ -279,6 +280,33 @@ function toBoundedInt(value: unknown, defaultValue: number, min: number, max: nu
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return defaultValue;
   return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
+function isDebugTimingsEnabled(args: unknown): boolean {
+  if (!args || typeof args !== 'object') return false;
+  const rawValue = (args as Record<string, unknown>).debugTimings;
+  if (typeof rawValue === 'boolean') return rawValue;
+  if (typeof rawValue === 'string') {
+    const normalized = rawValue.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1';
+  }
+  return false;
+}
+
+function withDebugTimingsInputSchema(inputSchema: Record<string, unknown>): Record<string, unknown> {
+  const schema = { ...inputSchema };
+  const properties =
+    schema.properties && typeof schema.properties === 'object'
+      ? { ...(schema.properties as Record<string, unknown>) }
+      : {};
+  if (!('debugTimings' in properties)) {
+    properties.debugTimings = {
+      type: 'boolean',
+      description: 'Include durationMs timing metadata in response (default: false)',
+    };
+  }
+  schema.properties = properties;
+  return schema;
 }
 
 function compactDescription(description: string, maxLength = 120): string {
@@ -606,6 +634,21 @@ function enrichErrorResult(result: unknown, toolName: string): unknown {
     hint: typeof typed.hint === 'string' ? typed.hint : meta.hint,
     suggestedTool: typeof typed.suggestedTool === 'string' ? typed.suggestedTool : meta.suggestedTool,
     retryable: typeof typed.retryable === 'boolean' ? typed.retryable : meta.retryable,
+  };
+}
+
+function withDuration(result: unknown, durationMs: number, includeTiming: boolean): unknown {
+  if (!includeTiming) return result;
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    return {
+      ...(result as Record<string, unknown>),
+      durationMs,
+    };
+  }
+  return {
+    success: true,
+    data: result,
+    durationMs,
   };
 }
 
@@ -1873,6 +1916,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
       ];
   const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
     ...tool,
+    inputSchema: withDebugTimingsInputSchema(tool.inputSchema),
     annotations: getToolAnnotations(tool.name),
     outputSchema: getToolOutputSchema(tool.name),
   }));
@@ -1903,6 +1947,8 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
   // Register tool call handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const includeTiming = isDebugTimingsEnabled(args);
+    const startTime = Date.now();
 
     try {
       let result;
@@ -2109,29 +2155,32 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
       }
 
       const enrichedResult = enrichErrorResult(result, name);
+      const resultWithDuration = withDuration(enrichedResult, Date.now() - startTime, includeTiming);
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(enrichedResult),
+            text: JSON.stringify(resultWithDuration),
           },
         ],
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const meta = inferToolErrorMeta(name, errorMessage);
+      const errorResult: Record<string, unknown> = {
+        success: false,
+        error: errorMessage,
+        code: meta.code,
+        hint: meta.hint,
+        suggestedTool: meta.suggestedTool,
+        retryable: meta.retryable,
+      };
+      const errorWithDuration = withDuration(errorResult, Date.now() - startTime, includeTiming);
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify({
-              success: false,
-              error: errorMessage,
-              code: meta.code,
-              hint: meta.hint,
-              suggestedTool: meta.suggestedTool,
-              retryable: meta.retryable,
-            }),
+            text: JSON.stringify(errorWithDuration),
           },
         ],
         isError: true,
