@@ -60,7 +60,25 @@ function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Recor
 
 const GENERIC_TOOL_OUTPUT_SCHEMA = outputSchemaWithErrors();
 const MESSAGE_OUTPUT_SCHEMA = outputSchemaWithErrors({ message: { type: 'string' } });
-const NOTE_OUTPUT_SCHEMA = outputSchemaWithErrors({ note: { type: 'object' }, created: { type: 'boolean' } });
+const NOTE_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  note: { type: 'object' },
+  created: { type: 'boolean' },
+  contentIncluded: { type: 'boolean' },
+  contentLength: { type: 'number' },
+  lineCount: { type: 'number' },
+  preview: { type: 'string' },
+  previewTruncated: { type: 'boolean' },
+  rangeStartLine: { type: 'number' },
+  rangeEndLine: { type: 'number' },
+  rangeLineCount: { type: 'number' },
+  returnedLineCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  content: { type: 'string' },
+  lines: { type: 'array', items: { type: 'object' } },
+});
 const NOTES_LIST_OUTPUT_SCHEMA = outputSchemaWithErrors({
   count: { type: 'number' },
   totalCount: { type: 'number' },
@@ -686,7 +704,8 @@ export function createServer(): Server {
         // Note operations
         {
           name: 'noteplan_get_note',
-          description: 'Get a note by ID, title, filename, or date. Prefer ID from noteplan_search for space notes.',
+          description:
+            'Get a note by ID, title, filename, or date. Default is metadata/preview only; set includeContent=true for paged line content. Prefer ID from noteplan_search for space notes.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -709,6 +728,34 @@ export function createServer(): Server {
               space: {
                 type: 'string',
                 description: 'Space ID to search in',
+              },
+              includeContent: {
+                type: 'boolean',
+                description: 'Include note body content and line payload (default: false)',
+              },
+              startLine: {
+                type: 'number',
+                description: 'First line to include when includeContent=true (1-indexed)',
+              },
+              endLine: {
+                type: 'number',
+                description: 'Last line to include when includeContent=true (1-indexed)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum lines to return when includeContent=true (default: 200, max: 2000)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset within selected range (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+              previewChars: {
+                type: 'number',
+                description: 'Preview length when includeContent=false (default: 280)',
               },
             },
           },

@@ -41,7 +41,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 ## Available Tools
 
 ### Note Operations
-- `noteplan_get_note` - Get note by title, filename, or date
+- `noteplan_get_note` - Get note metadata by title/filename/date, with optional paged content retrieval
 - `noteplan_list_notes` - List notes with filtering/pagination
 - `noteplan_create_note` - Create a new note
 - `noteplan_update_note` - Update note content
