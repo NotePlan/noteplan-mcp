@@ -39,6 +39,10 @@ function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Recor
     properties: {
       success: { type: 'boolean' },
       durationMs: { type: 'number' },
+      stageTimings: {
+        type: 'object',
+        additionalProperties: { type: 'number' },
+      },
       ...properties,
       error: { type: 'string' },
       code: { type: 'string' },

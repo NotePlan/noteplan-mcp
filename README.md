@@ -12,6 +12,7 @@ An MCP (Model Context Protocol) server that exposes NotePlan's note and task man
 - **Progressive Tool Discovery**: `tools/list` is paginated and detailed schemas are fetched on demand
 - **Structured Errors**: Tool failures include machine-readable `code` plus `hint`/`suggestedTool`
 - **Fast Repeated Lookups**: Short-lived in-memory caching for expensive list/resolve paths
+- **Opt-in Timing Telemetry**: `debugTimings=true` adds `durationMs`; heavy discovery tools also add `stageTimings`
 
 ## Installation
 

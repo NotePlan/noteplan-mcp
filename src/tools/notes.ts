@@ -11,6 +11,15 @@ function toBoundedInt(value: unknown, defaultValue: number, min: number, max: nu
   return Math.min(max, Math.max(min, Math.floor(numeric)));
 }
 
+function isDebugTimingsEnabled(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1';
+  }
+  return false;
+}
+
 // Schema definitions
 export const getNoteSchema = z.object({
   id: z.string().optional().describe('Note ID (use this for space notes - get it from search results)'),
@@ -191,11 +200,21 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
   const ambiguityDelta = Math.min(1, Math.max(0, Number(params.ambiguityDelta ?? 0.06)));
   const queryDateToken = normalizeDateToken(query);
   const allowedTypes = params.types ? new Set(params.types) : null;
+  const includeStageTimings = isDebugTimingsEnabled(
+    (params as { debugTimings?: unknown }).debugTimings
+  );
+  const stageTimings: Record<string, number> = {};
+
+  const listStart = Date.now();
   const notes = store.listNotes({
     folder: params.folder,
     space: params.space,
   });
+  if (includeStageTimings) {
+    stageTimings.listNotesMs = Date.now() - listStart;
+  }
 
+  const scoreStart = Date.now();
   const scored = notes
     .filter((note) => !allowedTypes || allowedTypes.has(note.type))
     .map((note) => ({
@@ -207,7 +226,11 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
       if (Math.abs(a.score - b.score) > 0.001) return b.score - a.score;
       return a.note.filename.localeCompare(b.note.filename);
     });
+  if (includeStageTimings) {
+    stageTimings.scoreAndSortMs = Date.now() - scoreStart;
+  }
 
+  const resolveStart = Date.now();
   const candidates = scored.slice(0, limit);
   const top = candidates[0];
   const second = candidates[1];
@@ -215,8 +238,21 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
   const confident = Boolean(top) && top.score >= minScore;
   const ambiguous = Boolean(second) && scoreDelta < ambiguityDelta;
   const resolved = confident && !ambiguous ? top.note : null;
+  const mappedCandidates = candidates.map((entry) => ({
+    id: entry.note.id,
+    title: entry.note.title,
+    filename: entry.note.filename,
+    type: entry.note.type,
+    source: entry.note.source,
+    folder: entry.note.folder,
+    spaceId: entry.note.spaceId,
+    score: Number(entry.score.toFixed(3)),
+  }));
+  if (includeStageTimings) {
+    stageTimings.resolveResultMs = Date.now() - resolveStart;
+  }
 
-  return {
+  const result: Record<string, unknown> = {
     success: true,
     query,
     count: candidates.length,
@@ -241,17 +277,14 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
         ? { id: resolved.id }
         : { filename: resolved.filename }
       : null,
-    candidates: candidates.map((entry) => ({
-      id: entry.note.id,
-      title: entry.note.title,
-      filename: entry.note.filename,
-      type: entry.note.type,
-      source: entry.note.source,
-      folder: entry.note.folder,
-      spaceId: entry.note.spaceId,
-      score: Number(entry.score.toFixed(3)),
-    })),
+    candidates: mappedCandidates,
   };
+
+  if (includeStageTimings) {
+    result.stageTimings = stageTimings;
+  }
+
+  return result;
 }
 
 export function createNote(params: z.infer<typeof createNoteSchema>) {

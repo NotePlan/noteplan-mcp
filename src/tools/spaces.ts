@@ -27,6 +27,15 @@ function toOptionalBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function isDebugTimingsEnabled(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1';
+  }
+  return false;
+}
+
 export const listSpacesSchema = z.object({
   query: z.string().optional().describe('Filter spaces by name/id substring'),
   limit: z.number().min(1).max(200).optional().default(50).describe('Maximum number of spaces to return'),
@@ -153,7 +162,13 @@ export function listTags(params?: z.infer<typeof listTagsSchema>) {
 
 export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
   const input = params ?? ({} as z.infer<typeof listFoldersSchema>);
+  const includeStageTimings = isDebugTimingsEnabled(
+    (input as { debugTimings?: unknown }).debugTimings
+  );
+  const stageTimings: Record<string, number> = {};
+
   const maxDepth = toOptionalBoundedInt(input.maxDepth, 1, 20) ?? 1;
+  const listStart = Date.now();
   const folders = store.listFolders({
     space: input.space,
     includeLocal: toOptionalBoolean(input.includeLocal),
@@ -161,13 +176,32 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     query: typeof input.query === 'string' ? input.query : undefined,
     maxDepth,
   });
+  if (includeStageTimings) {
+    stageTimings.listFoldersMs = Date.now() - listStart;
+  }
+
+  const paginateStart = Date.now();
   const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const limit = toBoundedInt(input.limit, 50, 1, 500);
   const page = folders.slice(offset, offset + limit);
   const hasMore = offset + page.length < folders.length;
   const nextCursor = hasMore ? String(offset + page.length) : null;
+  if (includeStageTimings) {
+    stageTimings.paginateMs = Date.now() - paginateStart;
+  }
 
-  return {
+  const mapStart = Date.now();
+  const mappedFolders = page.map((f) => ({
+    path: f.path,
+    name: f.name,
+    source: f.source,
+    spaceId: f.spaceId,
+  }));
+  if (includeStageTimings) {
+    stageTimings.mapResultMs = Date.now() - mapStart;
+  }
+
+  const result: Record<string, unknown> = {
     success: true,
     count: page.length,
     totalCount: folders.length,
@@ -176,13 +210,14 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     maxDepth,
     hasMore,
     nextCursor,
-    folders: page.map((f) => ({
-      path: f.path,
-      name: f.name,
-      source: f.source,
-      spaceId: f.spaceId,
-    })),
+    folders: mappedFolders,
   };
+
+  if (includeStageTimings) {
+    result.stageTimings = stageTimings;
+  }
+
+  return result;
 }
 
 function folderMatchScore(path: string, name: string, query: string): number {
@@ -259,6 +294,12 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
   const maxDepth = toOptionalBoundedInt(params.maxDepth, 1, 20) ?? 2;
   const minScore = Math.min(1, Math.max(0, Number(params.minScore ?? 0.88)));
   const ambiguityDelta = Math.min(1, Math.max(0, Number(params.ambiguityDelta ?? 0.06)));
+  const includeStageTimings = isDebugTimingsEnabled(
+    (params as { debugTimings?: unknown }).debugTimings
+  );
+  const stageTimings: Record<string, number> = {};
+
+  const listStart = Date.now();
   const folders = store.listFolders({
     space: params.space,
     includeLocal: toOptionalBoolean(params.includeLocal),
@@ -266,7 +307,11 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
     query,
     maxDepth,
   });
+  if (includeStageTimings) {
+    stageTimings.listFoldersMs = Date.now() - listStart;
+  }
 
+  const scoreStart = Date.now();
   const scored = folders
     .map((folder) => ({
       folder,
@@ -278,7 +323,11 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
       if (Math.abs(a.score - b.score) > 0.001) return b.score - a.score;
       return a.depth - b.depth;
     });
+  if (includeStageTimings) {
+    stageTimings.scoreAndSortMs = Date.now() - scoreStart;
+  }
 
+  const resolveStart = Date.now();
   const candidates = scored.slice(0, limit);
   const top = candidates[0];
   const second = candidates[1];
@@ -291,8 +340,18 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
   const confident = Boolean(top) && (exactMatch || top.score >= minScore);
   const ambiguous = Boolean(second) && scoreDelta < ambiguityDelta;
   const resolved = confident && !ambiguous ? top : undefined;
+  const mappedCandidates = candidates.map((entry) => ({
+    path: entry.folder.path,
+    name: entry.folder.name,
+    source: entry.folder.source,
+    spaceId: entry.folder.spaceId,
+    score: Number(entry.score.toFixed(3)),
+  }));
+  if (includeStageTimings) {
+    stageTimings.resolveResultMs = Date.now() - resolveStart;
+  }
 
-  return {
+  const result: Record<string, unknown> = {
     success: true,
     query,
     maxDepth,
@@ -311,12 +370,12 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
     confidence: top ? Number(top.score.toFixed(3)) : 0,
     confidenceDelta: Number(scoreDelta.toFixed(3)),
     suggestedToolArgs: resolved ? { folder: resolved.folder.path } : null,
-    candidates: candidates.map((entry) => ({
-      path: entry.folder.path,
-      name: entry.folder.name,
-      source: entry.folder.source,
-      spaceId: entry.folder.spaceId,
-      score: Number(entry.score.toFixed(3)),
-    })),
+    candidates: mappedCandidates,
   };
+
+  if (includeStageTimings) {
+    result.stageTimings = stageTimings;
+  }
+
+  return result;
 }

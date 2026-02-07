@@ -10,6 +10,15 @@ function toBoundedInt(value: unknown, defaultValue: number, min: number, max: nu
   return Math.min(max, Math.max(min, Math.floor(numeric)));
 }
 
+function isDebugTimingsEnabled(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1';
+  }
+  return false;
+}
+
 export const searchSchema = z.object({
   query: z.string().describe('Search query. Supports OR patterns like "meeting|standup"'),
   types: z
@@ -64,6 +73,12 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
   }
 
   const limit = toBoundedInt(params.limit, 20, 1, 200);
+  const includeStageTimings = isDebugTimingsEnabled(
+    (params as { debugTimings?: unknown }).debugTimings
+  );
+  const stageTimings: Record<string, number> = {};
+
+  const searchStart = Date.now();
   const results = await store.searchNotes(query, {
     types: params.types as NoteType[] | undefined,
     folder: params.folders?.[0], // Currently only supports single folder
@@ -77,30 +92,45 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
     createdAfter: params.createdAfter,
     createdBefore: params.createdBefore,
   });
+  if (includeStageTimings) {
+    stageTimings.searchStoreMs = Date.now() - searchStart;
+  }
 
-  return {
+  const mapStart = Date.now();
+  const mappedResults = results.map((result) => ({
+    note: {
+      id: result.note.id, // Important: Use this ID with noteplan_get_note for space notes
+      title: result.note.title,
+      filename: result.note.filename,
+      type: result.note.type,
+      source: result.note.source,
+      folder: result.note.folder,
+      spaceId: result.note.spaceId,
+      // Include date metadata in output
+      modifiedAt: result.note.modifiedAt?.toISOString(),
+      createdAt: result.note.createdAt?.toISOString(),
+    },
+    score: result.score,
+    matchCount: result.matches.length,
+    preview: result.matches.slice(0, 3).map((m) => ({
+      line: m.lineNumber,
+      content: m.lineContent.substring(0, 100) + (m.lineContent.length > 100 ? '...' : ''),
+    })),
+  }));
+  if (includeStageTimings) {
+    stageTimings.mapResultMs = Date.now() - mapStart;
+  }
+
+  const response: Record<string, unknown> = {
     success: true,
     query,
     count: results.length,
-    results: results.map((result) => ({
-      note: {
-        id: result.note.id, // Important: Use this ID with noteplan_get_note for space notes
-        title: result.note.title,
-        filename: result.note.filename,
-        type: result.note.type,
-        source: result.note.source,
-        folder: result.note.folder,
-        spaceId: result.note.spaceId,
-        // Include date metadata in output
-        modifiedAt: result.note.modifiedAt?.toISOString(),
-        createdAt: result.note.createdAt?.toISOString(),
-      },
-      score: result.score,
-      matchCount: result.matches.length,
-      preview: result.matches.slice(0, 3).map((m) => ({
-        line: m.lineNumber,
-        content: m.lineContent.substring(0, 100) + (m.lineContent.length > 100 ? '...' : ''),
-      })),
-    })),
+    results: mappedResults,
   };
+
+  if (includeStageTimings) {
+    response.stageTimings = stageTimings;
+  }
+
+  return response;
 }
