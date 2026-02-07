@@ -31,6 +31,80 @@ function toOptionalBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+const PROGRESSIVE_READ_HINT =
+  'Use startLine/endLine and cursor pagination for progressive note reads.';
+const NEXT_CURSOR_HINT = 'Continue with nextCursor to fetch the next content page.';
+
+type LineWindowOptions = {
+  startLine?: unknown;
+  endLine?: unknown;
+  limit?: unknown;
+  offset?: unknown;
+  cursor?: unknown;
+  defaultLimit: number;
+  maxLimit: number;
+};
+
+type LineWindow = {
+  lineCount: number;
+  rangeStartLine: number;
+  rangeEndLine: number;
+  rangeLineCount: number;
+  returnedLineCount: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  content: string;
+  lines: Array<{
+    line: number;
+    lineIndex: number;
+    content: string;
+  }>;
+};
+
+function buildLineWindow(allLines: string[], options: LineWindowOptions): LineWindow {
+  const totalLineCount = allLines.length;
+  const requestedStartLine = toBoundedInt(
+    options.startLine,
+    1,
+    1,
+    Math.max(1, totalLineCount)
+  );
+  const requestedEndLine = toBoundedInt(
+    options.endLine,
+    totalLineCount,
+    requestedStartLine,
+    Math.max(requestedStartLine, totalLineCount)
+  );
+  const rangeStartIndex = requestedStartLine - 1;
+  const rangeEndIndexExclusive = requestedEndLine;
+  const rangeLines = allLines.slice(rangeStartIndex, rangeEndIndexExclusive);
+  const offset = toBoundedInt(options.cursor ?? options.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(options.limit, options.defaultLimit, 1, options.maxLimit);
+  const page = rangeLines.slice(offset, offset + limit);
+  const hasMore = offset + page.length < rangeLines.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
+
+  return {
+    lineCount: totalLineCount,
+    rangeStartLine: requestedStartLine,
+    rangeEndLine: requestedEndLine,
+    rangeLineCount: rangeLines.length,
+    returnedLineCount: page.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    content: page.join('\n'),
+    lines: page.map((content, index) => ({
+      line: requestedStartLine + offset + index,
+      lineIndex: rangeStartIndex + offset + index,
+      content,
+    })),
+  };
+}
+
 // Schema definitions
 export const getNoteSchema = z.object({
   id: z.string().optional().describe('Note ID (use this for space notes - get it from search results)'),
@@ -44,7 +118,7 @@ export const getNoteSchema = z.object({
     .describe('Include note body content and line payload (default: false, metadata/preview only)'),
   startLine: z.number().min(1).optional().describe('First line to include when includeContent=true (1-indexed)'),
   endLine: z.number().min(1).optional().describe('Last line to include when includeContent=true (1-indexed)'),
-  limit: z.number().min(1).max(2000).optional().default(200).describe('Maximum lines to return when includeContent=true'),
+  limit: z.number().min(1).max(1000).optional().default(200).describe('Maximum lines to return when includeContent=true'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset within selected range'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
   previewChars: z
@@ -129,8 +203,8 @@ export function getNote(params: z.infer<typeof getNoteSchema>) {
     0,
     5000
   );
-  const lines = note.content.split('\n');
-  const lineCount = lines.length;
+  const allLines = note.content.split('\n');
+  const lineCount = allLines.length;
   const contentLength = note.content.length;
 
   const result: Record<string, unknown> = {
@@ -158,55 +232,33 @@ export function getNote(params: z.infer<typeof getNoteSchema>) {
     result.previewTruncated = preview.length < note.content.length;
     if ((result.previewTruncated as boolean) || lineCount > 200) {
       result.performanceHints = [
-        'Set includeContent=true and use startLine/endLine with cursor pagination for progressive reads.',
+        `Set includeContent=true. ${PROGRESSIVE_READ_HINT}`,
       ];
     }
     return result;
   }
 
-  const requestedStartLine = toBoundedInt(
-    (params as { startLine?: unknown }).startLine,
-    1,
-    1,
-    Math.max(1, lineCount)
-  );
-  const requestedEndLine = toBoundedInt(
-    (params as { endLine?: unknown }).endLine,
-    lineCount,
-    requestedStartLine,
-    Math.max(requestedStartLine, lineCount)
-  );
-  const rangeStartIndex = requestedStartLine - 1;
-  const rangeEndIndexExclusive = requestedEndLine;
-  const rangeLines = lines.slice(rangeStartIndex, rangeEndIndexExclusive);
-  const offset = toBoundedInt(
-    (params as { cursor?: unknown; offset?: unknown }).cursor ??
-      (params as { cursor?: unknown; offset?: unknown }).offset,
-    0,
-    0,
-    Number.MAX_SAFE_INTEGER
-  );
-  const limit = toBoundedInt((params as { limit?: unknown }).limit, 200, 1, 2000);
-  const page = rangeLines.slice(offset, offset + limit);
-  const hasMore = offset + page.length < rangeLines.length;
-  const nextCursor = hasMore ? String(offset + page.length) : null;
-
-  result.rangeStartLine = requestedStartLine;
-  result.rangeEndLine = requestedEndLine;
-  result.rangeLineCount = rangeLines.length;
-  result.returnedLineCount = page.length;
-  result.offset = offset;
-  result.limit = limit;
-  result.hasMore = hasMore;
-  result.nextCursor = nextCursor;
-  result.content = page.join('\n');
-  result.lines = page.map((content, index) => ({
-    line: requestedStartLine + offset + index,
-    lineIndex: rangeStartIndex + offset + index,
-    content,
-  }));
-  if (hasMore) {
-    result.performanceHints = ['Continue with nextCursor to fetch the next content page.'];
+  const lineWindow = buildLineWindow(allLines, {
+    startLine: (params as { startLine?: unknown }).startLine,
+    endLine: (params as { endLine?: unknown }).endLine,
+    limit: (params as { limit?: unknown }).limit,
+    offset: (params as { offset?: unknown }).offset,
+    cursor: (params as { cursor?: unknown }).cursor,
+    defaultLimit: 200,
+    maxLimit: 1000,
+  });
+  result.rangeStartLine = lineWindow.rangeStartLine;
+  result.rangeEndLine = lineWindow.rangeEndLine;
+  result.rangeLineCount = lineWindow.rangeLineCount;
+  result.returnedLineCount = lineWindow.returnedLineCount;
+  result.offset = lineWindow.offset;
+  result.limit = lineWindow.limit;
+  result.hasMore = lineWindow.hasMore;
+  result.nextCursor = lineWindow.nextCursor;
+  result.content = lineWindow.content;
+  result.lines = lineWindow.lines;
+  if (lineWindow.hasMore) {
+    result.performanceHints = [NEXT_CURSOR_HINT];
   }
 
   return result;
@@ -508,23 +560,16 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
     };
   }
 
-  const lines = note.content.split('\n');
-  const totalLineCount = lines.length;
-  const requestedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, totalLineCount));
-  const requestedEndLine = toBoundedInt(
-    params.endLine,
-    totalLineCount,
-    requestedStartLine,
-    Math.max(requestedStartLine, totalLineCount)
-  );
-  const rangeStartIndex = requestedStartLine - 1;
-  const rangeEndIndexExclusive = requestedEndLine;
-  const rangeLines = lines.slice(rangeStartIndex, rangeEndIndexExclusive);
-  const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-  const limit = toBoundedInt(params.limit, 200, 1, 1000);
-  const page = rangeLines.slice(offset, offset + limit);
-  const hasMore = offset + page.length < rangeLines.length;
-  const nextCursor = hasMore ? String(offset + page.length) : null;
+  const allLines = note.content.split('\n');
+  const lineWindow = buildLineWindow(allLines, {
+    startLine: params.startLine,
+    endLine: params.endLine,
+    limit: params.limit,
+    offset: params.offset,
+    cursor: params.cursor,
+    defaultLimit: 200,
+    maxLimit: 1000,
+  });
 
   const result: Record<string, unknown> = {
     success: true,
@@ -532,26 +577,29 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
       title: note.title,
       filename: note.filename,
     },
-    lineCount: totalLineCount,
-    rangeStartLine: requestedStartLine,
-    rangeEndLine: requestedEndLine,
-    rangeLineCount: rangeLines.length,
-    returnedLineCount: page.length,
-    offset,
-    limit,
-    hasMore,
-    nextCursor,
-    lines: page.map((content, index) => ({
-      line: requestedStartLine + offset + index, // 1-indexed for user clarity
-      lineIndex: rangeStartIndex + offset + index, // 0-indexed for API calls
-      content,
-    })),
+    lineCount: lineWindow.lineCount,
+    rangeStartLine: lineWindow.rangeStartLine,
+    rangeEndLine: lineWindow.rangeEndLine,
+    rangeLineCount: lineWindow.rangeLineCount,
+    returnedLineCount: lineWindow.returnedLineCount,
+    offset: lineWindow.offset,
+    limit: lineWindow.limit,
+    hasMore: lineWindow.hasMore,
+    nextCursor: lineWindow.nextCursor,
+    content: lineWindow.content,
+    lines: lineWindow.lines,
   };
 
-  if (totalLineCount > 500 && !params.startLine && !params.endLine && !params.cursor && !params.offset) {
-    result.performanceHints = [
-      'Use startLine/endLine or pagination cursor to fetch note content progressively.',
-    ];
+  if (lineWindow.hasMore) {
+    result.performanceHints = [NEXT_CURSOR_HINT];
+  } else if (
+    lineWindow.lineCount > 500 &&
+    !params.startLine &&
+    !params.endLine &&
+    !params.cursor &&
+    !params.offset
+  ) {
+    result.performanceHints = [PROGRESSIVE_READ_HINT];
   }
 
   return result;

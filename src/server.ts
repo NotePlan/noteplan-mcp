@@ -114,6 +114,7 @@ const PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   limit: { type: 'number' },
   hasMore: { type: 'boolean' },
   nextCursor: { type: ['string', 'null'] },
+  content: { type: 'string' },
   lines: { type: 'array', items: { type: 'object' } },
 });
 const SEARCH_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
@@ -743,7 +744,7 @@ export function createServer(): Server {
               },
               limit: {
                 type: 'number',
-                description: 'Maximum lines to return when includeContent=true (default: 200, max: 2000)',
+                description: 'Maximum lines to return when includeContent=true (default: 200, max: 1000)',
               },
               offset: {
                 type: 'number',
