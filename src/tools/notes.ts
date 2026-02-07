@@ -42,7 +42,13 @@ export const createNoteSchema = z.object({
 
 export const updateNoteSchema = z.object({
   filename: z.string().describe('Filename/path of the note to update'),
-  content: z.string().describe('New content for the note. Include YAML frontmatter between --- delimiters at the start if the note has or should have properties'),
+  content: z
+    .string()
+    .describe('New content for the note. Include YAML frontmatter between --- delimiters at the start if the note has or should have properties'),
+  allowEmptyContent: z
+    .boolean()
+    .optional()
+    .describe('Allow replacing note content with empty/blank text (default: false)'),
 });
 
 export const deleteNoteSchema = z.object({
@@ -157,6 +163,14 @@ export function createNote(params: z.infer<typeof createNoteSchema>) {
 
 export function updateNote(params: z.infer<typeof updateNoteSchema>) {
   try {
+    if (params.allowEmptyContent !== true && params.content.trim().length === 0) {
+      return {
+        success: false,
+        error:
+          'Empty content is blocked for noteplan_update_note. Use allowEmptyContent=true to override intentionally.',
+      };
+    }
+
     const note = store.updateNote(params.filename, params.content);
 
     return {
@@ -261,6 +275,10 @@ export const editLineSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
   line: z.number().describe('Line number to edit (1-indexed)'),
   content: z.string().describe('New content for the line'),
+  allowEmptyContent: z
+    .boolean()
+    .optional()
+    .describe('Allow replacing line content with empty/blank text (default: false)'),
 });
 
 // Granular note operation implementations
@@ -382,6 +400,14 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
 
 export function editLine(params: z.infer<typeof editLineSchema>) {
   try {
+    if (params.allowEmptyContent !== true && params.content.trim().length === 0) {
+      return {
+        success: false,
+        error:
+          'Empty line content is blocked for noteplan_edit_line. Use noteplan_delete_lines or set allowEmptyContent=true.',
+      };
+    }
+
     const note = store.getNote({ filename: params.filename });
     if (!note) {
       return { success: false, error: 'Note not found' };

@@ -293,7 +293,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_update_note',
           description:
-            'Update a note. Include YAML frontmatter in content when you need to change note properties.',
+            'Replace all note content. Include YAML frontmatter in content when changing note properties. Empty content is blocked unless allowEmptyContent=true.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -304,6 +304,10 @@ export function createServer(): Server {
               content: {
                 type: 'string',
                 description: 'New content for the note. Include frontmatter between --- delimiters at the start if the note has or should have properties.',
+              },
+              allowEmptyContent: {
+                type: 'boolean',
+                description: 'Allow replacing note content with empty/blank text (default: false)',
               },
             },
             required: ['filename', 'content'],
@@ -537,6 +541,10 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
                 type: 'string',
                 description: 'New content for the line (include any markdown formatting)',
               },
+              allowEmptyContent: {
+                type: 'boolean',
+                description: 'Allow replacing line content with empty/blank text (default: false)',
+              },
             },
             required: ['filename', 'line', 'content'],
           },
@@ -692,6 +700,10 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
               content: {
                 type: 'string',
                 description: 'New task content',
+              },
+              allowEmptyContent: {
+                type: 'boolean',
+                description: 'Allow replacing task content with empty/blank text (default: false)',
               },
               status: {
                 type: 'string',

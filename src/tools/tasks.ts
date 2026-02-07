@@ -70,6 +70,10 @@ export const updateTaskSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
   lineIndex: z.number().describe('Line index of the task (0-based)'),
   content: z.string().optional().describe('New task content'),
+  allowEmptyContent: z
+    .boolean()
+    .optional()
+    .describe('Allow replacing task content with empty/blank text (default: false)'),
   status: z
     .enum(['open', 'done', 'cancelled', 'scheduled'])
     .optional()
@@ -192,6 +196,18 @@ export function completeTask(params: z.infer<typeof completeTaskSchema>) {
 
 export function updateTask(params: z.infer<typeof updateTaskSchema>) {
   try {
+    if (
+      params.content !== undefined &&
+      params.allowEmptyContent !== true &&
+      params.content.trim().length === 0
+    ) {
+      return {
+        success: false,
+        error:
+          'Empty task content is blocked for noteplan_update_task. Use noteplan_delete_lines or set allowEmptyContent=true.',
+      };
+    }
+
     const note = store.getNote({ filename: params.filename });
 
     if (!note) {
