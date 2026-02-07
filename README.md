@@ -60,6 +60,8 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 - `noteplan_list_tags` - List tags with filtering/pagination
 - `noteplan_list_folders` - List folders with pagination/filtering (default local depth: 1)
 - `noteplan_find_folders` - Find likely folder matches by query
+- `noteplan_resolve_folder` - Resolve one canonical folder path with confidence/ambiguity output
+- `noteplan_resolve_note` - Resolve one canonical note target with confidence/ambiguity output
 - `noteplan_search_tools` - Search tool catalog by keyword and return small ranked matches
 - `noteplan_get_tool_details` - Fetch full descriptions/input schemas on demand for selected tools (max 10 names/call)
 

@@ -1,6 +1,7 @@
 // Note CRUD operations
 
 import { z } from 'zod';
+import path from 'path';
 import * as store from '../noteplan/unified-store.js';
 import * as frontmatter from '../noteplan/frontmatter-parser.js';
 
@@ -30,6 +31,25 @@ export const listNotesSchema = z.object({
   limit: z.number().min(1).max(500).optional().default(50).describe('Maximum number of notes to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+});
+
+export const resolveNoteSchema = z.object({
+  query: z.string().describe('Note reference to resolve (ID, title, filename, or date token)'),
+  space: z.string().optional().describe('Restrict to a specific space ID'),
+  folder: z.string().optional().describe('Restrict to a folder path'),
+  types: z
+    .array(z.enum(['calendar', 'note', 'trash']))
+    .optional()
+    .describe('Restrict to note types'),
+  limit: z.number().min(1).max(20).optional().default(5).describe('Candidate matches to return'),
+  minScore: z.number().min(0).max(1).optional().default(0.88).describe('Minimum score for auto-resolution'),
+  ambiguityDelta: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .default(0.06)
+    .describe('If top scores are within this delta, treat as ambiguous'),
 });
 
 export const createNoteSchema = z.object({
@@ -123,6 +143,113 @@ export function listNotes(params?: z.infer<typeof listNotesSchema>) {
       folder: note.folder,
       spaceId: note.spaceId,
       modifiedAt: note.modifiedAt?.toISOString(),
+    })),
+  };
+}
+
+function normalizeDateToken(value?: string): string | null {
+  if (!value) return null;
+  const digits = value.replace(/\D/g, '');
+  return digits.length === 8 ? digits : null;
+}
+
+function noteMatchScore(
+  note: ReturnType<typeof store.listNotes>[number],
+  query: string,
+  queryDateToken: string | null
+): number {
+  const queryLower = query.toLowerCase();
+  const idLower = (note.id || '').toLowerCase();
+  const titleLower = (note.title || '').toLowerCase();
+  const filenameLower = (note.filename || '').toLowerCase();
+  const basenameLower = path.basename(filenameLower, path.extname(filenameLower));
+  const noteDateToken = normalizeDateToken(note.date);
+
+  if (idLower && idLower === queryLower) return 1.0;
+  if (filenameLower === queryLower) return 0.99;
+  if (basenameLower === queryLower) return 0.97;
+  if (titleLower === queryLower) return 0.96;
+  if (queryDateToken && noteDateToken && queryDateToken === noteDateToken) return 0.95;
+  if (titleLower.startsWith(queryLower)) return 0.9;
+  if (basenameLower.startsWith(queryLower)) return 0.88;
+  if (filenameLower.includes(`/${queryLower}`) || filenameLower.includes(queryLower)) return 0.83;
+  if (`${titleLower} ${filenameLower}`.includes(queryLower)) return 0.76;
+  return 0;
+}
+
+export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required',
+    };
+  }
+
+  const limit = toBoundedInt(params.limit, 5, 1, 20);
+  const minScore = Math.min(1, Math.max(0, Number(params.minScore ?? 0.88)));
+  const ambiguityDelta = Math.min(1, Math.max(0, Number(params.ambiguityDelta ?? 0.06)));
+  const queryDateToken = normalizeDateToken(query);
+  const allowedTypes = params.types ? new Set(params.types) : null;
+  const notes = store.listNotes({
+    folder: params.folder,
+    space: params.space,
+  });
+
+  const scored = notes
+    .filter((note) => !allowedTypes || allowedTypes.has(note.type))
+    .map((note) => ({
+      note,
+      score: noteMatchScore(note, query, queryDateToken),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => {
+      if (Math.abs(a.score - b.score) > 0.001) return b.score - a.score;
+      return a.note.filename.localeCompare(b.note.filename);
+    });
+
+  const candidates = scored.slice(0, limit);
+  const top = candidates[0];
+  const second = candidates[1];
+  const scoreDelta = top && second ? top.score - second.score : 1;
+  const confident = Boolean(top) && top.score >= minScore;
+  const ambiguous = Boolean(second) && scoreDelta < ambiguityDelta;
+  const resolved = confident && !ambiguous ? top.note : null;
+
+  return {
+    success: true,
+    query,
+    count: candidates.length,
+    resolved: resolved
+      ? {
+          id: resolved.id,
+          title: resolved.title,
+          filename: resolved.filename,
+          type: resolved.type,
+          source: resolved.source,
+          folder: resolved.folder,
+          spaceId: resolved.spaceId,
+          score: Number((top?.score ?? 0).toFixed(3)),
+        }
+      : null,
+    exactMatch: Boolean(top) && Number((top?.score ?? 0).toFixed(3)) >= 0.96,
+    ambiguous,
+    confidence: top ? Number(top.score.toFixed(3)) : 0,
+    confidenceDelta: Number(scoreDelta.toFixed(3)),
+    suggestedGetNoteArgs: resolved
+      ? resolved.source === 'space' && resolved.id
+        ? { id: resolved.id }
+        : { filename: resolved.filename }
+      : null,
+    candidates: candidates.map((entry) => ({
+      id: entry.note.id,
+      title: entry.note.title,
+      filename: entry.note.filename,
+      type: entry.note.type,
+      source: entry.note.source,
+      folder: entry.note.folder,
+      spaceId: entry.note.spaceId,
+      score: Number(entry.score.toFixed(3)),
     })),
   };
 }

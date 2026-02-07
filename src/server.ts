@@ -87,6 +87,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
   const readOnlyTools = new Set([
     'noteplan_get_note',
     'noteplan_list_notes',
+    'noteplan_resolve_note',
     'noteplan_get_paragraphs',
     'noteplan_search',
     'noteplan_get_tasks',
@@ -98,6 +99,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_list_tags',
     'noteplan_list_folders',
     'noteplan_find_folders',
+    'noteplan_resolve_folder',
     'noteplan_search_tools',
     'noteplan_get_tool_details',
     'calendar_get_events',
@@ -265,6 +267,46 @@ export function createServer(): Server {
                 description: 'Cursor token from previous page (preferred over offset)',
               },
             },
+          },
+        },
+        {
+          name: 'noteplan_resolve_note',
+          description:
+            'Resolve a note reference (ID/title/filename/date token) to a canonical note target with confidence and ambiguity details.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Note reference to resolve (ID, title, filename, or date token)',
+              },
+              space: {
+                type: 'string',
+                description: 'Restrict to a specific space ID',
+              },
+              folder: {
+                type: 'string',
+                description: 'Restrict to a folder path',
+              },
+              types: {
+                type: 'array',
+                items: { type: 'string', enum: ['calendar', 'note', 'trash'] },
+                description: 'Restrict to note types',
+              },
+              limit: {
+                type: 'number',
+                description: 'Candidate matches to return (default: 5)',
+              },
+              minScore: {
+                type: 'number',
+                description: 'Minimum score for auto-resolution (default: 0.88)',
+              },
+              ambiguityDelta: {
+                type: 'number',
+                description: 'If top scores are within this delta, treat as ambiguous (default: 0.06)',
+              },
+            },
+            required: ['query'],
           },
         },
         {
@@ -1032,6 +1074,49 @@ This is SAFER than noteplan_update_note which replaces the entire note.`,
             required: ['query'],
           },
         },
+        {
+          name: 'noteplan_resolve_folder',
+          description:
+            'Resolve a folder query to one canonical folder path with confidence and ambiguity details.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Folder text to resolve, e.g. "projects" or "inbox"',
+              },
+              space: {
+                type: 'string',
+                description: 'Restrict to a specific space ID',
+              },
+              includeLocal: {
+                type: 'boolean',
+                description: 'Include local filesystem folders',
+              },
+              includeSpaces: {
+                type: 'boolean',
+                description: 'Include space folders',
+              },
+              maxDepth: {
+                type: 'number',
+                description: 'Max local folder depth (default: 2)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Candidate matches to return (default: 5)',
+              },
+              minScore: {
+                type: 'number',
+                description: 'Minimum score for auto-resolution (default: 0.88)',
+              },
+              ambiguityDelta: {
+                type: 'number',
+                description: 'If top scores are within this delta, treat as ambiguous (default: 0.06)',
+              },
+            },
+            required: ['query'],
+          },
+        },
 
         // macOS Calendar events
         {
@@ -1397,6 +1482,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_list_notes':
           result = noteTools.listNotes(args as any);
           break;
+        case 'noteplan_resolve_note':
+          result = noteTools.resolveNote(args as any);
+          break;
         case 'noteplan_create_note':
           result = noteTools.createNote(args as any);
           break;
@@ -1483,6 +1571,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         case 'noteplan_find_folders':
           result = spaceTools.findFolders(args as any);
+          break;
+        case 'noteplan_resolve_folder':
+          result = spaceTools.resolveFolder(args as any);
           break;
 
         // macOS Calendar events

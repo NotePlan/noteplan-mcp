@@ -74,6 +74,29 @@ export const findFoldersSchema = z.object({
   limit: z.number().min(1).max(100).optional().default(10).describe('Maximum matches to return'),
 });
 
+export const resolveFolderSchema = z.object({
+  query: z.string().describe('Folder text to resolve to one canonical folder path'),
+  space: z.string().optional().describe('Restrict to a specific space ID'),
+  includeLocal: z
+    .boolean()
+    .optional()
+    .describe('Include local filesystem folders (default: true when space is omitted)'),
+  includeSpaces: z
+    .boolean()
+    .optional()
+    .describe('Include space folders (default: true only when space is provided)'),
+  maxDepth: z.number().min(1).max(20).optional().describe('Max local folder depth (1 = top level, default: 2)'),
+  limit: z.number().min(1).max(20).optional().default(5).describe('Candidate matches to return'),
+  minScore: z.number().min(0).max(1).optional().default(0.88).describe('Minimum score for auto-resolution'),
+  ambiguityDelta: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .default(0.06)
+    .describe('If top scores are within this delta, treat as ambiguous'),
+});
+
 export function listSpaces(params?: z.infer<typeof listSpacesSchema>) {
   const input = params ?? ({} as z.infer<typeof listSpacesSchema>);
   const spaces = store.listSpaces();
@@ -214,6 +237,81 @@ export function findFolders(params: z.infer<typeof findFoldersSchema>) {
     maxDepth,
     count: scored.length,
     matches: scored.map((entry) => ({
+      path: entry.folder.path,
+      name: entry.folder.name,
+      source: entry.folder.source,
+      spaceId: entry.folder.spaceId,
+      score: Number(entry.score.toFixed(3)),
+    })),
+  };
+}
+
+export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required',
+    };
+  }
+
+  const limit = toBoundedInt(params.limit, 5, 1, 20);
+  const maxDepth = toOptionalBoundedInt(params.maxDepth, 1, 20) ?? 2;
+  const minScore = Math.min(1, Math.max(0, Number(params.minScore ?? 0.88)));
+  const ambiguityDelta = Math.min(1, Math.max(0, Number(params.ambiguityDelta ?? 0.06)));
+  const folders = store.listFolders({
+    space: params.space,
+    includeLocal: toOptionalBoolean(params.includeLocal),
+    includeSpaces: toOptionalBoolean(params.includeSpaces),
+    query,
+    maxDepth,
+  });
+
+  const scored = folders
+    .map((folder) => ({
+      folder,
+      score: folderMatchScore(folder.path, folder.name, query),
+      depth: folder.path.split('/').length,
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => {
+      if (Math.abs(a.score - b.score) > 0.001) return b.score - a.score;
+      return a.depth - b.depth;
+    });
+
+  const candidates = scored.slice(0, limit);
+  const top = candidates[0];
+  const second = candidates[1];
+  const queryLower = query.toLowerCase();
+  const exactMatch =
+    top
+      ? top.folder.name.toLowerCase() === queryLower || top.folder.path.toLowerCase() === queryLower
+      : false;
+  const scoreDelta = top && second ? top.score - second.score : 1;
+  const confident = Boolean(top) && (exactMatch || top.score >= minScore);
+  const ambiguous = Boolean(second) && scoreDelta < ambiguityDelta;
+  const resolved = confident && !ambiguous ? top : undefined;
+
+  return {
+    success: true,
+    query,
+    maxDepth,
+    count: candidates.length,
+    resolved: resolved
+      ? {
+          path: resolved.folder.path,
+          name: resolved.folder.name,
+          source: resolved.folder.source,
+          spaceId: resolved.folder.spaceId,
+          score: Number(resolved.score.toFixed(3)),
+        }
+      : null,
+    exactMatch,
+    ambiguous,
+    confidence: top ? Number(top.score.toFixed(3)) : 0,
+    confidenceDelta: Number(scoreDelta.toFixed(3)),
+    suggestedToolArgs: resolved ? { folder: resolved.folder.path } : null,
+    candidates: candidates.map((entry) => ({
       path: entry.folder.path,
       name: entry.folder.name,
       source: entry.folder.source,
