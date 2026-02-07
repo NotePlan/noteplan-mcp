@@ -92,8 +92,9 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
     createdAfter: params.createdAfter,
     createdBefore: params.createdBefore,
   });
+  const searchStoreMs = Date.now() - searchStart;
   if (includeStageTimings) {
-    stageTimings.searchStoreMs = Date.now() - searchStart;
+    stageTimings.searchStoreMs = searchStoreMs;
   }
 
   const mapStart = Date.now();
@@ -117,8 +118,9 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
       content: m.lineContent.substring(0, 100) + (m.lineContent.length > 100 ? '...' : ''),
     })),
   }));
+  const mapResultMs = Date.now() - mapStart;
   if (includeStageTimings) {
-    stageTimings.mapResultMs = Date.now() - mapStart;
+    stageTimings.mapResultMs = mapResultMs;
   }
 
   const response: Record<string, unknown> = {
@@ -127,6 +129,28 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
     count: results.length,
     results: mappedResults,
   };
+
+  const performanceHints: string[] = [];
+  if (searchStoreMs > 2000) {
+    if (!params.space) {
+      performanceHints.push('Set space to constrain search to one workspace.');
+    }
+    if (!params.folders || params.folders.length === 0) {
+      performanceHints.push('Set folders to narrow full-text search scope.');
+    }
+    if (params.fuzzy) {
+      performanceHints.push('Disable fuzzy matching when exact search is acceptable.');
+    }
+    if ((params.contextLines ?? 0) > 0) {
+      performanceHints.push('Set contextLines=0 for faster broad searches.');
+    }
+  }
+  if (results.length === limit) {
+    performanceHints.push('Increase precision or add filters to reduce ties at the result limit.');
+  }
+  if (performanceHints.length > 0) {
+    response.performanceHints = performanceHints;
+  }
 
   if (includeStageTimings) {
     response.stageTimings = stageTimings;

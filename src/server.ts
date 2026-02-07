@@ -43,6 +43,10 @@ function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Recor
         type: 'object',
         additionalProperties: { type: 'number' },
       },
+      performanceHints: {
+        type: 'array',
+        items: { type: 'string' },
+      },
       ...properties,
       error: { type: 'string' },
       code: { type: 'string' },

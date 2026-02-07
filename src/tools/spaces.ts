@@ -176,8 +176,9 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     query: typeof input.query === 'string' ? input.query : undefined,
     maxDepth,
   });
+  const listFoldersMs = Date.now() - listStart;
   if (includeStageTimings) {
-    stageTimings.listFoldersMs = Date.now() - listStart;
+    stageTimings.listFoldersMs = listFoldersMs;
   }
 
   const paginateStart = Date.now();
@@ -186,8 +187,9 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
   const page = folders.slice(offset, offset + limit);
   const hasMore = offset + page.length < folders.length;
   const nextCursor = hasMore ? String(offset + page.length) : null;
+  const paginateMs = Date.now() - paginateStart;
   if (includeStageTimings) {
-    stageTimings.paginateMs = Date.now() - paginateStart;
+    stageTimings.paginateMs = paginateMs;
   }
 
   const mapStart = Date.now();
@@ -197,8 +199,9 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     source: f.source,
     spaceId: f.spaceId,
   }));
+  const mapResultMs = Date.now() - mapStart;
   if (includeStageTimings) {
-    stageTimings.mapResultMs = Date.now() - mapStart;
+    stageTimings.mapResultMs = mapResultMs;
   }
 
   const result: Record<string, unknown> = {
@@ -212,6 +215,25 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     nextCursor,
     folders: mappedFolders,
   };
+
+  const performanceHints: string[] = [];
+  if (listFoldersMs > 1200) {
+    if (!input.query) {
+      performanceHints.push('Set query to narrow folder results before listing full trees.');
+    }
+    if (!input.space) {
+      performanceHints.push('Set space to scope folder listing to one workspace.');
+    }
+    if (maxDepth > 1) {
+      performanceHints.push('Lower maxDepth (for example 1) to reduce local folder traversal.');
+    }
+  }
+  if (hasMore && limit > 100) {
+    performanceHints.push('Use a smaller limit (for example 25-50) and paginate with nextCursor.');
+  }
+  if (performanceHints.length > 0) {
+    result.performanceHints = performanceHints;
+  }
 
   if (includeStageTimings) {
     result.stageTimings = stageTimings;
@@ -307,8 +329,9 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
     query,
     maxDepth,
   });
+  const listFoldersMs = Date.now() - listStart;
   if (includeStageTimings) {
-    stageTimings.listFoldersMs = Date.now() - listStart;
+    stageTimings.listFoldersMs = listFoldersMs;
   }
 
   const scoreStart = Date.now();
@@ -323,8 +346,9 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
       if (Math.abs(a.score - b.score) > 0.001) return b.score - a.score;
       return a.depth - b.depth;
     });
+  const scoreAndSortMs = Date.now() - scoreStart;
   if (includeStageTimings) {
-    stageTimings.scoreAndSortMs = Date.now() - scoreStart;
+    stageTimings.scoreAndSortMs = scoreAndSortMs;
   }
 
   const resolveStart = Date.now();
@@ -347,8 +371,9 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
     spaceId: entry.folder.spaceId,
     score: Number(entry.score.toFixed(3)),
   }));
+  const resolveResultMs = Date.now() - resolveStart;
   if (includeStageTimings) {
-    stageTimings.resolveResultMs = Date.now() - resolveStart;
+    stageTimings.resolveResultMs = resolveResultMs;
   }
 
   const result: Record<string, unknown> = {
@@ -372,6 +397,25 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
     suggestedToolArgs: resolved ? { folder: resolved.folder.path } : null,
     candidates: mappedCandidates,
   };
+
+  const performanceHints: string[] = [];
+  if (listFoldersMs > 1200) {
+    if (!params.space) {
+      performanceHints.push('Set space to narrow folder resolution to one workspace.');
+    }
+    if (params.includeLocal === false && params.includeSpaces === false) {
+      performanceHints.push('Enable includeLocal or includeSpaces to avoid empty scans.');
+    }
+    if (maxDepth > 1) {
+      performanceHints.push('Lower maxDepth (for example 1) for faster resolution.');
+    }
+  }
+  if (candidates.length === 0) {
+    performanceHints.push('Try noteplan_find_folders first to inspect likely folder matches.');
+  }
+  if (performanceHints.length > 0) {
+    result.performanceHints = performanceHints;
+  }
 
   if (includeStageTimings) {
     result.stageTimings = stageTimings;

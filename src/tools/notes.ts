@@ -210,8 +210,9 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
     folder: params.folder,
     space: params.space,
   });
+  const listNotesMs = Date.now() - listStart;
   if (includeStageTimings) {
-    stageTimings.listNotesMs = Date.now() - listStart;
+    stageTimings.listNotesMs = listNotesMs;
   }
 
   const scoreStart = Date.now();
@@ -226,8 +227,9 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
       if (Math.abs(a.score - b.score) > 0.001) return b.score - a.score;
       return a.note.filename.localeCompare(b.note.filename);
     });
+  const scoreAndSortMs = Date.now() - scoreStart;
   if (includeStageTimings) {
-    stageTimings.scoreAndSortMs = Date.now() - scoreStart;
+    stageTimings.scoreAndSortMs = scoreAndSortMs;
   }
 
   const resolveStart = Date.now();
@@ -248,8 +250,9 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
     spaceId: entry.note.spaceId,
     score: Number(entry.score.toFixed(3)),
   }));
+  const resolveResultMs = Date.now() - resolveStart;
   if (includeStageTimings) {
-    stageTimings.resolveResultMs = Date.now() - resolveStart;
+    stageTimings.resolveResultMs = resolveResultMs;
   }
 
   const result: Record<string, unknown> = {
@@ -279,6 +282,25 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
       : null,
     candidates: mappedCandidates,
   };
+
+  const performanceHints: string[] = [];
+  if (listNotesMs > 1200) {
+    if (!params.space) {
+      performanceHints.push('Set space to scope note resolution to one workspace.');
+    }
+    if (!params.folder) {
+      performanceHints.push('Set folder to reduce note candidate scans.');
+    }
+    if (!params.types || params.types.length !== 1) {
+      performanceHints.push('Set one note type when possible (calendar, note, or trash).');
+    }
+  }
+  if (candidates.length === 0) {
+    performanceHints.push('Try noteplan_search with a broader query to discover canonical note IDs first.');
+  }
+  if (performanceHints.length > 0) {
+    result.performanceHints = performanceHints;
+  }
 
   if (includeStageTimings) {
     result.stageTimings = stageTimings;

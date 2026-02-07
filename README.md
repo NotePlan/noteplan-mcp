@@ -13,6 +13,7 @@ An MCP (Model Context Protocol) server that exposes NotePlan's note and task man
 - **Structured Errors**: Tool failures include machine-readable `code` plus `hint`/`suggestedTool`
 - **Fast Repeated Lookups**: Short-lived in-memory caching for expensive list/resolve paths
 - **Opt-in Timing Telemetry**: `debugTimings=true` adds `durationMs`; heavy discovery tools also add `stageTimings`
+- **Adaptive Performance Hints**: Slow discovery/search responses include `performanceHints` with narrowing suggestions
 
 ## Installation
 
