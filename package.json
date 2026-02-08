@@ -8,6 +8,7 @@
     "build": "npm run build:swift && tsc",
     "build:swift": "swiftc -o scripts/calendar-helper scripts/calendar-helper.swift && swiftc -o scripts/reminders-helper scripts/reminders-helper.swift",
     "build:ts": "tsc",
+    "smoke:workflow": "node scripts/workflow-smoke.mjs",
     "start": "node dist/index.js",
     "dev": "tsc --watch"
   },

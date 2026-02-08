@@ -87,6 +87,10 @@ export const updateEventSchema = z.object({
 
 export const deleteEventSchema = z.object({
   eventId: z.string().describe('Event ID to delete'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview deletion impact without deleting the event (default: false)'),
 });
 
 export const listCalendarsSchema = z.object({});
@@ -264,6 +268,15 @@ export function updateEvent(params: z.infer<typeof updateEventSchema>) {
  */
 export function deleteEvent(params: z.infer<typeof deleteEventSchema>) {
   try {
+    if (params.dryRun === true) {
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: event ${params.eventId} would be deleted`,
+        eventId: params.eventId,
+      };
+    }
+
     const result = runSwiftHelper(['delete-event', params.eventId]);
 
     if (result?.error) {

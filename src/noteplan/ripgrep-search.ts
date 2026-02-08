@@ -19,6 +19,12 @@ export interface RipgrepOptions {
   paths?: string[];
 }
 
+export interface RipgrepSearchResponse {
+  matches: RipgrepMatch[];
+  partialResults: boolean;
+  warning?: string;
+}
+
 /**
  * Search files using ripgrep for fast regex-enabled search
  * Uses spawn() with array arguments to avoid shell injection
@@ -26,7 +32,7 @@ export interface RipgrepOptions {
 export async function searchWithRipgrep(
   pattern: string,
   options: RipgrepOptions = {}
-): Promise<RipgrepMatch[]> {
+): Promise<RipgrepSearchResponse> {
   const {
     caseSensitive = false,
     wordBoundary = false,
@@ -72,8 +78,21 @@ export async function searchWithRipgrep(
     rg.on('close', (code) => {
       // Exit codes: 0 = matches found, 1 = no matches, 2+ = error
       if (code === 0 || code === 1) {
-        resolve(parseRipgrepJson(stdout));
+        resolve({
+          matches: parseRipgrepJson(stdout),
+          partialResults: false,
+        });
       } else {
+        const interrupted = /interrupted system call/i.test(stderr);
+        const partialMatches = parseRipgrepJson(stdout);
+        if (interrupted && partialMatches.length > 0) {
+          resolve({
+            matches: partialMatches,
+            partialResults: true,
+            warning: 'ripgrep interrupted; returning partial local matches',
+          });
+          return;
+        }
         reject(new Error(`ripgrep error: ${stderr || `exit code ${code}`}`));
       }
     });

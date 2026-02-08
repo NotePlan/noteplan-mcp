@@ -21,6 +21,7 @@ An MCP (Model Context Protocol) server that exposes NotePlan's note and task man
 cd noteplan-mcp
 npm install
 npm run build
+npm run smoke:workflow
 ```
 
 ## Configuration
@@ -44,7 +45,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 - `noteplan_get_note` - Get note metadata by title/filename/date, with optional paged content retrieval
 - `noteplan_list_notes` - List notes with filtering/pagination
 - `noteplan_create_note` - Create a new note
-- `noteplan_update_note` - Replace full note content (prefer targeted paragraph/line tools when possible)
+- `noteplan_update_note` - Replace full note content (requires `fullReplace=true`; prefer targeted paragraph/line tools)
 - `noteplan_delete_note` - Delete a note
 
 ### Note Structure and Granular Edits
@@ -55,7 +56,8 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 - `noteplan_delete_lines` - Delete a line range
 
 ### Task Operations
-- `noteplan_get_tasks` - Get tasks from a note
+- `noteplan_get_tasks` - Get tasks from a note with filtering/pagination
+- `noteplan_search_tasks` - Find matching task lines in a note for targeted updates
 - `noteplan_add_task` - Add task to a note
 - `noteplan_complete_task` - Mark task as done
 - `noteplan_update_task` - Update task content/status
@@ -88,7 +90,9 @@ Prefer granular edits to avoid large context payloads and accidental full-note r
    - `noteplan_edit_line` for one-line changes
    - `noteplan_insert_content` for adding content at a position
    - `noteplan_delete_lines` for removals
-4. Use `noteplan_update_note` only when a full rewrite is intentional
+4. Use `noteplan_update_note` only when a full rewrite is intentional (`fullReplace=true`)
+
+For delete operations (`noteplan_delete_note`, `noteplan_delete_lines`, `calendar_delete_event`, `reminders_delete`), use `dryRun=true` first when safety matters.
 
 ## Data Locations
 

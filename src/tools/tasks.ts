@@ -11,6 +11,16 @@ import {
 } from '../noteplan/markdown-parser.js';
 import { TaskStatus } from '../noteplan/types.js';
 
+function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return defaultValue;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Check if a string looks like a date target (not a filename)
  * Matches: today, tomorrow, yesterday, YYYYMMDD, YYYY-MM-DD
@@ -42,6 +52,28 @@ export const getTasksSchema = z.object({
     .enum(['open', 'done', 'cancelled', 'scheduled'])
     .optional()
     .describe('Filter by task status'),
+  query: z.string().optional().describe('Filter tasks by content substring'),
+  limit: z.number().min(1).max(500).optional().default(100).describe('Maximum tasks to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+});
+
+export const searchTasksSchema = z.object({
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  title: z.string().optional().describe('Note title to search for'),
+  filename: z.string().optional().describe('Direct filename/path to the note'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  space: z.string().optional().describe('Space ID to search in'),
+  query: z.string().describe('Task query text'),
+  caseSensitive: z.boolean().optional().default(false).describe('Case-sensitive task text search'),
+  wholeWord: z.boolean().optional().default(false).describe('Whole-word task text match'),
+  status: z
+    .enum(['open', 'done', 'cancelled', 'scheduled'])
+    .optional()
+    .describe('Filter by task status before query match'),
+  limit: z.number().min(1).max(200).optional().default(20).describe('Maximum matches to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
 export const addTaskSchema = z.object({
@@ -95,15 +127,30 @@ export function getTasks(params: z.infer<typeof getTasksSchema>) {
   if (params.status) {
     tasks = filterTasksByStatus(tasks, params.status as TaskStatus);
   }
+  const query = typeof params.query === 'string' ? params.query.trim().toLowerCase() : '';
+  if (query) {
+    tasks = tasks.filter((task) => task.content.toLowerCase().includes(query));
+  }
 
-  return {
+  const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(params.limit, 100, 1, 500);
+  const page = tasks.slice(offset, offset + limit);
+  const hasMore = offset + page.length < tasks.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
+
+  const result: Record<string, unknown> = {
     success: true,
     note: {
       title: note.title,
       filename: note.filename,
     },
-    taskCount: tasks.length,
-    tasks: tasks.map((task) => ({
+    taskCount: page.length,
+    totalCount: tasks.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    tasks: page.map((task) => ({
       lineIndex: task.lineIndex,
       content: task.content,
       status: task.status,
@@ -114,6 +161,105 @@ export function getTasks(params: z.infer<typeof getTasksSchema>) {
       indentLevel: task.indentLevel,
     })),
   };
+
+  if (hasMore) {
+    result.performanceHints = ['Continue with nextCursor to fetch the next task page.'];
+  }
+
+  return result;
+}
+
+export function searchTasks(params: z.infer<typeof searchTasksSchema>) {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required',
+    };
+  }
+  if (!params.id && !params.title && !params.filename && !params.date) {
+    return {
+      success: false,
+      error: 'Provide one note reference: id, title, filename, or date',
+    };
+  }
+
+  const note = store.getNote({
+    id: params.id,
+    title: params.title,
+    filename: params.filename,
+    date: params.date,
+    space: params.space,
+  });
+  if (!note) {
+    return {
+      success: false,
+      error: 'Note not found',
+    };
+  }
+
+  let tasks = parseTasks(note.content);
+  if (params.status) {
+    tasks = filterTasksByStatus(tasks, params.status as TaskStatus);
+  }
+
+  const caseSensitive = params.caseSensitive ?? false;
+  const wholeWord = params.wholeWord ?? false;
+  const normalizedQuery = caseSensitive ? query : query.toLowerCase();
+  const matcher = wholeWord
+    ? new RegExp(`\\b${escapeRegExp(query)}\\b`, caseSensitive ? '' : 'i')
+    : null;
+
+  const matches = tasks
+    .filter((task) => {
+      const haystack = caseSensitive ? task.content : task.content.toLowerCase();
+      return matcher ? matcher.test(task.content) : haystack.includes(normalizedQuery);
+    })
+    .map((task) => ({
+      lineIndex: task.lineIndex,
+      line: task.lineIndex + 1,
+      content: task.content,
+      status: task.status,
+      tags: task.tags,
+      mentions: task.mentions,
+      scheduledDate: task.scheduledDate,
+      priority: task.priority,
+      indentLevel: task.indentLevel,
+    }));
+
+  const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(params.limit, 20, 1, 200);
+  const page = matches.slice(offset, offset + limit);
+  const hasMore = offset + page.length < matches.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
+
+  const result: Record<string, unknown> = {
+    success: true,
+    query,
+    count: page.length,
+    totalCount: matches.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    note: {
+      id: note.id,
+      title: note.title,
+      filename: note.filename,
+      type: note.type,
+      source: note.source,
+      folder: note.folder,
+      spaceId: note.spaceId,
+      date: note.date,
+    },
+    matches: page,
+  };
+
+  if (hasMore) {
+    result.performanceHints = ['Continue with nextCursor to fetch the next task match page.'];
+  }
+
+  return result;
 }
 
 export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {

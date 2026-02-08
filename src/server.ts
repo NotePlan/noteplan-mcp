@@ -47,6 +47,10 @@ function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Recor
         type: 'array',
         items: { type: 'string' },
       },
+      suggestedNextTools: {
+        type: 'array',
+        items: { type: 'string' },
+      },
       ...properties,
       error: { type: 'string' },
       code: { type: 'string' },
@@ -134,12 +138,31 @@ const SEARCH_PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
 const SEARCH_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
   query: { type: 'string' },
   count: { type: 'number' },
+  partialResults: { type: 'boolean' },
+  searchBackend: { type: 'string' },
+  warnings: { type: 'array', items: { type: 'string' } },
   results: { type: 'array', items: { type: 'object' } },
 });
 const TASKS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   note: { type: 'object' },
   taskCount: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
   tasks: { type: 'array', items: { type: 'object' } },
+});
+const SEARCH_TASKS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  note: { type: 'object' },
+  matches: { type: 'array', items: { type: 'object' } },
 });
 const RANGE_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
   period: { type: 'string' },
@@ -276,6 +299,8 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
       return SEARCH_NOTES_OUTPUT_SCHEMA;
     case 'noteplan_get_tasks':
       return TASKS_OUTPUT_SCHEMA;
+    case 'noteplan_search_tasks':
+      return SEARCH_TASKS_OUTPUT_SCHEMA;
     case 'noteplan_add_task':
     case 'noteplan_complete_task':
     case 'noteplan_update_task':
@@ -405,6 +430,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_search_paragraphs',
     'noteplan_search',
     'noteplan_get_tasks',
+    'noteplan_search_tasks',
     'noteplan_get_calendar_note',
     'noteplan_get_periodic_note',
     'noteplan_get_notes_in_range',
@@ -525,6 +551,9 @@ function getToolSearchAliases(toolName: string): string[] {
   if (toolName.includes('search_paragraphs')) {
     aliases.push('search paragraph', 'find paragraph', 'find matching lines', 'paragraph lookup');
   }
+  if (toolName.includes('search_tasks')) {
+    aliases.push('search tasks', 'find task', 'task lookup', 'task line index');
+  }
   if (toolName.includes('get_note') || toolName.includes('list_notes') || toolName.includes('create_note') || toolName.includes('update_note')) {
     aliases.push('notes', 'documents', 'markdown');
   }
@@ -642,6 +671,14 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
     };
   }
 
+  if (message.includes('full note replacement is blocked')) {
+    return {
+      code: 'ERR_FULL_REPLACE_CONFIRMATION_REQUIRED',
+      hint: 'Set fullReplace=true only for intentional whole-note rewrites; otherwise use granular edit tools.',
+      suggestedTool: 'noteplan_search_paragraphs',
+    };
+  }
+
   if (message.includes('line') && (message.includes('does not exist') || message.includes('invalid line index'))) {
     return {
       code: 'ERR_INVALID_LINE_REFERENCE',
@@ -699,6 +736,48 @@ function enrichErrorResult(result: unknown, toolName: string): unknown {
     hint: typeof typed.hint === 'string' ? typed.hint : meta.hint,
     suggestedTool: typeof typed.suggestedTool === 'string' ? typed.suggestedTool : meta.suggestedTool,
     retryable: typeof typed.retryable === 'boolean' ? typed.retryable : meta.retryable,
+  };
+}
+
+function withSuggestedNextTools(result: unknown, toolName: string): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const typed = result as Record<string, unknown>;
+  if (typed.success !== true) return result;
+  if (Array.isArray(typed.suggestedNextTools) && typed.suggestedNextTools.length > 0) return result;
+
+  let suggestedNextTools: string[] = [];
+  switch (toolName) {
+    case 'noteplan_resolve_note':
+      suggestedNextTools = ['noteplan_get_note', 'noteplan_search_paragraphs', 'noteplan_get_paragraphs'];
+      break;
+    case 'noteplan_get_note':
+      suggestedNextTools = ['noteplan_search_paragraphs', 'noteplan_get_paragraphs'];
+      break;
+    case 'noteplan_get_paragraphs':
+    case 'noteplan_search_paragraphs':
+      suggestedNextTools = ['noteplan_edit_line', 'noteplan_insert_content', 'noteplan_delete_lines'];
+      break;
+    case 'noteplan_get_tasks':
+    case 'noteplan_search_tasks':
+      suggestedNextTools = ['noteplan_update_task', 'noteplan_complete_task'];
+      break;
+    case 'noteplan_search':
+      suggestedNextTools = ['noteplan_get_note', 'noteplan_resolve_note'];
+      break;
+    case 'noteplan_search_tools':
+      suggestedNextTools = ['noteplan_get_tool_details'];
+      break;
+    case 'noteplan_resolve_folder':
+      suggestedNextTools = ['noteplan_create_note', 'noteplan_list_notes'];
+      break;
+    default:
+      suggestedNextTools = [];
+  }
+
+  if (suggestedNextTools.length === 0) return result;
+  return {
+    ...typed,
+    suggestedNextTools,
   };
 }
 
@@ -905,7 +984,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_update_note',
           description:
-            'Replace all note content. Use only when rewriting the full note is intentional. Prefer noteplan_search_paragraphs + noteplan_edit_line / noteplan_insert_content / noteplan_delete_lines for targeted updates. Empty content is blocked unless allowEmptyContent=true.',
+            'Replace all note content. Use only when rewriting the full note is intentional. Requires fullReplace=true safety confirmation. Prefer noteplan_search_paragraphs + noteplan_edit_line / noteplan_insert_content / noteplan_delete_lines for targeted updates. Empty content is blocked unless allowEmptyContent=true.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -917,12 +996,16 @@ export function createServer(): Server {
                 type: 'string',
                 description: 'New content for the note. Include frontmatter between --- delimiters at the start if the note has or should have properties.',
               },
+              fullReplace: {
+                type: 'boolean',
+                description: 'Required safety confirmation for whole-note rewrite. Must be true to proceed.',
+              },
               allowEmptyContent: {
                 type: 'boolean',
                 description: 'Allow replacing note content with empty/blank text (default: false)',
               },
             },
-            required: ['filename', 'content'],
+            required: ['filename', 'content', 'fullReplace'],
           },
         },
         {
@@ -934,6 +1017,10 @@ export function createServer(): Server {
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note to delete',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview deletion impact without deleting (default: false)',
               },
             },
             required: ['filename'],
@@ -1221,6 +1308,10 @@ Recommended flow:
                 type: 'number',
                 description: 'Last line to delete (1-indexed, inclusive)',
               },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview lines that would be deleted without modifying the note (default: false)',
+              },
             },
             required: ['filename', 'startLine', 'endLine'],
           },
@@ -1337,7 +1428,7 @@ Recommended flow:
         // Task operations
         {
           name: 'noteplan_get_tasks',
-          description: 'Get all tasks from a specific note, optionally filtered by status.',
+          description: 'Get tasks from a note with optional status/query filtering and pagination.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1350,8 +1441,84 @@ Recommended flow:
                 enum: ['open', 'done', 'cancelled', 'scheduled'],
                 description: 'Filter by task status',
               },
+              query: {
+                type: 'string',
+                description: 'Filter tasks by content substring',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum tasks to return (default: 100, max: 500)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
             },
             required: ['filename'],
+          },
+        },
+        {
+          name: 'noteplan_search_tasks',
+          description:
+            'Search task lines inside one note and return matching task line indexes for targeted task updates.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for space notes)',
+              },
+              title: {
+                type: 'string',
+                description: 'Note title to search for',
+              },
+              filename: {
+                type: 'string',
+                description: 'Direct filename/path to the note',
+              },
+              date: {
+                type: 'string',
+                description: 'Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID to search in',
+              },
+              query: {
+                type: 'string',
+                description: 'Task query text',
+              },
+              caseSensitive: {
+                type: 'boolean',
+                description: 'Case-sensitive task text search (default: false)',
+              },
+              wholeWord: {
+                type: 'boolean',
+                description: 'Whole-word task text match (default: false)',
+              },
+              status: {
+                type: 'string',
+                enum: ['open', 'done', 'cancelled', 'scheduled'],
+                description: 'Filter by task status before query match',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum matches to return (default: 20, max: 200)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+            },
+            required: ['query'],
           },
         },
         {
@@ -1406,7 +1573,7 @@ Recommended flow:
         },
         {
           name: 'noteplan_update_task',
-          description: 'Update a task content or status (open, done, cancelled, scheduled). Recommended flow: resolve note -> get tasks -> update task by lineIndex.',
+          description: 'Update a task content or status (open, done, cancelled, scheduled). Recommended flow: resolve note -> search/get tasks -> update by lineIndex.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1909,6 +2076,10 @@ For timed events, include time (YYYY-MM-DD HH:MM).`,
                 type: 'string',
                 description: 'Event ID to delete',
               },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview deletion impact without deleting (default: false)',
+              },
             },
             required: ['eventId'],
           },
@@ -2043,6 +2214,10 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
               reminderId: {
                 type: 'string',
                 description: 'Reminder ID to delete',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview deletion impact without deleting (default: false)',
               },
             },
             required: ['reminderId'],
@@ -2204,6 +2379,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_get_tasks':
           result = taskTools.getTasks(args as any);
           break;
+        case 'noteplan_search_tasks':
+          result = taskTools.searchTasks(args as any);
+          break;
         case 'noteplan_add_task':
           result = taskTools.addTaskToNote(args as any);
           break;
@@ -2351,7 +2529,8 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
       }
 
       const enrichedResult = enrichErrorResult(result, name);
-      const resultWithDuration = withDuration(enrichedResult, Date.now() - startTime, includeTiming);
+      const resultWithSuggestions = withSuggestedNextTools(enrichedResult, name);
+      const resultWithDuration = withDuration(resultWithSuggestions, Date.now() - startTime, includeTiming);
       return {
         content: [
           {

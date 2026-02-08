@@ -88,6 +88,10 @@ export const updateReminderSchema = z.object({
 
 export const deleteReminderSchema = z.object({
   reminderId: z.string().describe('Reminder ID to delete'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview deletion impact without deleting the reminder (default: false)'),
 });
 
 export const listReminderListsSchema = z.object({
@@ -247,6 +251,15 @@ export function updateReminder(params: z.infer<typeof updateReminderSchema>) {
  */
 export function deleteReminder(params: z.infer<typeof deleteReminderSchema>) {
   try {
+    if (params.dryRun === true) {
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: reminder ${params.reminderId} would be deleted`,
+        reminderId: params.reminderId,
+      };
+    }
+
     const result = runSwiftHelper(['delete-reminder', params.reminderId]);
 
     if (result?.error) {

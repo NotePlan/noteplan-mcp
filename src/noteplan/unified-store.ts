@@ -183,15 +183,25 @@ export interface SearchOptions {
   createdBefore?: string;
 }
 
+export interface SearchExecutionResult {
+  results: SearchResult[];
+  partialResults: boolean;
+  backend: 'ripgrep' | 'fallback' | 'simple';
+  warnings: string[];
+}
+
 /**
  * Search across all notes with enhanced options
  */
 export async function searchNotes(
   query: string,
   options: SearchOptions = {}
-): Promise<SearchResult[]> {
+): Promise<SearchExecutionResult> {
   const { types, folder, space, limit = 50, fuzzy = false } = options;
   let results: SearchResult[] = [];
+  let partialResults = false;
+  const warnings: string[] = [];
+  let backend: 'ripgrep' | 'fallback' | 'simple' = 'simple';
   const lowerQuery = query.toLowerCase();
 
   // Parse date filters
@@ -224,16 +234,21 @@ export async function searchNotes(
           ? [path.join(fileReader.getNotesPath(), folder)]
           : undefined;
 
-        const rgMatches = await searchWithRipgrep(query, {
+        const rgResult = await searchWithRipgrep(query, {
           caseSensitive: options.caseSensitive,
           contextLines: options.contextLines,
           paths: searchPaths,
           maxResults: limit * 2, // Get extra for filtering
         });
 
-        results.push(...convertRipgrepToSearchResults(rgMatches));
+        backend = 'ripgrep';
+        partialResults = rgResult.partialResults;
+        if (rgResult.warning) warnings.push(rgResult.warning);
+        results.push(...convertRipgrepToSearchResults(rgResult.matches));
       } catch (error) {
         console.error('Ripgrep search failed:', error);
+        backend = 'fallback';
+        warnings.push('ripgrep failed; using fallback local search');
         // Fall back to simple search
         const localNotes = fileReader.searchLocalNotes(query, {
           types,
@@ -243,6 +258,8 @@ export async function searchNotes(
         results.push(...localNotes.map((note) => noteToSearchResult(note, lowerQuery)));
       }
     } else {
+      backend = 'simple';
+      warnings.push('ripgrep unavailable; using fallback local search');
       // Fallback to original search method
       const localNotes = fileReader.searchLocalNotes(query, {
         types,
@@ -288,12 +305,22 @@ export async function searchNotes(
   // Apply fuzzy re-ranking if enabled
   if (fuzzy && results.length > 0) {
     const allNotes = results.map((r) => r.note);
-    return fuzzySearch(allNotes, query, limit);
+    return {
+      results: fuzzySearch(allNotes, query, limit),
+      partialResults,
+      backend,
+      warnings,
+    };
   }
 
   // Sort by score and limit
   results.sort((a, b) => b.score - a.score);
-  return results.slice(0, limit);
+  return {
+    results: results.slice(0, limit),
+    partialResults,
+    backend,
+    warnings,
+  };
 }
 
 /**

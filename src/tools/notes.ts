@@ -193,6 +193,10 @@ export const updateNoteSchema = z.object({
   content: z
     .string()
     .describe('New content for the note. Include YAML frontmatter between --- delimiters at the start if the note has or should have properties'),
+  fullReplace: z
+    .boolean()
+    .optional()
+    .describe('Required safety confirmation for whole-note rewrite. Must be true to proceed.'),
   allowEmptyContent: z
     .boolean()
     .optional()
@@ -201,6 +205,10 @@ export const updateNoteSchema = z.object({
 
 export const deleteNoteSchema = z.object({
   filename: z.string().describe('Filename/path of the note to delete'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview deletion impact without deleting (default: false)'),
 });
 
 // Tool implementations
@@ -515,6 +523,14 @@ export function createNote(params: z.infer<typeof createNoteSchema>) {
 
 export function updateNote(params: z.infer<typeof updateNoteSchema>) {
   try {
+    if (params.fullReplace !== true) {
+      return {
+        success: false,
+        error:
+          'Full note replacement is blocked for noteplan_update_note unless fullReplace=true. Prefer noteplan_search_paragraphs + noteplan_edit_line/insert_content/delete_lines for targeted edits.',
+      };
+    }
+
     if (params.allowEmptyContent !== true && params.content.trim().length === 0) {
       return {
         success: false,
@@ -544,6 +560,31 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
 
 export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
   try {
+    const note = store.getNote({ filename: params.filename });
+    if (!note) {
+      return {
+        success: false,
+        error: 'Note not found',
+      };
+    }
+
+    if (params.dryRun === true) {
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: note ${params.filename} would be deleted`,
+        note: {
+          id: note.id,
+          title: note.title,
+          filename: note.filename,
+          type: note.type,
+          source: note.source,
+          folder: note.folder,
+          spaceId: note.spaceId,
+        },
+      };
+    }
+
     store.deleteNote(params.filename);
 
     return {
@@ -797,6 +838,10 @@ export const deleteLinesSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
   startLine: z.number().describe('First line to delete (1-indexed, inclusive)'),
   endLine: z.number().describe('Last line to delete (1-indexed, inclusive)'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview lines that would be deleted without modifying the note (default: false)'),
 });
 
 export const editLineSchema = z.object({
@@ -911,12 +956,43 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
       return { success: false, error: 'Note not found' };
     }
 
+    const allLines = note.content.split('\n');
+    const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, allLines.length));
+    const boundedEndLine = toBoundedInt(
+      params.endLine,
+      boundedStartLine,
+      boundedStartLine,
+      Math.max(boundedStartLine, allLines.length)
+    );
+    const lineCountToDelete = boundedEndLine - boundedStartLine + 1;
+    const previewStartIndex = boundedStartLine - 1;
+    const previewEndIndexExclusive = boundedEndLine;
+    const deletedLinesPreview = allLines
+      .slice(previewStartIndex, previewEndIndexExclusive)
+      .slice(0, 20)
+      .map((content, index) => ({
+        line: boundedStartLine + index,
+        content,
+      }));
+
+    if (params.dryRun === true) {
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: lines ${boundedStartLine}-${boundedEndLine} would be deleted`,
+        lineCountToDelete,
+        deletedLinesPreview,
+        previewTruncated: lineCountToDelete > deletedLinesPreview.length,
+      };
+    }
+
     const newContent = frontmatter.deleteLines(note.content, params.startLine, params.endLine);
     store.updateNote(params.filename, newContent);
 
     return {
       success: true,
-      message: `Lines ${params.startLine}-${params.endLine} deleted`,
+      message: `Lines ${boundedStartLine}-${boundedEndLine} deleted`,
+      lineCountToDelete,
     };
   } catch (error) {
     return {

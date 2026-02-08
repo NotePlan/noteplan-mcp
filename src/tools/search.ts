@@ -79,7 +79,7 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
   const stageTimings: Record<string, number> = {};
 
   const searchStart = Date.now();
-  const results = await store.searchNotes(query, {
+  const searchExecution = await store.searchNotes(query, {
     types: params.types as NoteType[] | undefined,
     folder: params.folders?.[0], // Currently only supports single folder
     space: params.space,
@@ -92,6 +92,7 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
     createdAfter: params.createdAfter,
     createdBefore: params.createdBefore,
   });
+  const results = searchExecution.results;
   const searchStoreMs = Date.now() - searchStart;
   if (includeStageTimings) {
     stageTimings.searchStoreMs = searchStoreMs;
@@ -127,6 +128,9 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
     success: true,
     query,
     count: results.length,
+    partialResults: searchExecution.partialResults,
+    searchBackend: searchExecution.backend,
+    warnings: searchExecution.warnings,
     results: mappedResults,
   };
 
