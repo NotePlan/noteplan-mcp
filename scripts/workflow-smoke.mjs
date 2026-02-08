@@ -27,11 +27,35 @@ async function run() {
   });
   assert(blockedUpdate.success === false, 'updateNote should require fullReplace=true');
 
+  const dryFullReplace = notes.updateNote({
+    filename: local.filename,
+    fullReplace: true,
+    dryRun: true,
+    content: 'smoke-check',
+  });
+  assert(
+    dryFullReplace.success === true &&
+      dryFullReplace.dryRun === true &&
+      typeof dryFullReplace.confirmationToken === 'string',
+    'updateNote dryRun token failed'
+  );
+  const blockedWithoutToken = notes.updateNote({
+    filename: local.filename,
+    fullReplace: true,
+    content: 'smoke-check',
+  });
+  assert(blockedWithoutToken.success === false, 'updateNote should require confirmationToken for execution');
+
   const dryDeleteNote = notes.deleteNote({
     filename: local.filename,
     dryRun: true,
   });
-  assert(dryDeleteNote.success === true && dryDeleteNote.dryRun === true, 'deleteNote dryRun failed');
+  assert(
+    dryDeleteNote.success === true &&
+      dryDeleteNote.dryRun === true &&
+      typeof dryDeleteNote.confirmationToken === 'string',
+    'deleteNote dryRun failed'
+  );
 
   const dryDeleteLines = notes.deleteLines({
     filename: local.filename,
@@ -39,7 +63,12 @@ async function run() {
     endLine: 2,
     dryRun: true,
   });
-  assert(dryDeleteLines.success === true && dryDeleteLines.dryRun === true, 'deleteLines dryRun failed');
+  assert(
+    dryDeleteLines.success === true &&
+      dryDeleteLines.dryRun === true &&
+      typeof dryDeleteLines.confirmationToken === 'string',
+    'deleteLines dryRun failed'
+  );
 
   const paragraphs = notes.getParagraphs({ filename: local.filename, limit: 5 });
   assert(paragraphs.success === true, 'getParagraphs failed');
@@ -83,6 +112,7 @@ async function run() {
         success: true,
         checked: [
           'updateNote fullReplace safety',
+          'updateNote confirmation token',
           'deleteNote dryRun',
           'deleteLines dryRun',
           'paragraph pagination/search',

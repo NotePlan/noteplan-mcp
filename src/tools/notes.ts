@@ -4,6 +4,10 @@ import { z } from 'zod';
 import path from 'path';
 import * as store from '../noteplan/unified-store.js';
 import * as frontmatter from '../noteplan/frontmatter-parser.js';
+import {
+  issueConfirmationToken,
+  validateAndConsumeConfirmationToken,
+} from '../utils/confirmation-tokens.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -29,6 +33,17 @@ function toOptionalBoolean(value: unknown): boolean | undefined {
     if (normalized === 'false') return false;
   }
   return undefined;
+}
+
+function confirmationFailureMessage(toolName: string, reason: string): string {
+  const refreshHint = `Call ${toolName} with dryRun=true to get a new confirmationToken.`;
+  if (reason === 'missing') {
+    return `Confirmation token is required for ${toolName}. ${refreshHint}`;
+  }
+  if (reason === 'expired') {
+    return `Confirmation token is expired for ${toolName}. ${refreshHint}`;
+  }
+  return `Confirmation token is invalid for ${toolName}. ${refreshHint}`;
 }
 
 const PROGRESSIVE_READ_HINT =
@@ -197,6 +212,14 @@ export const updateNoteSchema = z.object({
     .boolean()
     .optional()
     .describe('Required safety confirmation for whole-note rewrite. Must be true to proceed.'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview full-rewrite impact and get confirmationToken without modifying the note'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for full note rewrite'),
   allowEmptyContent: z
     .boolean()
     .optional()
@@ -209,6 +232,10 @@ export const deleteNoteSchema = z.object({
     .boolean()
     .optional()
     .describe('Preview deletion impact without deleting (default: false)'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for delete execution'),
 });
 
 // Tool implementations
@@ -531,11 +558,56 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
       };
     }
 
+    const existingNote = store.getNote({ filename: params.filename });
+    if (!existingNote) {
+      return {
+        success: false,
+        error: 'Note not found',
+      };
+    }
+
     if (params.allowEmptyContent !== true && params.content.trim().length === 0) {
       return {
         success: false,
         error:
           'Empty content is blocked for noteplan_update_note. Use allowEmptyContent=true to override intentionally.',
+      };
+    }
+
+    if (params.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'noteplan_update_note',
+        target: params.filename,
+        action: 'full_replace',
+      });
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: note ${params.filename} would be fully replaced`,
+        note: {
+          id: existingNote.id,
+          title: existingNote.title,
+          filename: existingNote.filename,
+          type: existingNote.type,
+          source: existingNote.source,
+          folder: existingNote.folder,
+          spaceId: existingNote.spaceId,
+        },
+        currentContentLength: existingNote.content.length,
+        newContentLength: params.content.length,
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+      tool: 'noteplan_update_note',
+      target: params.filename,
+      action: 'full_replace',
+    });
+    if (!confirmation.ok) {
+      return {
+        success: false,
+        error: confirmationFailureMessage('noteplan_update_note', confirmation.reason),
       };
     }
 
@@ -569,6 +641,11 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
     }
 
     if (params.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'noteplan_delete_note',
+        target: params.filename,
+        action: 'delete_note',
+      });
       return {
         success: true,
         dryRun: true,
@@ -582,6 +659,19 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
           folder: note.folder,
           spaceId: note.spaceId,
         },
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+      tool: 'noteplan_delete_note',
+      target: params.filename,
+      action: 'delete_note',
+    });
+    if (!confirmation.ok) {
+      return {
+        success: false,
+        error: confirmationFailureMessage('noteplan_delete_note', confirmation.reason),
       };
     }
 
@@ -842,6 +932,10 @@ export const deleteLinesSchema = z.object({
     .boolean()
     .optional()
     .describe('Preview lines that would be deleted without modifying the note (default: false)'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for delete execution'),
 });
 
 export const editLineSchema = z.object({
@@ -976,6 +1070,11 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
       }));
 
     if (params.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'noteplan_delete_lines',
+        target: `${params.filename}:${boundedStartLine}-${boundedEndLine}`,
+        action: 'delete_lines',
+      });
       return {
         success: true,
         dryRun: true,
@@ -983,10 +1082,23 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
         lineCountToDelete,
         deletedLinesPreview,
         previewTruncated: lineCountToDelete > deletedLinesPreview.length,
+        ...token,
       };
     }
 
-    const newContent = frontmatter.deleteLines(note.content, params.startLine, params.endLine);
+    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+      tool: 'noteplan_delete_lines',
+      target: `${params.filename}:${boundedStartLine}-${boundedEndLine}`,
+      action: 'delete_lines',
+    });
+    if (!confirmation.ok) {
+      return {
+        success: false,
+        error: confirmationFailureMessage('noteplan_delete_lines', confirmation.reason),
+      };
+    }
+
+    const newContent = frontmatter.deleteLines(note.content, boundedStartLine, boundedEndLine);
     store.updateNote(params.filename, newContent);
 
     return {

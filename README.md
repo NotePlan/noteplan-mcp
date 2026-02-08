@@ -45,7 +45,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 - `noteplan_get_note` - Get note metadata by title/filename/date, with optional paged content retrieval
 - `noteplan_list_notes` - List notes with filtering/pagination
 - `noteplan_create_note` - Create a new note
-- `noteplan_update_note` - Replace full note content (requires `fullReplace=true`; prefer targeted paragraph/line tools)
+- `noteplan_update_note` - Replace full note content (requires `fullReplace=true` and dryRun confirmation token; prefer targeted paragraph/line tools)
 - `noteplan_delete_note` - Delete a note
 
 ### Note Structure and Granular Edits
@@ -91,8 +91,11 @@ Prefer granular edits to avoid large context payloads and accidental full-note r
    - `noteplan_insert_content` for adding content at a position
    - `noteplan_delete_lines` for removals
 4. Use `noteplan_update_note` only when a full rewrite is intentional (`fullReplace=true`)
+5. Run destructive operations in 2 steps:
+   - Step 1: call with `dryRun=true` and collect `confirmationToken`
+   - Step 2: execute with that `confirmationToken`
 
-For delete operations (`noteplan_delete_note`, `noteplan_delete_lines`, `calendar_delete_event`, `reminders_delete`), use `dryRun=true` first when safety matters.
+Delete operations (`noteplan_delete_note`, `noteplan_delete_lines`, `calendar_delete_event`, `reminders_delete`) require a dryRun-issued `confirmationToken`.
 
 ## Data Locations
 

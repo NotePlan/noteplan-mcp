@@ -5,6 +5,10 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  issueConfirmationToken,
+  validateAndConsumeConfirmationToken,
+} from '../utils/confirmation-tokens.js';
 
 // Get the directory of this module
 const __filename = fileURLToPath(import.meta.url);
@@ -91,6 +95,10 @@ export const deleteEventSchema = z.object({
     .boolean()
     .optional()
     .describe('Preview deletion impact without deleting the event (default: false)'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for delete execution'),
 });
 
 export const listCalendarsSchema = z.object({});
@@ -269,11 +277,36 @@ export function updateEvent(params: z.infer<typeof updateEventSchema>) {
 export function deleteEvent(params: z.infer<typeof deleteEventSchema>) {
   try {
     if (params.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'calendar_delete_event',
+        target: params.eventId,
+        action: 'delete_event',
+      });
       return {
         success: true,
         dryRun: true,
         message: `Dry run: event ${params.eventId} would be deleted`,
         eventId: params.eventId,
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+      tool: 'calendar_delete_event',
+      target: params.eventId,
+      action: 'delete_event',
+    });
+    if (!confirmation.ok) {
+      const refreshHint = 'Call calendar_delete_event with dryRun=true to get a new confirmationToken.';
+      const message =
+        confirmation.reason === 'missing'
+          ? `Confirmation token is required for calendar_delete_event. ${refreshHint}`
+          : confirmation.reason === 'expired'
+            ? `Confirmation token is expired for calendar_delete_event. ${refreshHint}`
+            : `Confirmation token is invalid for calendar_delete_event. ${refreshHint}`;
+      return {
+        success: false,
+        error: message,
       };
     }
 

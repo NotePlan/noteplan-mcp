@@ -5,6 +5,10 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  issueConfirmationToken,
+  validateAndConsumeConfirmationToken,
+} from '../utils/confirmation-tokens.js';
 
 // Get the directory of this module
 const __filename = fileURLToPath(import.meta.url);
@@ -92,6 +96,10 @@ export const deleteReminderSchema = z.object({
     .boolean()
     .optional()
     .describe('Preview deletion impact without deleting the reminder (default: false)'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for delete execution'),
 });
 
 export const listReminderListsSchema = z.object({
@@ -252,11 +260,36 @@ export function updateReminder(params: z.infer<typeof updateReminderSchema>) {
 export function deleteReminder(params: z.infer<typeof deleteReminderSchema>) {
   try {
     if (params.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'reminders_delete',
+        target: params.reminderId,
+        action: 'delete_reminder',
+      });
       return {
         success: true,
         dryRun: true,
         message: `Dry run: reminder ${params.reminderId} would be deleted`,
         reminderId: params.reminderId,
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+      tool: 'reminders_delete',
+      target: params.reminderId,
+      action: 'delete_reminder',
+    });
+    if (!confirmation.ok) {
+      const refreshHint = 'Call reminders_delete with dryRun=true to get a new confirmationToken.';
+      const message =
+        confirmation.reason === 'missing'
+          ? `Confirmation token is required for reminders_delete. ${refreshHint}`
+          : confirmation.reason === 'expired'
+            ? `Confirmation token is expired for reminders_delete. ${refreshHint}`
+            : `Confirmation token is invalid for reminders_delete. ${refreshHint}`;
+      return {
+        success: false,
+        error: message,
       };
     }
 

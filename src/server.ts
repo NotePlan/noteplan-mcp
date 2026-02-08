@@ -679,6 +679,22 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
     };
   }
 
+  if (message.includes('confirmation token is required')) {
+    return {
+      code: 'ERR_CONFIRMATION_REQUIRED',
+      hint: 'Run the same destructive tool with dryRun=true to get a confirmationToken, then retry with that token.',
+      suggestedTool: toolName,
+    };
+  }
+
+  if (message.includes('confirmation token is invalid') || message.includes('confirmation token is expired')) {
+    return {
+      code: 'ERR_CONFIRMATION_INVALID',
+      hint: 'Regenerate the token by rerunning the same tool with dryRun=true, then retry promptly.',
+      suggestedTool: toolName,
+    };
+  }
+
   if (message.includes('line') && (message.includes('does not exist') || message.includes('invalid line index'))) {
     return {
       code: 'ERR_INVALID_LINE_REFERENCE',
@@ -984,7 +1000,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_update_note',
           description:
-            'Replace all note content. Use only when rewriting the full note is intentional. Requires fullReplace=true safety confirmation. Prefer noteplan_search_paragraphs + noteplan_edit_line / noteplan_insert_content / noteplan_delete_lines for targeted updates. Empty content is blocked unless allowEmptyContent=true.',
+            'Replace all note content. Use only when rewriting the full note is intentional. Requires fullReplace=true plus dryRun-issued confirmationToken. Prefer noteplan_search_paragraphs + noteplan_edit_line / noteplan_insert_content / noteplan_delete_lines for targeted updates. Empty content is blocked unless allowEmptyContent=true.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1000,6 +1016,14 @@ export function createServer(): Server {
                 type: 'boolean',
                 description: 'Required safety confirmation for whole-note rewrite. Must be true to proceed.',
               },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview full-rewrite impact and get confirmationToken without modifying the note',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for full note rewrite',
+              },
               allowEmptyContent: {
                 type: 'boolean',
                 description: 'Allow replacing note content with empty/blank text (default: false)',
@@ -1010,7 +1034,7 @@ export function createServer(): Server {
         },
         {
           name: 'noteplan_delete_note',
-          description: 'Delete a note (moves to trash). Recommended flow: resolve note first, then delete canonical target.',
+          description: 'Delete a note (moves to trash). Requires dryRun-issued confirmationToken for execution. Recommended flow: resolve note first, dryRun, then delete canonical target.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1021,6 +1045,10 @@ export function createServer(): Server {
               dryRun: {
                 type: 'boolean',
                 description: 'Preview deletion impact without deleting (default: false)',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for delete execution',
               },
             },
             required: ['filename'],
@@ -1288,6 +1316,7 @@ Use this when the user wants to:
 - Delete a section of content
 
 This is SAFER than reading and rewriting the whole note.
+Execution requires a dryRun-issued confirmationToken.
 
 Recommended flow:
 1. noteplan_resolve_note
@@ -1311,6 +1340,10 @@ Recommended flow:
               dryRun: {
                 type: 'boolean',
                 description: 'Preview lines that would be deleted without modifying the note (default: false)',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for delete execution',
               },
             },
             required: ['filename', 'startLine', 'endLine'],
@@ -2068,7 +2101,7 @@ For timed events, include time (YYYY-MM-DD HH:MM).`,
         },
         {
           name: 'calendar_delete_event',
-          description: 'Delete a calendar event. Recommended flow: calendar_get_events first, then delete using eventId.',
+          description: 'Delete a calendar event. Requires dryRun-issued confirmationToken. Recommended flow: calendar_get_events first, dryRun, then delete using eventId.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2079,6 +2112,10 @@ For timed events, include time (YYYY-MM-DD HH:MM).`,
               dryRun: {
                 type: 'boolean',
                 description: 'Preview deletion impact without deleting (default: false)',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for delete execution',
               },
             },
             required: ['eventId'],
@@ -2207,7 +2244,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         },
         {
           name: 'reminders_delete',
-          description: 'Delete a reminder. Recommended flow: reminders_get first, then delete using reminderId.',
+          description: 'Delete a reminder. Requires dryRun-issued confirmationToken. Recommended flow: reminders_get first, dryRun, then delete using reminderId.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2218,6 +2255,10 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
               dryRun: {
                 type: 'boolean',
                 description: 'Preview deletion impact without deleting (default: false)',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for delete execution',
               },
             },
             required: ['reminderId'],
