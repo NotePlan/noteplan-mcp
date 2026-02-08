@@ -164,6 +164,20 @@ const SEARCH_TASKS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   note: { type: 'object' },
   matches: { type: 'array', items: { type: 'object' } },
 });
+const SEARCH_TASKS_GLOBAL_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  scannedNoteCount: { type: 'number' },
+  totalNotes: { type: 'number' },
+  truncatedByMaxNotes: { type: 'boolean' },
+  maxNotes: { type: 'number' },
+  matches: { type: 'array', items: { type: 'object' } },
+});
 const RANGE_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
   period: { type: 'string' },
   startDate: { type: 'string' },
@@ -301,6 +315,8 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
       return TASKS_OUTPUT_SCHEMA;
     case 'noteplan_search_tasks':
       return SEARCH_TASKS_OUTPUT_SCHEMA;
+    case 'noteplan_search_tasks_global':
+      return SEARCH_TASKS_GLOBAL_OUTPUT_SCHEMA;
     case 'noteplan_add_task':
     case 'noteplan_complete_task':
     case 'noteplan_update_task':
@@ -431,6 +447,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_search',
     'noteplan_get_tasks',
     'noteplan_search_tasks',
+    'noteplan_search_tasks_global',
     'noteplan_get_calendar_note',
     'noteplan_get_periodic_note',
     'noteplan_get_notes_in_range',
@@ -554,6 +571,9 @@ function getToolSearchAliases(toolName: string): string[] {
   if (toolName.includes('search_tasks')) {
     aliases.push('search tasks', 'find task', 'task lookup', 'task line index');
   }
+  if (toolName.includes('search_tasks_global')) {
+    aliases.push('global tasks', 'all tasks', 'tasks across notes', 'open tasks');
+  }
   if (toolName.includes('get_note') || toolName.includes('list_notes') || toolName.includes('create_note') || toolName.includes('update_note')) {
     aliases.push('notes', 'documents', 'markdown');
   }
@@ -644,6 +664,26 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
       code: 'ERR_INVALID_ARGUMENT',
       hint: 'Pass one of: id, filename, title, or date to identify the note target.',
       suggestedTool: 'noteplan_resolve_note',
+    };
+  }
+
+  if (
+    message.includes('provide lineindex') ||
+    message.includes('lineindex must be') ||
+    message.includes('line must be') ||
+    message.includes('line and lineindex reference different')
+  ) {
+    return {
+      code: 'ERR_INVALID_ARGUMENT',
+      hint: 'For task updates, pass either lineIndex (0-based) or line (1-based).',
+      suggestedTool: 'noteplan_get_tasks',
+    };
+  }
+  if (message.includes('provide at least one field to update')) {
+    return {
+      code: 'ERR_INVALID_ARGUMENT',
+      hint: 'For noteplan_update_task, pass content, status, or both.',
+      suggestedTool: 'noteplan_update_task',
     };
   }
 
@@ -775,6 +815,7 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
       break;
     case 'noteplan_get_tasks':
     case 'noteplan_search_tasks':
+    case 'noteplan_search_tasks_global':
       suggestedNextTools = ['noteplan_update_task', 'noteplan_complete_task'];
       break;
     case 'noteplan_search':
@@ -1062,13 +1103,13 @@ export function createServer(): Server {
 
 Returns each line with:
 - line: 1-indexed line number (for display/user communication)
-- lineIndex: 0-indexed line number (use this for API calls like complete_task, delete_lines)
+- lineIndex: 0-indexed line number (use this for API calls like complete_task/update_task)
 - content: the text content of that line
 
 Use this when you need to:
 - See exactly which line contains what content
-- Find the correct lineIndex for task operations
-- Determine line numbers for insert_content or delete_lines
+- Find the correct lineIndex for task updates/completion
+- Determine 1-indexed line values for insert_content, edit_line, or delete_lines
 
 For large notes, use startLine/endLine and cursor pagination to fetch progressively.`,
           inputSchema: {
@@ -1177,6 +1218,12 @@ Prefer this over full note rewrites when only part of a note should change.`,
               },
             },
             required: ['query'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+              { required: ['title'] },
+              { required: ['date'] },
+            ],
           },
         },
 
@@ -1289,7 +1336,8 @@ This is SAFER than reading and rewriting the whole note.`,
 Use this when the user wants to add content to the end of a note.
 This is a shorthand for insert_content with position="end".
 
-This is SAFER than reading and rewriting the whole note.`,
+This is SAFER than reading and rewriting the whole note.
+Prefer this only for explicit append intent; otherwise use noteplan_insert_content for positional control.`,
           inputSchema: {
             type: 'object',
             properties: {
@@ -1461,13 +1509,30 @@ Recommended flow:
         // Task operations
         {
           name: 'noteplan_get_tasks',
-          description: 'Get tasks from a note with optional status/query filtering and pagination.',
+          description:
+            'Get tasks from one note with optional status/query filtering and pagination. Requires one note reference (id, filename, title, or date). For cross-note task lookup use noteplan_search_tasks_global.',
           inputSchema: {
             type: 'object',
             properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for space notes)',
+              },
+              title: {
+                type: 'string',
+                description: 'Note title to search for',
+              },
               filename: {
                 type: 'string',
-                description: 'Filename/path of the note',
+                description: 'Direct filename/path to the note',
+              },
+              date: {
+                type: 'string',
+                description: 'Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID to search in',
               },
               status: {
                 type: 'string',
@@ -1491,13 +1556,18 @@ Recommended flow:
                 description: 'Cursor token from previous page (preferred over offset)',
               },
             },
-            required: ['filename'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+              { required: ['title'] },
+              { required: ['date'] },
+            ],
           },
         },
         {
           name: 'noteplan_search_tasks',
           description:
-            'Search task lines inside one note and return matching task line indexes for targeted task updates.',
+            'Search task lines inside one note and return matching task line indexes for targeted task updates. Requires one note reference (id, filename, title, or date). For cross-note task lookup use noteplan_search_tasks_global.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1552,6 +1622,68 @@ Recommended flow:
               },
             },
             required: ['query'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+              { required: ['title'] },
+              { required: ['date'] },
+            ],
+          },
+        },
+        {
+          name: 'noteplan_search_tasks_global',
+          description:
+            'Search tasks across multiple notes and return note+line references for targeted updates/completions.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Task query text across notes',
+              },
+              caseSensitive: {
+                type: 'boolean',
+                description: 'Case-sensitive task text search (default: false)',
+              },
+              wholeWord: {
+                type: 'boolean',
+                description: 'Whole-word task text match (default: false)',
+              },
+              status: {
+                type: 'string',
+                enum: ['open', 'done', 'cancelled', 'scheduled'],
+                description: 'Filter by task status before query match',
+              },
+              folder: {
+                type: 'string',
+                description: 'Restrict to a specific folder path',
+              },
+              space: {
+                type: 'string',
+                description: 'Restrict to a specific space ID',
+              },
+              noteQuery: {
+                type: 'string',
+                description: 'Filter candidate notes by title/filename/folder substring',
+              },
+              maxNotes: {
+                type: 'number',
+                description: 'Maximum notes to scan (default: 500, max: 2000)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum matches to return (default: 30, max: 300)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+            },
+            required: ['query'],
           },
         },
         {
@@ -1588,7 +1720,8 @@ Recommended flow:
         },
         {
           name: 'noteplan_complete_task',
-          description: 'Mark a task as done.',
+          description:
+            'Mark a task as done. Accepts lineIndex (0-based) or line (1-based). Prefer this over noteplan_update_task when only marking done.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1600,13 +1733,19 @@ Recommended flow:
                 type: 'number',
                 description: 'Line index of the task (0-based)',
               },
+              line: {
+                type: 'number',
+                description: 'Line number of the task (1-based)',
+              },
             },
-            required: ['filename', 'lineIndex'],
+            required: ['filename'],
+            anyOf: [{ required: ['lineIndex'] }, { required: ['line'] }],
           },
         },
         {
           name: 'noteplan_update_task',
-          description: 'Update a task content or status (open, done, cancelled, scheduled). Recommended flow: resolve note -> search/get tasks -> update by lineIndex.',
+          description:
+            'Update a task content or status (open, done, cancelled, scheduled). Accepts lineIndex (0-based) or line (1-based). For simply marking done, prefer noteplan_complete_task.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1617,6 +1756,10 @@ Recommended flow:
               lineIndex: {
                 type: 'number',
                 description: 'Line index of the task (0-based)',
+              },
+              line: {
+                type: 'number',
+                description: 'Line number of the task (1-based)',
               },
               content: {
                 type: 'string',
@@ -1632,7 +1775,11 @@ Recommended flow:
                 description: 'New task status',
               },
             },
-            required: ['filename', 'lineIndex'],
+            required: ['filename'],
+            allOf: [
+              { anyOf: [{ required: ['lineIndex'] }, { required: ['line'] }] },
+              { anyOf: [{ required: ['content'] }, { required: ['status'] }] },
+            ],
           },
         },
 
@@ -1911,7 +2058,7 @@ Recommended flow:
         {
           name: 'noteplan_find_folders',
           description:
-            'Find likely folder matches for a query and return a small ranked result set.',
+            'Find likely folder matches for browsing/exploration. Use when user wants multiple options, not a single canonical folder.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1946,7 +2093,7 @@ Recommended flow:
         {
           name: 'noteplan_resolve_folder',
           description:
-            'Resolve a folder query to one canonical folder path with confidence and ambiguity details.',
+            'Resolve a folder query to one canonical folder path with confidence and ambiguity details. Use before create/list/update operations that need one folder target.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2422,6 +2569,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         case 'noteplan_search_tasks':
           result = taskTools.searchTasks(args as any);
+          break;
+        case 'noteplan_search_tasks_global':
+          result = taskTools.searchTasksGlobal(args as any);
           break;
         case 'noteplan_add_task':
           result = taskTools.addTaskToNote(args as any);

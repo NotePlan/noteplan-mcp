@@ -56,11 +56,12 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 - `noteplan_delete_lines` - Delete a line range
 
 ### Task Operations
-- `noteplan_get_tasks` - Get tasks from a note with filtering/pagination
-- `noteplan_search_tasks` - Find matching task lines in a note for targeted updates
+- `noteplan_get_tasks` - Get tasks from one note (id/title/filename/date) with filtering/pagination
+- `noteplan_search_tasks` - Find matching task lines in one note for targeted updates
+- `noteplan_search_tasks_global` - Search task lines across notes and return note+line references
 - `noteplan_add_task` - Add task to a note
-- `noteplan_complete_task` - Mark task as done
-- `noteplan_update_task` - Update task content/status
+- `noteplan_complete_task` - Mark task as done (accepts `lineIndex` 0-based or `line` 1-based)
+- `noteplan_update_task` - Update task content/status (accepts `lineIndex` 0-based or `line` 1-based)
 
 ### Calendar Operations
 - `noteplan_get_today` - Get today's daily note
@@ -96,6 +97,14 @@ Prefer granular edits to avoid large context payloads and accidental full-note r
    - Step 2: execute with that `confirmationToken`
 
 Delete operations (`noteplan_delete_note`, `noteplan_delete_lines`, `calendar_delete_event`, `reminders_delete`) require a dryRun-issued `confirmationToken`.
+
+Task flow (recommended):
+1. Find tasks:
+   - one note: `noteplan_get_tasks` or `noteplan_search_tasks`
+   - across notes: `noteplan_search_tasks_global`
+2. Apply targeted mutation:
+   - `noteplan_complete_task` for done status
+   - `noteplan_update_task` for content/status edits
 
 ## Data Locations
 

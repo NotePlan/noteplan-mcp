@@ -21,6 +21,53 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function resolveTaskLineIndex(input: {
+  lineIndex?: number;
+  line?: number;
+}): { ok: true; lineIndex: number } | { ok: false; error: string } {
+  const hasLineIndex = typeof input.lineIndex === 'number' && Number.isFinite(input.lineIndex);
+  const hasLine = typeof input.line === 'number' && Number.isFinite(input.line);
+
+  if (!hasLineIndex && !hasLine) {
+    return {
+      ok: false,
+      error: 'Provide lineIndex (0-based) or line (1-based)',
+    };
+  }
+
+  const resolvedFromLine = hasLine ? Math.floor(input.line as number) - 1 : undefined;
+  const resolvedFromIndex = hasLineIndex ? Math.floor(input.lineIndex as number) : undefined;
+
+  if (resolvedFromLine !== undefined && resolvedFromLine < 0) {
+    return {
+      ok: false,
+      error: 'line must be >= 1',
+    };
+  }
+  if (resolvedFromIndex !== undefined && resolvedFromIndex < 0) {
+    return {
+      ok: false,
+      error: 'lineIndex must be >= 0',
+    };
+  }
+
+  if (
+    resolvedFromLine !== undefined &&
+    resolvedFromIndex !== undefined &&
+    resolvedFromLine !== resolvedFromIndex
+  ) {
+    return {
+      ok: false,
+      error: 'line and lineIndex reference different task lines',
+    };
+  }
+
+  return {
+    ok: true,
+    lineIndex: resolvedFromIndex ?? (resolvedFromLine as number),
+  };
+}
+
 /**
  * Check if a string looks like a date target (not a filename)
  * Matches: today, tomorrow, yesterday, YYYYMMDD, YYYY-MM-DD
@@ -47,7 +94,14 @@ function isDateTarget(target: string): boolean {
 }
 
 export const getTasksSchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  title: z.string().optional().describe('Note title to search for'),
+  filename: z.string().optional().describe('Direct filename/path to the note'),
+  date: z
+    .string()
+    .optional()
+    .describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  space: z.string().optional().describe('Space ID to search in'),
   status: z
     .enum(['open', 'done', 'cancelled', 'scheduled'])
     .optional()
@@ -76,6 +130,23 @@ export const searchTasksSchema = z.object({
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
+export const searchTasksGlobalSchema = z.object({
+  query: z.string().describe('Task query text across notes'),
+  caseSensitive: z.boolean().optional().default(false).describe('Case-sensitive task text search'),
+  wholeWord: z.boolean().optional().default(false).describe('Whole-word task text match'),
+  status: z
+    .enum(['open', 'done', 'cancelled', 'scheduled'])
+    .optional()
+    .describe('Filter by task status before query match'),
+  folder: z.string().optional().describe('Restrict to a specific folder path'),
+  space: z.string().optional().describe('Restrict to a specific space ID'),
+  noteQuery: z.string().optional().describe('Filter notes by title/filename/folder substring'),
+  maxNotes: z.number().min(1).max(2000).optional().default(500).describe('Maximum notes to scan'),
+  limit: z.number().min(1).max(300).optional().default(30).describe('Maximum matches to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+});
+
 export const addTaskSchema = z.object({
   target: z
     .string()
@@ -95,12 +166,22 @@ export const addTaskSchema = z.object({
 
 export const completeTaskSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
-  lineIndex: z.number().describe('Line index of the task (0-based)'),
+  lineIndex: z.number().optional().describe('Line index of the task (0-based)'),
+  line: z.number().optional().describe('Line number of the task (1-based)'),
+}).superRefine((input, ctx) => {
+  if (input.lineIndex === undefined && input.line === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide lineIndex (0-based) or line (1-based)',
+      path: ['lineIndex'],
+    });
+  }
 });
 
 export const updateTaskSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
-  lineIndex: z.number().describe('Line index of the task (0-based)'),
+  lineIndex: z.number().optional().describe('Line index of the task (0-based)'),
+  line: z.number().optional().describe('Line number of the task (1-based)'),
   content: z.string().optional().describe('New task content'),
   allowEmptyContent: z
     .boolean()
@@ -110,10 +191,38 @@ export const updateTaskSchema = z.object({
     .enum(['open', 'done', 'cancelled', 'scheduled'])
     .optional()
     .describe('New task status'),
+}).superRefine((input, ctx) => {
+  if (input.lineIndex === undefined && input.line === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide lineIndex (0-based) or line (1-based)',
+      path: ['lineIndex'],
+    });
+  }
+  if (input.content === undefined && input.status === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide at least one field to update: content or status',
+      path: ['content'],
+    });
+  }
 });
 
 export function getTasks(params: z.infer<typeof getTasksSchema>) {
-  const note = store.getNote({ filename: params.filename });
+  if (!params.id && !params.title && !params.filename && !params.date) {
+    return {
+      success: false,
+      error: 'Provide one note reference: id, title, filename, or date',
+    };
+  }
+
+  const note = store.getNote({
+    id: params.id,
+    title: params.title,
+    filename: params.filename,
+    date: params.date,
+    space: params.space,
+  });
 
   if (!note) {
     return {
@@ -141,8 +250,14 @@ export function getTasks(params: z.infer<typeof getTasksSchema>) {
   const result: Record<string, unknown> = {
     success: true,
     note: {
+      id: note.id,
       title: note.title,
       filename: note.filename,
+      type: note.type,
+      source: note.source,
+      folder: note.folder,
+      spaceId: note.spaceId,
+      date: note.date,
     },
     taskCount: page.length,
     totalCount: tasks.length,
@@ -152,6 +267,7 @@ export function getTasks(params: z.infer<typeof getTasksSchema>) {
     nextCursor,
     tasks: page.map((task) => ({
       lineIndex: task.lineIndex,
+      line: task.lineIndex + 1,
       content: task.content,
       status: task.status,
       tags: task.tags,
@@ -262,6 +378,107 @@ export function searchTasks(params: z.infer<typeof searchTasksSchema>) {
   return result;
 }
 
+export function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema>) {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required',
+    };
+  }
+
+  const caseSensitive = params.caseSensitive ?? false;
+  const wholeWord = params.wholeWord ?? false;
+  const normalizedQuery = caseSensitive ? query : query.toLowerCase();
+  const matcher = wholeWord
+    ? new RegExp(`\\b${escapeRegExp(query)}\\b`, caseSensitive ? '' : 'i')
+    : null;
+  const maxNotes = toBoundedInt(params.maxNotes, 500, 1, 2000);
+  const noteQuery = typeof params.noteQuery === 'string' ? params.noteQuery.trim().toLowerCase() : '';
+  const allNotes = store.listNotes({
+    folder: params.folder,
+    space: params.space,
+  });
+  const filteredNotes = noteQuery
+    ? allNotes.filter((note) => {
+        const haystack = `${note.title} ${note.filename} ${note.folder || ''}`.toLowerCase();
+        return haystack.includes(noteQuery);
+      })
+    : allNotes;
+  const scannedNotes = filteredNotes.slice(0, maxNotes);
+  const truncatedByMaxNotes = filteredNotes.length > scannedNotes.length;
+
+  const allMatches: Array<Record<string, unknown>> = [];
+  for (const note of scannedNotes) {
+    let tasks = parseTasks(note.content);
+    if (params.status) {
+      tasks = filterTasksByStatus(tasks, params.status as TaskStatus);
+    }
+
+    tasks.forEach((task) => {
+      const haystack = caseSensitive ? task.content : task.content.toLowerCase();
+      const isMatch = matcher ? matcher.test(task.content) : haystack.includes(normalizedQuery);
+      if (!isMatch) return;
+
+      allMatches.push({
+        note: {
+          id: note.id,
+          title: note.title,
+          filename: note.filename,
+          type: note.type,
+          source: note.source,
+          folder: note.folder,
+          spaceId: note.spaceId,
+          date: note.date,
+        },
+        lineIndex: task.lineIndex,
+        line: task.lineIndex + 1,
+        content: task.content,
+        status: task.status,
+        tags: task.tags,
+        mentions: task.mentions,
+        scheduledDate: task.scheduledDate,
+        priority: task.priority,
+        indentLevel: task.indentLevel,
+      });
+    });
+  }
+
+  const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(params.limit, 30, 1, 300);
+  const page = allMatches.slice(offset, offset + limit);
+  const hasMore = offset + page.length < allMatches.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
+
+  const result: Record<string, unknown> = {
+    success: true,
+    query,
+    count: page.length,
+    totalCount: allMatches.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    scannedNoteCount: scannedNotes.length,
+    totalNotes: filteredNotes.length,
+    truncatedByMaxNotes,
+    maxNotes,
+    matches: page,
+  };
+
+  if (hasMore) {
+    result.performanceHints = ['Continue with nextCursor to fetch the next global task match page.'];
+  }
+  if (truncatedByMaxNotes) {
+    result.performanceHints = [
+      ...((result.performanceHints as string[] | undefined) ?? []),
+      'Increase maxNotes or narrow folder/space/noteQuery to reduce truncation.',
+    ];
+  }
+
+  return result;
+}
+
 export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
   try {
     let note;
@@ -307,6 +524,18 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
 
 export function completeTask(params: z.infer<typeof completeTaskSchema>) {
   try {
+    const resolved = resolveTaskLineIndex({
+      lineIndex: params.lineIndex,
+      line: params.line,
+    });
+    if (!resolved.ok) {
+      return {
+        success: false,
+        error: resolved.error,
+      };
+    }
+    const lineIndex = resolved.lineIndex;
+
     const note = store.getNote({ filename: params.filename });
 
     if (!note) {
@@ -317,20 +546,22 @@ export function completeTask(params: z.infer<typeof completeTaskSchema>) {
     }
 
     const lines = note.content.split('\n');
-    const originalLine = lines[params.lineIndex] || '';
+    const originalLine = lines[lineIndex] || '';
 
-    const newContent = updateTaskStatus(note.content, params.lineIndex, 'done');
+    const newContent = updateTaskStatus(note.content, lineIndex, 'done');
     const updatedNote = store.updateNote(note.filename, newContent);
 
     const newLines = updatedNote.content.split('\n');
-    const updatedLine = newLines[params.lineIndex] || '';
+    const updatedLine = newLines[lineIndex] || '';
 
     return {
       success: true,
-      message: `Task on line ${params.lineIndex} marked as done`,
+      message: `Task on lineIndex ${lineIndex} (line ${lineIndex + 1}) marked as done`,
       filename: updatedNote.filename,
       originalLine,
       updatedLine,
+      lineIndex,
+      line: lineIndex + 1,
     };
   } catch (error) {
     return {
@@ -342,6 +573,24 @@ export function completeTask(params: z.infer<typeof completeTaskSchema>) {
 
 export function updateTask(params: z.infer<typeof updateTaskSchema>) {
   try {
+    const resolved = resolveTaskLineIndex({
+      lineIndex: params.lineIndex,
+      line: params.line,
+    });
+    if (!resolved.ok) {
+      return {
+        success: false,
+        error: resolved.error,
+      };
+    }
+    const lineIndex = resolved.lineIndex;
+    if (params.content === undefined && params.status === undefined) {
+      return {
+        success: false,
+        error: 'Provide at least one field to update: content or status',
+      };
+    }
+
     if (
       params.content !== undefined &&
       params.allowEmptyContent !== true &&
@@ -366,18 +615,20 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
     let newContent = note.content;
 
     if (params.status) {
-      newContent = updateTaskStatus(newContent, params.lineIndex, params.status as TaskStatus);
+      newContent = updateTaskStatus(newContent, lineIndex, params.status as TaskStatus);
     }
 
     if (params.content !== undefined) {
-      newContent = updateTaskContent(newContent, params.lineIndex, params.content);
+      newContent = updateTaskContent(newContent, lineIndex, params.content);
     }
 
     store.updateNote(note.filename, newContent);
 
     return {
       success: true,
-      message: `Task on line ${params.lineIndex} updated`,
+      message: `Task on lineIndex ${lineIndex} (line ${lineIndex + 1}) updated`,
+      lineIndex,
+      line: lineIndex + 1,
     };
   } catch (error) {
     return {
