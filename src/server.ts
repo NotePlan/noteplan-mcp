@@ -553,6 +553,7 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_ui_open_view':
     case 'noteplan_ui_toggle_sidebar':
     case 'noteplan_ui_close_plugin_window':
+    case 'noteplan_ui_list_plugin_windows':
     case 'noteplan_create_plugin':
     case 'noteplan_delete_plugin':
     case 'noteplan_install_plugin':
@@ -1408,7 +1409,7 @@ export function createServer(): Server {
               },
               space: {
                 type: 'string',
-                description: 'Space ID to search in',
+                description: 'Space name or ID to search in',
               },
               includeContent: {
                 type: 'boolean',
@@ -1455,7 +1456,7 @@ export function createServer(): Server {
               },
               space: {
                 type: 'string',
-                description: 'Space ID to list from',
+                description: 'Space name or ID to list from',
               },
               types: {
                 type: 'array',
@@ -1548,7 +1549,7 @@ export function createServer(): Server {
               },
               space: {
                 type: 'string',
-                description: 'Space ID to create in',
+                description: 'Space name or ID to create in',
               },
             },
             required: ['title'],
@@ -1812,7 +1813,7 @@ Prefer this over full note rewrites when only part of a note should change.`,
               },
               space: {
                 type: 'string',
-                description: 'Space ID to search in',
+                description: 'Space name or ID to search in',
               },
               query: {
                 type: 'string',
@@ -1977,7 +1978,7 @@ Tip: you can target the note via id, filename, title, date, or query.`,
               },
               space: {
                 type: 'string',
-                description: 'Space ID scope for title/date/query resolution',
+                description: 'Space name or ID scope for title/date/query resolution',
               },
               content: {
                 type: 'string',
@@ -2071,7 +2072,7 @@ Tip: you can target the note via id, filename, title, date, or query.`,
               },
               space: {
                 type: 'string',
-                description: 'Space ID scope for title/date/query resolution',
+                description: 'Space name or ID scope for title/date/query resolution',
               },
               content: {
                 type: 'string',
@@ -2292,7 +2293,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID to search in',
+                description: 'Space name or ID to search in',
               },
               limit: {
                 type: 'number',
@@ -2366,7 +2367,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID to search in',
+                description: 'Space name or ID to search in',
               },
               status: {
                 type: 'string',
@@ -2423,7 +2424,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID to search in',
+                description: 'Space name or ID to search in',
               },
               query: {
                 type: 'string',
@@ -2559,7 +2560,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID when targeting daily notes',
+                description: 'Space name or ID when targeting daily notes',
               },
               status: {
                 type: 'string',
@@ -2652,7 +2653,7 @@ Recommended flow:
             properties: {
               space: {
                 type: 'string',
-                description: 'Space ID to get today from',
+                description: 'Space name or ID to get today from',
               },
             },
           },
@@ -2674,7 +2675,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID',
+                description: 'Space name or ID',
               },
             },
             required: ['content'],
@@ -2692,7 +2693,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID',
+                description: 'Space name or ID',
               },
             },
             required: ['date'],
@@ -2732,7 +2733,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID',
+                description: 'Space name or ID',
               },
             },
             required: ['type'],
@@ -2772,7 +2773,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID',
+                description: 'Space name or ID',
               },
             },
           },
@@ -2819,7 +2820,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID',
+                description: 'Space name or ID',
               },
             },
             required: ['period'],
@@ -2891,7 +2892,7 @@ Recommended flow:
             properties: {
               space: {
                 type: 'string',
-                description: 'Space ID to list tags from',
+                description: 'Space name or ID to list tags from',
               },
               query: {
                 type: 'string',
@@ -3073,7 +3074,7 @@ Recommended flow:
             properties: {
               space: {
                 type: 'string',
-                description: 'Space ID to list folders from',
+                description: 'Space name or ID to list folders from',
               },
               includeLocal: {
                 type: 'boolean',
@@ -3208,7 +3209,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID for TeamSpace folder creation',
+                description: 'Space name or ID for TeamSpace folder creation',
               },
               name: {
                 type: 'string',
@@ -3238,7 +3239,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID for TeamSpace folder move',
+                description: 'Space name or ID for TeamSpace folder move',
               },
               source: {
                 type: 'string',
@@ -3276,7 +3277,7 @@ Recommended flow:
               },
               space: {
                 type: 'string',
-                description: 'Space ID for TeamSpace folder rename',
+                description: 'Space name or ID for TeamSpace folder rename',
               },
               source: {
                 type: 'string',
@@ -3642,7 +3643,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           properties: {
             space: {
               type: 'string',
-              description: 'Optional TeamSpace ID scope for status counts',
+              description: 'Optional TeamSpace name or ID scope for status counts',
             },
           },
         },
@@ -3656,7 +3657,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           properties: {
             space: {
               type: 'string',
-              description: 'Optional TeamSpace ID scope',
+              description: 'Optional TeamSpace name or ID scope',
             },
             types: {
               type: 'array',
@@ -3708,7 +3709,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
             },
             space: {
               type: 'string',
-              description: 'Optional TeamSpace ID scope',
+              description: 'Optional TeamSpace name or ID scope',
             },
             source: {
               type: 'string',
@@ -3754,7 +3755,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           properties: {
             space: {
               type: 'string',
-              description: 'Optional TeamSpace ID scope for reset',
+              description: 'Optional TeamSpace name or ID scope for reset',
             },
             dryRun: {
               type: 'boolean',
@@ -3968,7 +3969,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
     {
       name: 'noteplan_ui_close_plugin_window',
       description:
-        'Close a floating plugin HTML window by window ID or title. Only works for plugins opened with displayMode "window" (HTMLView.showWindow). For plugins shown in the main editor (displayMode "main") or split view, use noteplan_ui_open_today or noteplan_ui_open_note to navigate away instead. Omit both parameters to close all floating plugin windows.',
+        'Close a plugin HTML window by window ID or title. Works for all display types: floating windows, main view, and split view. Omit both parameters to close all plugin windows. Use noteplan_ui_list_plugin_windows to discover open windows and their IDs first.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3981,6 +3982,15 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
             description: 'Window title to close (case-insensitive). Omit both to close all.',
           },
         },
+      },
+    },
+    {
+      name: 'noteplan_ui_list_plugin_windows',
+      description:
+        'List all currently open plugin HTML windows with their window IDs, titles, display types (window, mainView, splitView, sheet), and plugin IDs. Use this to discover window IDs for closing windows with noteplan_ui_close_plugin_window.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
       },
     },
 
@@ -4604,6 +4614,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         case 'noteplan_ui_close_plugin_window':
           result = uiTools.closePluginWindow(args as any);
+          break;
+        case 'noteplan_ui_list_plugin_windows':
+          result = uiTools.listPluginWindows(args as any);
           break;
 
         // Plugin tools

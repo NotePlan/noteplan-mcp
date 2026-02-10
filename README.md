@@ -1,57 +1,104 @@
 # NotePlan MCP Server
 
-An MCP (Model Context Protocol) server that exposes NotePlan's note and task management functionality to Claude Desktop.
+An MCP (Model Context Protocol) server that exposes NotePlan's note, task, calendar, reminders, and plugin management to AI assistants like Claude.
 
-## Features
+Works with **Claude Desktop** and **Claude Code**. Claude Desktop is great for conversational workflows — planning your day, reviewing tasks, asking questions about your notes. Claude Code is ideal for batch operations and automation — bulk edits, plugin development, or scripting complex workflows across many notes.
 
-- **Unified Access**: Search and manage both local notes (file system) and teamspace notes (SQLite)
-- **Full CRUD**: Create, read, update, and delete notes
-- **Task Management**: Add, complete, and update tasks
-- **Calendar Notes**: Access daily notes by date
-- **Search**: Full-text search across all notes
-- **Progressive Tool Discovery**: `tools/list` is paginated and detailed schemas are fetched on demand
-- **Structured Errors**: Tool failures include machine-readable `code` plus `hint`/`suggestedTool`
-- **Fast Repeated Lookups**: Short-lived in-memory caching for expensive list/resolve paths
-- **Opt-in Timing Telemetry**: `debugTimings=true` adds `durationMs`; heavy discovery tools also add `stageTimings`
-- **Adaptive Performance Hints**: Slow discovery/search responses include `performanceHints` with narrowing suggestions
-- **Safer TeamSpace Deletes**: TeamSpace deletes now move notes into TeamSpace `@Trash` and normal list/search excludes trash by default
-- **Optional Semantic Index**: Local embeddings index + semantic search tools (disabled by default; explicit opt-in)
+## What You Can Do
+
+Once installed, just talk to Claude naturally. Here are some examples:
+
+**Notes & Tasks**
+- "What's on my schedule today?"
+- "Show me all open tasks tagged #urgent"
+- "Add a task to my Daily Note: call the dentist at 3pm"
+- "Summarize my meeting notes from last week"
+- "Move all tasks from 'Inbox' to '20 - Areas/Work'"
+- "What did I write about the product launch?"
+
+**Calendar & Reminders**
+- "What meetings do I have tomorrow?"
+- "Create a calendar event for Friday at 2pm: Design Review"
+- "Remind me to submit the report by end of day"
+- "Show me all reminders due this week"
+
+**Organization**
+- "List all notes in my Projects folder"
+- "Create a new note called 'Q1 Planning' in my Work folder"
+- "Rename the 'Old Ideas' folder to 'Archive'"
+- "Which tags am I using the most?"
+
+**Plugins & Themes**
+- "What plugins do I have installed?"
+- "Create a plugin that adds word counts to my daily notes"
+- "Switch to dark mode"
+- "Show me available plugins I can install"
 
 ## Installation
+
+### Prerequisites
+
+- **Node.js 18+** (`node -v` to check)
+- **Xcode Command Line Tools** — required to compile the Swift calendar/reminders helpers (`xcode-select --install` if not already installed)
+
+### Build
 
 ```bash
 cd noteplan-mcp
 npm install
 npm run build
+```
+
+The `build` step compiles both the TypeScript source and two Swift helper binaries (`calendar-helper` and `reminders-helper`) used for native Calendar and Reminders access.
+
+### Verify
+
+```bash
 npm run smoke:workflow
 ```
 
-## Configuration
+### Configure Claude Desktop
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
       "command": "node",
-      "args": ["/path/to/noteplan-mcp/dist/index.js"],
-      "env": {
-        "NOTEPLAN_EMBEDDINGS_ENABLED": "false"
-      }
+      "args": ["/ABSOLUTE/PATH/TO/noteplan-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-Optional embeddings configuration (only when you explicitly want semantic search):
+Replace `/ABSOLUTE/PATH/TO` with the actual path on your machine (e.g. `/Users/you/Projects/noteplan-mcp`).
+
+### Configure Claude Code
+
+Add to `~/.claude/claude_code_config.json` (or project-level `.claude/settings.json`):
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
       "command": "node",
-      "args": ["/path/to/noteplan-mcp/dist/index.js"],
+      "args": ["/ABSOLUTE/PATH/TO/noteplan-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+### Optional: Semantic Embeddings
+
+To enable the optional semantic search tools, add embeddings environment variables:
+
+```json
+{
+  "mcpServers": {
+    "noteplan": {
+      "command": "node",
+      "args": ["/ABSOLUTE/PATH/TO/noteplan-mcp/dist/index.js"],
       "env": {
         "NOTEPLAN_EMBEDDINGS_ENABLED": "true",
         "NOTEPLAN_EMBEDDINGS_PROVIDER": "openai",
@@ -64,10 +111,29 @@ Optional embeddings configuration (only when you explicitly want semantic search
 }
 ```
 
-Embeddings env notes:
 - `NOTEPLAN_EMBEDDINGS_PROVIDER`: `openai` (default), `mistral`, or `custom`.
 - `NOTEPLAN_EMBEDDINGS_BASE_URL`: for `custom`, assumes OpenAI-compatible `/v1/embeddings`.
 - `NOTEPLAN_EMBEDDINGS_ENABLED`: defaults to `false`; when false, embeddings tools are not listed.
+
+## Features
+
+- **Unified Access**: Search and manage both local notes (file system) and teamspace notes (SQLite)
+- **Full CRUD**: Create, read, update, and delete notes
+- **Task Management**: Add, complete, and update tasks
+- **Calendar Events & Reminders**: Native macOS Calendar and Reminders integration via Swift helpers
+- **Plugin Management**: List, create, install, delete, and run NotePlan plugins
+- **Theme Management**: List, create, and activate themes
+- **Filter Management**: Create, save, and execute task filters
+- **UI Control**: Open notes, toggle sidebar, run plugin commands via AppleScript
+- **Memory**: Persistent key-value memory for storing user preferences across sessions
+- **Search**: Full-text search across all notes
+- **Progressive Tool Discovery**: `tools/list` is paginated and detailed schemas are fetched on demand
+- **Structured Errors**: Tool failures include machine-readable `code` plus `hint`/`suggestedTool`
+- **Fast Repeated Lookups**: Short-lived in-memory caching for expensive list/resolve paths
+- **Opt-in Timing Telemetry**: `debugTimings=true` adds `durationMs`; heavy discovery tools also add `stageTimings`
+- **Adaptive Performance Hints**: Slow discovery/search responses include `performanceHints` with narrowing suggestions
+- **Safer TeamSpace Deletes**: TeamSpace deletes now move notes into TeamSpace `@Trash` and normal list/search excludes trash by default
+- **Optional Semantic Index**: Local embeddings index + semantic search tools (disabled by default; explicit opt-in)
 
 ## Available Tools
 
@@ -88,6 +154,8 @@ Embeddings env notes:
 - `noteplan_insert_content` - Insert content at start/end/heading/line using id/filename/title/date/query targeting
 - `noteplan_delete_lines` - Delete a line range
 - `noteplan_append_content` - Append content using id/filename/title/date/query targeting
+- `noteplan_set_property` - Set a frontmatter property on a note
+- `noteplan_remove_property` - Remove a frontmatter property from a note
 
 ### Task Operations
 - `noteplan_get_tasks` - Get tasks from one note (id/title/filename/date) with filtering/pagination
@@ -97,17 +165,69 @@ Embeddings env notes:
 - `noteplan_complete_task` - Mark task as done (accepts `lineIndex` 0-based or `line` 1-based)
 - `noteplan_update_task` - Update task content/status (accepts `lineIndex` 0-based or `line` 1-based)
 
-### Calendar Operations
+### Calendar Notes
 - `noteplan_get_today` - Get today's daily note
 - `noteplan_add_to_today` - Add content to today
 - `noteplan_get_calendar_note` - Get note for specific date
+- `noteplan_get_periodic_note` - Get periodic notes (weekly, monthly, quarterly, yearly)
+- `noteplan_get_notes_in_range` - Get notes within a date range
+- `noteplan_get_notes_in_folder` - Get notes in a specific folder
 
-### Metadata
+### Calendar Events
+- `calendar_get_events` - Get calendar events for a date range
+- `calendar_create_event` - Create a new calendar event
+- `calendar_update_event` - Update an existing calendar event
+- `calendar_delete_event` - Delete a calendar event (dryRun + confirmation token)
+- `calendar_list_calendars` - List available calendars
+
+### Reminders
+- `reminders_get` - Get reminders with optional filtering
+- `reminders_create` - Create a new reminder
+- `reminders_complete` - Mark a reminder as complete
+- `reminders_update` - Update an existing reminder
+- `reminders_delete` - Delete a reminder (dryRun + confirmation token)
+- `reminders_list_lists` - List available reminder lists
+
+### Filters
+- `noteplan_list_filters` - List saved task filters
+- `noteplan_get_filter` - Get filter details
+- `noteplan_save_filter` - Create or update a task filter
+- `noteplan_rename_filter` - Rename a filter
+- `noteplan_get_filter_tasks` - Execute a filter and return matching tasks
+
+### UI Operations
+- `noteplan_ui_open_note` - Open a note in NotePlan
+- `noteplan_ui_open_today` - Open today's note in NotePlan
+- `noteplan_ui_search` - Search notes in the NotePlan UI
+- `noteplan_ui_run_plugin_command` - Run a specific plugin command
+- `noteplan_ui_open_view` - Open a named view
+- `noteplan_ui_toggle_sidebar` - Toggle the sidebar
+- `noteplan_ui_close_plugin_window` - Close a plugin HTML window
+- `noteplan_ui_list_plugin_windows` - List open plugin HTML windows
+
+### Plugin Management
+- `noteplan_list_plugins` - List installed plugins with IDs, names, versions, and commands
+- `noteplan_create_plugin` - Create a new plugin (plugin.json + script.js)
+- `noteplan_delete_plugin` - Delete an installed plugin
+- `noteplan_list_available_plugins` - List plugins available from the online repository
+- `noteplan_install_plugin` - Install or update a plugin from the repository
+- `noteplan_get_plugin_log` - Read console log from the last plugin execution
+- `noteplan_get_plugin_source` - Read source files of an installed plugin
+
+### Theme Management
+- `noteplan_list_themes` - List available themes (custom and system)
+- `noteplan_get_theme` - Get theme details/content
+- `noteplan_save_theme` - Create or update a custom theme
+- `noteplan_set_theme` - Activate a theme via AppleScript
+
+### Memory
+- `noteplan_memory_save` - Save a key-value memory entry (user preferences, formatting rules)
+- `noteplan_memory_list` - List all stored memories
+- `noteplan_memory_update` - Update an existing memory entry
+- `noteplan_memory_delete` - Delete a memory entry
+
+### Search and Discovery
 - `noteplan_search` - Search by content, title, filename, or title_or_filename via `searchField`, with optional frontmatter property filters (for example `{"category":"marketing"}`); `query: "*"` runs browse mode (metadata listing, no text matching)
-- `noteplan_embeddings_status` - Show embeddings configuration and index counts (only when embeddings are enabled)
-- `noteplan_embeddings_sync` - Build/refresh local embeddings index from notes (only when embeddings are enabled)
-- `noteplan_embeddings_search` - Semantic similarity search over indexed chunks; returns preview payload by default, full chunk text only with `includeText=true`
-- `noteplan_embeddings_reset` - Clear embeddings index data (dryRun + confirmation token)
 - `noteplan_list_spaces` - List spaces with filtering/pagination
 - `noteplan_list_tags` - List tags with filtering/pagination
 - `noteplan_list_folders` - List folders with pagination/filtering (default local depth: 1)
@@ -119,6 +239,12 @@ Embeddings env notes:
 - `noteplan_resolve_note` - Resolve one canonical note target with confidence/ambiguity output
 - `noteplan_search_tools` - Search tool catalog by keyword and return small ranked matches
 - `noteplan_get_tool_details` - Fetch full descriptions/input schemas on demand for selected tools (max 10 names/call)
+
+### Embeddings (opt-in)
+- `noteplan_embeddings_status` - Show embeddings configuration and index counts
+- `noteplan_embeddings_sync` - Build/refresh local embeddings index from notes
+- `noteplan_embeddings_search` - Semantic similarity search over indexed chunks; returns preview payload by default, full chunk text only with `includeText=true`
+- `noteplan_embeddings_reset` - Clear embeddings index data (dryRun + confirmation token)
 
 ## Preferred Usage Flow
 
@@ -174,6 +300,8 @@ The server automatically detects NotePlan's storage location. Supported paths (i
 
 - **Local notes**: Direct file system read/write. NotePlan auto-detects changes via FolderMonitor (~300ms delay)
 - **Teamspace notes**: SQLite queries/updates. NotePlan sees changes on next sync cycle or app restart
+- **Calendar & Reminders**: Native macOS access via compiled Swift helpers using EventKit
+- **UI control & Plugins**: AppleScript bridge to the running NotePlan app
 
 ## License
 

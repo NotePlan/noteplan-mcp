@@ -7,6 +7,7 @@ import {
   searchEmbeddings,
   syncEmbeddings,
 } from '../noteplan/embeddings.js';
+import { resolveSpaceId } from '../noteplan/unified-store.js';
 import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
@@ -26,11 +27,11 @@ function confirmationFailureMessage(toolName: string, reason: string): string {
 const noteTypeSchema = z.enum(['calendar', 'note', 'trash']);
 
 export const embeddingsStatusSchema = z.object({
-  space: z.string().optional().describe('Optional TeamSpace ID scope for status counts'),
+  space: z.string().optional().describe('Optional TeamSpace name or ID scope for status counts'),
 });
 
 export const embeddingsSyncSchema = z.object({
-  space: z.string().optional().describe('Optional TeamSpace ID scope'),
+  space: z.string().optional().describe('Optional TeamSpace name or ID scope'),
   types: z
     .array(noteTypeSchema)
     .optional()
@@ -80,7 +81,7 @@ export const embeddingsSyncSchema = z.object({
 
 export const embeddingsSearchSchema = z.object({
   query: z.string().describe('Semantic search query text'),
-  space: z.string().optional().describe('Optional TeamSpace ID scope'),
+  space: z.string().optional().describe('Optional TeamSpace name or ID scope'),
   source: z
     .enum(['local', 'space'])
     .optional()
@@ -124,7 +125,7 @@ export const embeddingsSearchSchema = z.object({
 });
 
 export const embeddingsResetSchema = z.object({
-  space: z.string().optional().describe('Optional TeamSpace ID scope for reset'),
+  space: z.string().optional().describe('Optional TeamSpace name or ID scope for reset'),
   dryRun: z
     .boolean()
     .optional()
@@ -149,7 +150,7 @@ export function embeddingsStatus(params?: z.infer<typeof embeddingsStatusSchema>
   }
 
   return getEmbeddingsStatus({
-    space: parsed.data.space,
+    space: resolveSpaceId(parsed.data.space),
   });
 }
 
@@ -162,7 +163,7 @@ export async function embeddingsSync(params?: z.infer<typeof embeddingsSyncSchem
     };
   }
 
-  return syncEmbeddings(parsed.data);
+  return syncEmbeddings({ ...parsed.data, space: resolveSpaceId(parsed.data.space) });
 }
 
 export async function embeddingsSearch(params?: z.infer<typeof embeddingsSearchSchema>) {
@@ -185,6 +186,7 @@ export async function embeddingsSearch(params?: z.infer<typeof embeddingsSearchS
   return searchEmbeddings({
     ...parsed.data,
     query,
+    space: resolveSpaceId(parsed.data.space),
   });
 }
 
@@ -206,12 +208,13 @@ export function embeddingsReset(params?: z.infer<typeof embeddingsResetSchema>) 
   }
 
   const toolName = 'noteplan_embeddings_reset';
-  const scopeKey = parsed.data.space?.trim().length
-    ? `space:${parsed.data.space?.trim()}`
+  const resolvedSpace = resolveSpaceId(parsed.data.space);
+  const scopeKey = resolvedSpace
+    ? `space:${resolvedSpace}`
     : 'scope:all';
 
   const preview = previewResetEmbeddings({
-    space: parsed.data.space,
+    space: resolvedSpace,
   });
 
   if (parsed.data.dryRun === true) {
@@ -228,7 +231,7 @@ export function embeddingsReset(params?: z.infer<typeof embeddingsResetSchema>) 
       ...token,
       noteCount: preview.noteCount,
       chunkCount: preview.chunkCount,
-      scope: parsed.data.space ? { space: parsed.data.space } : { scope: 'all' },
+      scope: resolvedSpace ? { space: resolvedSpace } : { scope: 'all' },
     };
   }
 
@@ -246,7 +249,7 @@ export function embeddingsReset(params?: z.infer<typeof embeddingsResetSchema>) 
   }
 
   const removed = resetEmbeddings({
-    space: parsed.data.space,
+    space: resolvedSpace,
   });
 
   return {
@@ -254,6 +257,6 @@ export function embeddingsReset(params?: z.infer<typeof embeddingsResetSchema>) 
     message: `Embeddings index reset complete. Removed ${removed.removedNotes} notes and ${removed.removedChunks} chunks.`,
     removedNotes: removed.removedNotes,
     removedChunks: removed.removedChunks,
-    scope: parsed.data.space ? { space: parsed.data.space } : { scope: 'all' },
+    scope: resolvedSpace ? { space: resolvedSpace } : { scope: 'all' },
   };
 }

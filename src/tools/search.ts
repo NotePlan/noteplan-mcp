@@ -155,7 +155,7 @@ export const searchSchema = z.object({
     .describe(
       'Filter by folders (canonical paths like "20 - Areas"; "Notes/20 - Areas" is accepted). If multiple folders are provided, the first is used for full-text scope.'
     ),
-  space: z.string().optional().describe('Space ID to search in'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   limit: z.number().min(1).max(200).optional().default(20).describe('Maximum number of results'),
   // Enhanced options
   fuzzy: z

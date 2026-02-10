@@ -111,6 +111,42 @@ export interface RestoreNoteResult {
 }
 
 /**
+ * Resolve a space name or ID to a valid space UUID.
+ * Accepts either a UUID (exact match) or a human-readable name (case-insensitive).
+ * Returns undefined when the input is undefined/empty (pass-through for optional params).
+ * Throws when a non-empty value doesn't match any known space.
+ */
+export function resolveSpaceId(space: string | undefined): string | undefined {
+  if (!space) return undefined;
+  const trimmed = space.trim();
+  if (!trimmed) return undefined;
+
+  const spaces = sqliteReader.listSpaces();
+
+  // Exact ID match takes priority (unambiguous)
+  const idMatch = spaces.find((s) => s.id === trimmed);
+  if (idMatch) return idMatch.id;
+
+  // Fall back to case-insensitive name match
+  const lower = trimmed.toLowerCase();
+  const nameMatches = spaces.filter((s) => s.name.toLowerCase() === lower);
+
+  if (nameMatches.length === 1) return nameMatches[0].id;
+
+  if (nameMatches.length > 1) {
+    const options = nameMatches.map((s) => `${s.name} (${s.id})`).join(', ');
+    throw new Error(
+      `Ambiguous space name: "${space}" matches ${nameMatches.length} spaces. Use the space ID instead: ${options}`
+    );
+  }
+
+  const available = spaces.map((s) => `${s.name} (${s.id})`);
+  throw new Error(
+    `Space not found: "${space}". Available spaces: ${available.length > 0 ? available.join(', ') : 'none'}`
+  );
+}
+
+/**
  * Get a note by various identifiers
  */
 export function getNote(options: {
@@ -120,7 +156,8 @@ export function getNote(options: {
   date?: string;
   space?: string;
 }): Note | null {
-  const { id, title, filename, date, space } = options;
+  const { id, title, filename, date } = options;
+  const space = resolveSpaceId(options.space);
 
   // If ID is specified, get directly (best for space notes)
   if (id) {
@@ -186,7 +223,8 @@ export function listNotes(options: {
   space?: string;
   type?: NoteType;
 } = {}): Note[] {
-  const { folder, space, type } = options;
+  const { folder, type } = options;
+  const space = resolveSpaceId(options.space);
   const normalizedFolder = normalizeLocalFolderFilter(folder);
   const cacheKey = JSON.stringify({
     folder: normalizedFolder || '',
@@ -261,7 +299,8 @@ export async function searchNotes(
   query: string,
   options: SearchOptions = {}
 ): Promise<SearchExecutionResult> {
-  const { types, folder, space, limit = 50, fuzzy = false } = options;
+  const { types, folder, limit = 50, fuzzy = false } = options;
+  const space = resolveSpaceId(options.space);
   const normalizedFolder = normalizeLocalFolderFilter(folder);
   const searchField = options.searchField ?? 'content';
   const effectiveTypes: NoteType[] | undefined =
@@ -705,8 +744,15 @@ export function createNote(
     alternatives: [],
   };
 
-  if (space) {
-    const filename = sqliteWriter.createSpaceNote(space, title, content || `# ${title}\n\n`);
+  // Auto-prepend title heading if content doesn't already start with one
+  let effectiveContent = content || `# ${title}\n\n`;
+  if (content && !/^\s*(---[\s\S]*?---\s*)?#\s/.test(content)) {
+    effectiveContent = `# ${title}\n${content}`;
+  }
+
+  const resolvedSpace = resolveSpaceId(space);
+  if (resolvedSpace) {
+    const filename = sqliteWriter.createSpaceNote(resolvedSpace, title, effectiveContent);
     const note = sqliteReader.getSpaceNote(filename);
     if (!note) throw new Error('Failed to create space note');
     invalidateListingCaches();
@@ -730,7 +776,7 @@ export function createNote(
     }
   }
 
-  const filename = fileWriter.createProjectNote(title, content, resolvedFolder);
+  const filename = fileWriter.createProjectNote(title, effectiveContent, resolvedFolder);
   const note = fileReader.readNoteFile(filename);
   if (!note) throw new Error('Failed to create note');
   invalidateListingCaches();
@@ -1061,9 +1107,10 @@ export function getTodayNote(space?: string): Note | null {
  */
 export function getCalendarNote(date: string, space?: string): Note | null {
   const dateStr = parseFlexibleDate(date);
+  const resolvedSpace = resolveSpaceId(space);
 
-  if (space) {
-    return sqliteReader.getSpaceCalendarNote(dateStr, space);
+  if (resolvedSpace) {
+    return sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
   }
 
   return fileReader.getCalendarNote(dateStr);
@@ -1074,12 +1121,13 @@ export function getCalendarNote(date: string, space?: string): Note | null {
  */
 export function ensureCalendarNote(date: string, space?: string): Note {
   const dateStr = parseFlexibleDate(date);
+  const resolvedSpace = resolveSpaceId(space);
 
-  if (space) {
-    let note = sqliteReader.getSpaceCalendarNote(dateStr, space);
+  if (resolvedSpace) {
+    let note = sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
     if (!note) {
-      sqliteWriter.createSpaceCalendarNote(space, dateStr, '');
-      note = sqliteReader.getSpaceCalendarNote(dateStr, space);
+      sqliteWriter.createSpaceCalendarNote(resolvedSpace, dateStr, '');
+      note = sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
       invalidateListingCaches();
     }
     if (!note) throw new Error('Failed to create space calendar note');
@@ -1203,15 +1251,16 @@ export type FolderRenameResult = LocalFolderRenameResult | SpaceFolderRenameResu
  * List folders with optional source/depth/query filtering
  */
 export function listFolders(options: ListFoldersOptions = {}): Folder[] {
+  const resolvedSpace = resolveSpaceId(options.space);
   const {
-    space,
-    includeLocal = !options.space,
-    includeSpaces = Boolean(options.space),
+    includeLocal = !resolvedSpace,
+    includeSpaces = Boolean(resolvedSpace),
     query,
     maxDepth,
     parentPath,
     recursive = true,
   } = options;
+  const space = resolvedSpace;
   const normalizedQuery = query?.trim().toLowerCase() || '';
   const normalizedParentPath = normalizeLocalFolderFilter(parentPath);
   const cacheKey = JSON.stringify({
@@ -1307,7 +1356,7 @@ export function previewCreateFolder(
   options: { path: string } | { space: string; name: string; parent?: string }
 ): FolderCreateResult {
   if ('space' in options) {
-    const spaceId = options.space.trim();
+    const spaceId = resolveSpaceId(options.space.trim());
     if (!spaceId) {
       throw new Error('space is required');
     }
@@ -1384,7 +1433,7 @@ export function previewMoveFolder(
     | { space: string; source: string; destination: string }
 ): FolderMoveResult {
   if ('space' in options) {
-    const spaceId = options.space.trim();
+    const spaceId = resolveSpaceId(options.space.trim());
     if (!spaceId) {
       throw new Error('space is required');
     }
@@ -1457,7 +1506,7 @@ export function previewRenameFolder(
     | { space: string; source: string; newName: string }
 ): FolderRenameResult {
   if ('space' in options) {
-    const spaceId = options.space.trim();
+    const spaceId = resolveSpaceId(options.space.trim());
     if (!spaceId) {
       throw new Error('space is required');
     }
@@ -1525,13 +1574,14 @@ export function renameFolder(
  * List all tags
  */
 export function listTags(space?: string): string[] {
+  const resolvedSpace = resolveSpaceId(space);
   const tags = new Set<string>();
 
-  if (!space) {
+  if (!resolvedSpace) {
     fileReader.extractAllTags().forEach((tag) => tags.add(tag));
   }
 
-  sqliteReader.extractSpaceTags(space).forEach((tag) => tags.add(tag));
+  sqliteReader.extractSpaceTags(resolvedSpace).forEach((tag) => tags.add(tag));
 
   return Array.from(tags).sort();
 }

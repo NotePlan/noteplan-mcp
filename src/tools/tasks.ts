@@ -125,7 +125,7 @@ export const getTasksSchema = z.object({
     .string()
     .optional()
     .describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
-  space: z.string().optional().describe('Space ID to search in'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   status: z
     .enum(['open', 'done', 'cancelled', 'scheduled'])
     .optional()
@@ -149,7 +149,7 @@ export const searchTasksSchema = z.object({
   title: z.string().optional().describe('Note title to search for'),
   filename: z.string().optional().describe('Direct filename/path to the note'),
   date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
-  space: z.string().optional().describe('Space ID to search in'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   query: z.string().describe('Task query text'),
   caseSensitive: z.boolean().optional().default(false).describe('Case-sensitive task text search'),
   wholeWord: z.boolean().optional().default(false).describe('Whole-word task text match'),
@@ -179,7 +179,7 @@ export const searchTasksGlobalSchema = z.object({
     .optional()
     .describe('Filter by task status before query match'),
   folder: z.string().optional().describe('Restrict to a specific folder path'),
-  space: z.string().optional().describe('Restrict to a specific space ID'),
+  space: z.string().optional().describe('Restrict to a specific space name or ID'),
   noteQuery: z.string().optional().describe('Filter notes by title/filename/folder substring'),
   noteTypes: z
     .array(z.enum(['calendar', 'note', 'trash']))
@@ -215,7 +215,7 @@ export const addTaskSchema = z.object({
     .string()
     .optional()
     .describe('Heading to add task under (when position is after-heading)'),
-  space: z.string().optional().describe('Space ID when targeting daily notes'),
+  space: z.string().optional().describe('Space name or ID when targeting daily notes'),
   status: z
     .enum(['open', 'done', 'cancelled', 'scheduled'])
     .optional()

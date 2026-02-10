@@ -19,7 +19,7 @@ function toBoundedInt(value: unknown, defaultValue: number, min: number, max: nu
 }
 
 export const getTodaySchema = z.object({
-  space: z.string().optional().describe('Space ID to get today from'),
+  space: z.string().optional().describe('Space name or ID to get today from'),
 });
 
 export const addToTodaySchema = z.object({
@@ -29,14 +29,14 @@ export const addToTodaySchema = z.object({
     .optional()
     .default('end')
     .describe('Where to add the content'),
-  space: z.string().optional().describe('Space ID'),
+  space: z.string().optional().describe('Space name or ID'),
 });
 
 export const getCalendarNoteSchema = z.object({
   date: z
     .string()
     .describe('Date in YYYYMMDD, YYYY-MM-DD format, or "today", "tomorrow", "yesterday"'),
-  space: z.string().optional().describe('Space ID'),
+  space: z.string().optional().describe('Space name or ID'),
 });
 
 export function getToday(params: z.infer<typeof getTodaySchema>) {
@@ -140,7 +140,7 @@ export const getPeriodicNoteSchema = z.object({
   year: z.number().optional().describe('For weekly/yearly notes: specific year (e.g., 2025)'),
   month: z.number().optional().describe('For monthly notes: specific month (1-12). Use with year parameter.'),
   quarter: z.number().optional().describe('For quarterly notes: specific quarter (1-4). Use with year parameter.'),
-  space: z.string().optional().describe('Space ID'),
+  space: z.string().optional().describe('Space name or ID'),
 });
 
 export const getNotesInRangeSchema = z.object({
@@ -150,7 +150,7 @@ export const getNotesInRangeSchema = z.object({
   startDate: z.string().optional().describe('Start date for custom range (YYYY-MM-DD)'),
   endDate: z.string().optional().describe('End date for custom range (YYYY-MM-DD)'),
   includeContent: z.boolean().optional().describe('Include full note content (default: false for summaries only)'),
-  space: z.string().optional().describe('Space ID'),
+  space: z.string().optional().describe('Space name or ID'),
   maxDays: z.number().min(1).max(366).optional().default(90).describe('Maximum number of days to scan'),
   limit: z.number().min(1).max(200).optional().default(50).describe('Maximum number of days to return in this page'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset within scanned days'),
@@ -191,7 +191,7 @@ export const getRecentPeriodicNotesSchema = z.object({
     .optional()
     .default(52)
     .describe('Max period slots to inspect while collecting matches'),
-  space: z.string().optional().describe('Space ID'),
+  space: z.string().optional().describe('Space name or ID'),
 });
 
 export const getNotesInFolderSchema = z.object({

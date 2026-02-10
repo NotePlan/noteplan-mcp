@@ -70,7 +70,7 @@ export const listSpacesSchema = z.object({
 });
 
 export const listTagsSchema = z.object({
-  space: z.string().optional().describe('Space ID to list tags from'),
+  space: z.string().optional().describe('Space name or ID to list tags from'),
   query: z.string().optional().describe('Filter tags by substring'),
   limit: z.number().min(1).max(500).optional().default(100).describe('Maximum number of tags to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
@@ -78,7 +78,7 @@ export const listTagsSchema = z.object({
 });
 
 export const listFoldersSchema = z.object({
-  space: z.string().optional().describe('Space ID to list folders from'),
+  space: z.string().optional().describe('Space name or ID to list folders from'),
   includeLocal: z
     .boolean()
     .optional()
@@ -113,7 +113,7 @@ export const listFoldersSchema = z.object({
 
 export const findFoldersSchema = z.object({
   query: z.string().describe('Folder query, e.g. "project" or "inbox"'),
-  space: z.string().optional().describe('Restrict to a specific space ID'),
+  space: z.string().optional().describe('Restrict to a specific space name or ID'),
   includeLocal: z
     .boolean()
     .optional()
@@ -128,7 +128,7 @@ export const findFoldersSchema = z.object({
 
 export const resolveFolderSchema = z.object({
   query: z.string().describe('Folder text to resolve to one canonical folder path'),
-  space: z.string().optional().describe('Restrict to a specific space ID'),
+  space: z.string().optional().describe('Restrict to a specific space name or ID'),
   includeLocal: z
     .boolean()
     .optional()
@@ -154,7 +154,7 @@ export const createFolderSchema = z.object({
     .string()
     .optional()
     .describe('Local folder path under Notes (e.g., "20 - Areas/Marketing")'),
-  space: z.string().optional().describe('Space ID for TeamSpace folder creation'),
+  space: z.string().optional().describe('Space name or ID for TeamSpace folder creation'),
   name: z
     .string()
     .optional()
@@ -193,7 +193,7 @@ export const moveFolderSchema = z.object({
     .string()
     .optional()
     .describe('Local destination folder path under Notes (or "Notes" for root)'),
-  space: z.string().optional().describe('Space ID for TeamSpace folder move'),
+  space: z.string().optional().describe('Space name or ID for TeamSpace folder move'),
   source: z
     .string()
     .optional()
@@ -251,7 +251,7 @@ export const renameFolderSchema = z.object({
     .optional()
     .describe('Local source folder path under Notes'),
   newName: z.string().describe('New folder name'),
-  space: z.string().optional().describe('Space ID for TeamSpace folder rename'),
+  space: z.string().optional().describe('Space name or ID for TeamSpace folder rename'),
   source: z
     .string()
     .optional()

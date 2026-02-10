@@ -314,7 +314,7 @@ export const getNoteSchema = z.object({
   title: z.string().optional().describe('Note title to search for'),
   filename: z.string().optional().describe('Direct filename/path to the note (for local notes)'),
   date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
-  space: z.string().optional().describe('Space ID to search in'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   includeContent: z
     .boolean()
     .optional()
@@ -338,7 +338,7 @@ export const listNotesSchema = z.object({
     .string()
     .optional()
     .describe('Filter by project folder path (e.g., "20 - Areas" or "Notes/20 - Areas")'),
-  space: z.string().optional().describe('Space ID to list from'),
+  space: z.string().optional().describe('Space name or ID to list from'),
   types: z
     .array(z.enum(['calendar', 'note', 'trash']))
     .optional()
@@ -351,7 +351,7 @@ export const listNotesSchema = z.object({
 
 export const resolveNoteSchema = z.object({
   query: z.string().describe('Note reference to resolve (ID, title, filename, or date token)'),
-  space: z.string().optional().describe('Restrict to a specific space ID'),
+  space: z.string().optional().describe('Restrict to a specific space name or ID'),
   folder: z.string().optional().describe('Restrict to a folder path'),
   types: z
     .array(z.enum(['calendar', 'note', 'trash']))
@@ -373,7 +373,7 @@ export const createNoteSchema = z.object({
   content: z.string().optional().describe('Initial content for the note. Can include YAML frontmatter between --- delimiters for styling (icon, icon-color, bg-color, bg-color-dark, bg-pattern, status, priority, summary, type, domain)'),
   folder: z.string().optional().describe('Folder to create the note in. Supports smart matching (e.g., "projects" matches "10 - Projects")'),
   create_new_folder: z.boolean().optional().describe('Set to true to create a new folder instead of matching existing ones'),
-  space: z.string().optional().describe('Space ID to create in'),
+  space: z.string().optional().describe('Space name or ID to create in (e.g., "My Team" or a UUID)'),
 });
 
 export const updateNoteSchema = z.object({
@@ -1191,7 +1191,7 @@ export const searchParagraphsSchema = z.object({
   title: z.string().optional().describe('Note title to search for'),
   filename: z.string().optional().describe('Direct filename/path to the note'),
   date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
-  space: z.string().optional().describe('Space ID to search in'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   query: z.string().describe('Text to find in note lines/paragraphs'),
   caseSensitive: z.boolean().optional().default(false).describe('Case-sensitive match (default: false)'),
   wholeWord: z.boolean().optional().default(false).describe('Require whole-word matches (default: false)'),
@@ -1437,7 +1437,7 @@ export const insertContentSchema = z.object({
   title: z.string().optional().describe('Note title to target (resolved if unique)'),
   date: z.string().optional().describe('Calendar note date target (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
   query: z.string().optional().describe('Resolvable note query (fuzzy note lookup before insert)'),
-  space: z.string().optional().describe('Space ID scope for title/date/query resolution'),
+  space: z.string().optional().describe('Space name or ID scope for title/date/query resolution'),
   content: z.string().describe('Content to insert'),
   position: z
     .enum(['start', 'end', 'after-heading', 'at-line'])
@@ -1494,7 +1494,7 @@ export const appendContentSchema = z.object({
   title: z.string().optional().describe('Note title to target (resolved if unique)'),
   date: z.string().optional().describe('Calendar note date target (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
   query: z.string().optional().describe('Resolvable note query (fuzzy note lookup before append)'),
-  space: z.string().optional().describe('Space ID scope for title/date/query resolution'),
+  space: z.string().optional().describe('Space name or ID scope for title/date/query resolution'),
   content: z.string().describe('Content to append'),
   indentationStyle: z
     .enum(['tabs', 'preserve'])

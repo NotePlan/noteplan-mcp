@@ -196,7 +196,7 @@ export const getFilterTasksSchema = z.object({
   limit: z.number().min(1).max(300).optional().default(30).describe('Maximum matches to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
-  space: z.string().optional().describe('Optional space ID scope'),
+  space: z.string().optional().describe('Optional space name or ID scope'),
   folder: z.string().optional().describe('Optional folder scope'),
 });
 

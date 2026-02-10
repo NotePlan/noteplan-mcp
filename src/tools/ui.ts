@@ -37,6 +37,8 @@ export const closePluginWindowSchema = z.object({
   title: z.string().optional().describe('Window title to close (case-insensitive match). Omit both windowID and title to close all plugin windows.'),
 });
 
+export const listPluginWindowsSchema = z.object({});
+
 // --- Implementations ---
 
 export function openNote(args: z.infer<typeof openNoteSchema>): { success: boolean; message: string } {
@@ -135,8 +137,29 @@ export function closePluginWindow(args: z.infer<typeof closePluginWindowSchema>)
     return {
       success: closed,
       message: closed ? `Closed plugin window titled "${title}"` : `No plugin window found titled "${title}"`,
-      hint: 'This only closes floating plugin windows (displayMode: "window"). If the plugin is shown in the main editor or split view, open a note instead to dismiss it (e.g. noteplan_ui_open_today).',
     };
   }
   return { success: closed, message: closed ? 'Closed all plugin windows' : 'No plugin windows were open' };
+}
+
+export function listPluginWindows(_args: z.infer<typeof listPluginWindowsSchema>): Record<string, unknown> {
+  let raw: string;
+  try {
+    raw = runAppleScript(`tell application "${APP_NAME}" to listPluginWindows`, 15_000);
+  } catch (e: any) {
+    return { success: false, error: `Failed to list plugin windows: ${e.message}` };
+  }
+
+  let windows: any[];
+  try {
+    windows = JSON.parse(raw);
+  } catch {
+    return { success: false, error: 'Failed to parse plugin windows list from NotePlan' };
+  }
+
+  return {
+    success: true,
+    count: windows.length,
+    windows,
+  };
 }

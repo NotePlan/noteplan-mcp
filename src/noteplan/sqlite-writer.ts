@@ -55,15 +55,22 @@ function ensureMcpChangesTable(database: OpenDatabase): void {
   database.prepare(`
     CREATE TABLE IF NOT EXISTS mcp_changes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      note_id TEXT NOT NULL
+      note_id TEXT NOT NULL,
+      old_parent TEXT
     )
   `).run();
+  // Add old_parent column if upgrading from older schema
+  try {
+    database.prepare(`ALTER TABLE mcp_changes ADD COLUMN old_parent TEXT`).run();
+  } catch {
+    // Column already exists
+  }
   mcpChangesTableReady = true;
 }
 
-function queueMcpChange(database: OpenDatabase, noteId: string): void {
+function queueMcpChange(database: OpenDatabase, noteId: string, oldParent?: string): void {
   ensureMcpChangesTable(database);
-  database.prepare('INSERT INTO mcp_changes (note_id) VALUES (?)').run(noteId);
+  database.prepare('INSERT INTO mcp_changes (note_id, old_parent) VALUES (?, ?)').run(noteId, oldParent ?? null);
 }
 
 function getSpaceNode(identifier: string): SpaceNodeRow {
@@ -424,7 +431,7 @@ export function moveSpaceNote(identifier: string, destinationParentId: string): 
     if (result.changes === 0) {
       throw new Error(`Note not found: ${identifier}`);
     }
-    queueMcpChange(database, node.id);
+    queueMcpChange(database, node.id, node.parent ?? undefined);
 
     return {
       noteId: node.id,
@@ -582,7 +589,7 @@ export function moveSpaceFolder(identifier: string, destinationParentId: string)
     if (result.changes === 0) {
       throw new Error(`Folder not found: ${identifier}`);
     }
-    queueMcpChange(database, node.id);
+    queueMcpChange(database, node.id, node.parent ?? undefined);
 
     return {
       noteId: node.id,
