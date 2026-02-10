@@ -1841,11 +1841,10 @@ Use this when the user wants to:
 - Add content at the start without touching frontmatter
 
 Inserting empty/blank lines:
-- To insert ONE empty line before line N: use position="at-line", line=N, content="" (empty string). This splices a single blank line before the target.
-- Do NOT use content="\\n" — the content is spliced into the line array as-is, so "\\n" produces TWO blank lines (one from the newline character, one from the array join).
+- To insert ONE empty line before line N: use position="at-line", line=N, content="" (empty string).
 - To insert an empty line with type metadata, use type="empty" with content="".
 
-Newline behavior: The content string is inserted as a single element into the line array, then lines are joined with \\n. Multi-line content (containing \\n) works but each \\n in your content adds an additional line. For a single blank line, always use content="".
+Newline handling: A single trailing newline is automatically stripped from content before insertion. This means content="A\\nB\\n" inserts exactly 2 lines (A and B), not 2 lines plus a blank. To add a blank line after your content, use a separate insert_content call with content="".
 
 Structured typing: set "type" to auto-format content with correct markdown markers. For example, type="task" with taskStatus="open" generates the correct task prefix from user preferences. Available types: title, heading, task, checklist, bullet, quote, separator, empty, text.
 

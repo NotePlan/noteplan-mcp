@@ -138,6 +138,13 @@ export function insertContentAtPosition(
   const { position, heading, line } = options;
   const lines = content.split('\n');
 
+  // Split newContent into individual lines so splice inserts one element per
+  // line.  Strip a single trailing newline first — trailing \n in the content
+  // string is almost never intentional and would otherwise create an extra
+  // blank line after join('\n').  Callers who need an explicit blank line
+  // should insert content="" separately.
+  const newLines = newContent.replace(/\n$/, '').split('\n');
+
   switch (position) {
     case 'start': {
       // Insert after frontmatter if present
@@ -150,12 +157,13 @@ export function insertContentAtPosition(
           }
         }
       }
-      lines.splice(insertIndex, 0, newContent);
+      lines.splice(insertIndex, 0, ...newLines);
       break;
     }
 
     case 'end': {
-      // Append at end
+      // Append at end — use original newContent (no trailing-\n strip)
+      // because appending doesn't go through splice+join.
       if (content.endsWith('\n')) {
         return content + newContent;
       }
@@ -189,7 +197,7 @@ export function insertContentAtPosition(
       }
 
       // Insert after the heading
-      lines.splice(headingIndex + 1, 0, newContent);
+      lines.splice(headingIndex + 1, 0, ...newLines);
       break;
     }
 
@@ -201,7 +209,7 @@ export function insertContentAtPosition(
       while (lines.length < line) {
         lines.push('');
       }
-      lines.splice(line, 0, newContent);
+      lines.splice(line, 0, ...newLines);
       break;
     }
 
