@@ -5,32 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { getNotePlanPath } from '../noteplan/file-reader.js';
-
-const APPLESCRIPT_TIMEOUT_MS = 15_000;
-const APP_NAME = 'NotePlan';
-
-function escapeAppleScript(str: string): string {
-  return str
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/[\x00-\x1f]/g, ' ');
-}
-
-function runAppleScript(script: string, timeoutMs = APPLESCRIPT_TIMEOUT_MS): string {
-  try {
-    return execFileSync('osascript', ['-e', script], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: timeoutMs,
-    }).trim();
-  } catch (error: any) {
-    if (error.killed) {
-      throw new Error('AppleScript timed out');
-    }
-    const stderr = (error.stderr || '').trim();
-    throw new Error(stderr || error.message || 'AppleScript execution failed');
-  }
-}
+import { escapeAppleScript, runAppleScript, APP_NAME } from '../utils/applescript.js';
 
 function themesPath(): string {
   return path.join(getNotePlanPath(), 'Themes');
@@ -282,27 +257,78 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
         message: `Theme saved to ${filename} but failed to activate: ${err.message}`,
       };
     }
+
+    // Warn if theme was applied to a mode the user isn't currently viewing
+    const currentLight = readDefaults('themeLight');
+    const currentDark = readDefaults('themeDark');
+    const nameWithoutExt = filename.replace(/\.json$/, '');
+    const modeHint =
+      mode === 'dark' && currentLight && currentLight !== nameWithoutExt && currentLight !== filename
+        ? 'Note: This dark theme was activated for dark mode. Switch to dark mode to see it.'
+        : mode === 'light' && currentDark && currentDark !== nameWithoutExt && currentDark !== filename
+          ? 'Note: This light theme was activated for light mode. Switch to light mode to see it.'
+          : undefined;
+
+    return {
+      success: true,
+      filename,
+      activatedForMode: mode,
+      strippedKeys: allStrippedKeys.length > 0 ? allStrippedKeys : undefined,
+      message: `Theme saved and activated: ${filename}`,
+      ...(modeHint ? { hint: modeHint } : {}),
+    };
   }
 
   return {
     success: true,
     filename,
     strippedKeys: allStrippedKeys.length > 0 ? allStrippedKeys : undefined,
-    message: setActive
-      ? `Theme saved and activated: ${filename}`
-      : `Theme saved: ${filename}`,
+    message: `Theme saved: ${filename}`,
   };
 }
 
 export function setTheme(args: z.infer<typeof setThemeSchema>): Record<string, unknown> {
   const { name, mode } = setThemeSchema.parse(args);
 
+  // Resolve display name → filename for custom themes
+  let resolvedName = name;
+  const dir = themesPath();
+  if (fs.existsSync(dir)) {
+    // If the name doesn't match a system theme or a file directly, search by display name
+    const nameWithoutExt = name.replace(/\.json$/, '');
+    const isSystemTheme = SYSTEM_THEMES.includes(nameWithoutExt) || SYSTEM_THEMES.includes(name);
+    if (!isSystemTheme) {
+      const isDirectFilename = fs.existsSync(path.join(dir, name)) || fs.existsSync(path.join(dir, name + '.json'));
+      if (!isDirectFilename) {
+        // Search custom themes by display name
+        const entries = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+        for (const filename of entries) {
+          try {
+            const content = JSON.parse(fs.readFileSync(path.join(dir, filename), 'utf-8'));
+            if (content.name === name) {
+              resolvedName = filename;
+              break;
+            }
+          } catch {
+            // skip
+          }
+        }
+      }
+    }
+  }
+
   const resolvedMode = mode ?? 'auto';
-  const script = `tell application "${APP_NAME}" to setTheme to "${escapeAppleScript(name)}" for mode "${escapeAppleScript(resolvedMode)}"`;
+  const script = `tell application "${APP_NAME}" to setTheme to "${escapeAppleScript(resolvedName)}" for mode "${escapeAppleScript(resolvedMode)}"`;
   runAppleScript(script);
 
-  return {
+  const result: Record<string, unknown> = {
     success: true,
     message: `Theme set to "${name}" for mode "${resolvedMode}"`,
   };
+
+  if (resolvedName !== name) {
+    result.resolvedFilename = resolvedName;
+  }
+
+  return result;
 }
