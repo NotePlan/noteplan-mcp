@@ -4002,7 +4002,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
     {
       name: 'noteplan_create_plugin',
       description:
-        'Create a NotePlan plugin with an HTML view. Writes plugin.json and script.js to the Plugins folder, optionally reloads and launches it. If a plugin with the same ID already exists, it will be overwritten. Use noteplan_get_plugin_source to read existing source before modifying. The plugin opens in the main editor area by default — this is the preferred display mode. It also gets pinned to the sidebar for easy access. Read the plugin API resources (e.g. noteplan://plugin-api/HTMLView.md) for API reference when building complex plugins.',
+        'Create a NotePlan plugin with an HTML view. Writes plugin.json and script.js to the Plugins folder, optionally reloads and launches it. If a plugin with the same ID already exists, it will be overwritten. Use noteplan_get_plugin_source to read existing source before modifying. The plugin opens in the main editor area by default — this is the preferred display mode. It also gets pinned to the sidebar for easy access. Read the plugin API resources (e.g. noteplan://plugin-api/HTMLView.md) for API reference when building complex plugins. Webview network note: only HTTPS requests work (HTTP blocked by App Transport Security). Use console.log liberally — output is captured by noteplan_get_plugin_log.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4100,7 +4100,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
     {
       name: 'noteplan_get_plugin_log',
       description:
-        'Read the console log captured during the last execution of a plugin. Returns console.log, console.warn, console.error, and JS exception output. Use this after noteplan_ui_run_plugin_command to inspect plugin behavior, debug errors, or enable self-repair workflows.',
+        'Read the console log captured during the last execution of a plugin. Captures console.log, console.warn, console.error, and JS exceptions from both the plugin script and HTML webview JavaScript. Use this after noteplan_ui_run_plugin_command to inspect plugin behavior, debug errors, or enable self-repair workflows. Tip: add console.log statements in plugin HTML for debugging.',
       inputSchema: {
         type: 'object',
         properties: {
