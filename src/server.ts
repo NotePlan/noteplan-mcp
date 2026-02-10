@@ -5,7 +5,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 
 // Import tool implementations
 import * as noteTools from './tools/notes.js';
@@ -38,6 +43,27 @@ type ToolAnnotations = {
 };
 
 const TOOLS_LIST_PAGE_SIZE = 20;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PLUGIN_API_DOCS_DIR = path.join(__dirname, '../../Shared/Supporting Files/np.myplugin');
+
+const PLUGIN_API_RESOURCES = [
+  { file: 'getting-started.md', name: 'Getting Started Guide', desc: 'How to create NotePlan plugins — structure, setup, first plugin, testing, HTML views' },
+  { file: 'Editor.md',          name: 'Editor API',            desc: 'Note manipulation — insertText, paragraphs, selection, themes, openNoteByTitle' },
+  { file: 'DataStore.md',       name: 'DataStore API',         desc: 'Data access — folders, notes, preferences, teamspaces, hashtags' },
+  { file: 'NoteObject.md',      name: 'Note Object',           desc: 'Note properties/methods — content, paragraphs, frontmatter, dates' },
+  { file: 'Calendar.md',        name: 'Calendar API',          desc: 'Calendar events and reminders — add, update, query' },
+  { file: 'NotePlan.md',        name: 'NotePlan API',          desc: 'Core globals — environment, AI, themes, settings' },
+  { file: 'CommandBar.md',      name: 'CommandBar API',        desc: 'User interaction — showOptions, showInput, showLoading, textPrompt' },
+  { file: 'HTMLView.md',        name: 'HTMLView API',          desc: 'HTML views — showWindow, showInMainWindow, showInSplitView, JS bridge' },
+  { file: 'CalendarItem.md',    name: 'CalendarItem Object',   desc: 'Calendar event/reminder structure and properties' },
+  { file: 'ParagraphObject.md', name: 'Paragraph Object',      desc: 'Paragraph structure — type, content, heading level, indents, links' },
+  { file: 'Clipboard.md',       name: 'Clipboard API',         desc: 'Read/write system clipboard' },
+  { file: 'RangeObject.md',     name: 'Range Object',          desc: 'Text range — start, end, length for selections' },
+  { file: 'plugin.json',        name: 'Demo plugin.json',      desc: 'Example plugin manifest — ID, name, commands, settings, dependencies' },
+  { file: 'script.js',          name: 'Demo script.js',        desc: 'Example plugin implementation with multiple API usage examples' },
+];
 
 function normalizeToolName(name: string): string {
   const separatorIndex = name.lastIndexOf(':');
@@ -454,6 +480,16 @@ const MEMORY_LIST_OUTPUT_SCHEMA = outputSchemaWithErrors({
   memories: { type: 'array', items: { type: 'object' } },
 });
 
+const PLUGINS_LIST_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  plugins: { type: 'array', items: { type: 'object' } },
+});
+
+const AVAILABLE_PLUGINS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  plugins: { type: 'array', items: { type: 'object' } },
+});
+
 function getToolOutputSchema(toolName: string): Record<string, unknown> {
   switch (toolName) {
     case 'noteplan_get_note':
@@ -513,12 +549,21 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_ui_open_note':
     case 'noteplan_ui_open_today':
     case 'noteplan_ui_search':
-    case 'noteplan_ui_run_plugin':
-    case 'noteplan_ui_reload_plugins':
+    case 'noteplan_ui_run_plugin_command':
     case 'noteplan_ui_open_view':
     case 'noteplan_ui_toggle_sidebar':
+    case 'noteplan_ui_close_plugin_window':
     case 'noteplan_create_plugin':
     case 'noteplan_delete_plugin':
+    case 'noteplan_install_plugin':
+      return MESSAGE_OUTPUT_SCHEMA;
+    case 'noteplan_list_plugins':
+      return PLUGINS_LIST_OUTPUT_SCHEMA;
+    case 'noteplan_get_plugin_log':
+    case 'noteplan_get_plugin_source':
+      return MESSAGE_OUTPUT_SCHEMA;
+    case 'noteplan_list_available_plugins':
+      return AVAILABLE_PLUGINS_OUTPUT_SCHEMA;
     case 'noteplan_list_themes':
     case 'noteplan_get_theme':
     case 'noteplan_save_theme':
@@ -680,6 +725,10 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_memory_list',
     'noteplan_list_themes',
     'noteplan_get_theme',
+    'noteplan_list_plugins',
+    'noteplan_get_plugin_log',
+    'noteplan_get_plugin_source',
+    'noteplan_list_available_plugins',
   ]);
 
   const destructiveTools = new Set([
@@ -730,7 +779,8 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_memory_delete',
     'noteplan_create_plugin',
     'noteplan_delete_plugin',
-    'noteplan_ui_run_plugin',
+    'noteplan_install_plugin',
+    'noteplan_ui_run_plugin_command',
     'noteplan_ui_toggle_sidebar',
     'noteplan_save_theme',
   ]);
@@ -749,6 +799,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'reminders_list_lists',
     'noteplan_embeddings_sync',
     'noteplan_embeddings_search',
+    'noteplan_list_available_plugins',
   ]);
 
   return {
@@ -865,6 +916,9 @@ function getToolSearchAliases(toolName: string): string[] {
   }
   if (toolName.includes('memory_')) {
     aliases.push('memory', 'memories', 'preference', 'preferences', 'remember', 'correction');
+  }
+  if (toolName.includes('plugin')) {
+    aliases.push('plugin', 'plugins', 'extension', 'command', 'addon');
   }
 
   return aliases;
@@ -1230,6 +1284,25 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
     case 'noteplan_memory_delete':
       suggestedNextTools = ['noteplan_memory_list'];
       break;
+    case 'noteplan_list_plugins':
+      suggestedNextTools = ['noteplan_ui_run_plugin_command', 'noteplan_create_plugin', 'noteplan_get_plugin_source', 'noteplan_list_available_plugins'];
+      break;
+    case 'noteplan_create_plugin':
+    case 'noteplan_delete_plugin':
+      suggestedNextTools = ['noteplan_list_plugins'];
+      break;
+    case 'noteplan_get_plugin_source':
+      suggestedNextTools = ['noteplan_create_plugin', 'noteplan_ui_run_plugin_command'];
+      break;
+    case 'noteplan_list_available_plugins':
+      suggestedNextTools = ['noteplan_install_plugin'];
+      break;
+    case 'noteplan_install_plugin':
+      suggestedNextTools = ['noteplan_list_plugins', 'noteplan_ui_run_plugin_command'];
+      break;
+    case 'noteplan_get_plugin_log':
+      suggestedNextTools = ['noteplan_ui_run_plugin_command', 'noteplan_create_plugin'];
+      break;
     default:
       suggestedNextTools = [];
   }
@@ -1302,6 +1375,7 @@ export function createServer(): Server {
     {
       capabilities: {
         tools: {},
+        resources: {},
       },
     }
   );
@@ -3847,33 +3921,26 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
       },
     },
     {
-      name: 'noteplan_ui_run_plugin',
-      description: 'Run a plugin command in NotePlan.',
+      name: 'noteplan_ui_run_plugin_command',
+      description:
+        'Run a specific plugin command in NotePlan via AppleScript. Use noteplan_list_plugins first to discover available plugins and their commands, then call this with the correct pluginId and command name.',
       inputSchema: {
         type: 'object',
         properties: {
           pluginId: {
             type: 'string',
-            description: 'Plugin ID',
+            description: 'Plugin ID (e.g., "np.MeetingNotes"). Use noteplan_list_plugins to find valid IDs.',
           },
           command: {
             type: 'string',
-            description: 'Command name',
+            description: 'Command name to execute (must match a command name from the plugin\'s command list)',
           },
           arguments: {
             type: 'string',
-            description: 'JSON arguments string',
+            description: 'Optional JSON arguments string to pass to the command',
           },
         },
         required: ['pluginId', 'command'],
-      },
-    },
-    {
-      name: 'noteplan_ui_reload_plugins',
-      description: 'Reload all plugins in NotePlan.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
       },
     },
     {
@@ -3898,12 +3965,44 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         properties: {},
       },
     },
+    {
+      name: 'noteplan_ui_close_plugin_window',
+      description:
+        'Close a floating plugin HTML window by window ID or title. Only works for plugins opened with displayMode "window" (HTMLView.showWindow). For plugins shown in the main editor (displayMode "main") or split view, use noteplan_ui_open_today or noteplan_ui_open_note to navigate away instead. Omit both parameters to close all floating plugin windows.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          windowID: {
+            type: 'string',
+            description: 'Window ID to close (exact match)',
+          },
+          title: {
+            type: 'string',
+            description: 'Window title to close (case-insensitive). Omit both to close all.',
+          },
+        },
+      },
+    },
 
-    // Plugin creation tools
+    // Plugin tools
+    {
+      name: 'noteplan_list_plugins',
+      description:
+        'List all installed NotePlan plugins with their IDs, names, versions, and available commands. Use this to discover which plugins are available and what commands they offer before calling noteplan_ui_run_plugin_command.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional filter — matches plugin name or ID (case-insensitive substring)',
+          },
+        },
+      },
+    },
     {
       name: 'noteplan_create_plugin',
       description:
-        'Create a NotePlan plugin with an HTML view. Writes plugin.json and script.js to the Plugins folder, optionally reloads and launches it.',
+        'Create a NotePlan plugin with an HTML view. Writes plugin.json and script.js to the Plugins folder, optionally reloads and launches it. If a plugin with the same ID already exists, it will be overwritten. Use noteplan_get_plugin_source to read existing source before modifying. The plugin opens in the main editor area by default — this is the preferred display mode. It also gets pinned to the sidebar for easy access. Read the plugin API resources (e.g. noteplan://plugin-api/HTMLView.md) for API reference when building complex plugins.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3934,7 +4033,8 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           displayMode: {
             type: 'string',
             enum: ['main', 'split', 'window'],
-            description: 'Where to display the HTML view (default: "main")',
+            default: 'main',
+            description: 'Where to display the HTML view. "main" (default, preferred) shows it in the main editor area with sidebar pinning; "split" shows it in a split view; "window" opens a separate floating window.',
           },
           autoLaunch: {
             type: 'boolean',
@@ -3958,6 +4058,70 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           confirmationToken: {
             type: 'string',
             description: 'Confirmation token (call without to receive one)',
+          },
+        },
+        required: ['pluginId'],
+      },
+    },
+    {
+      name: 'noteplan_list_available_plugins',
+      description:
+        'List plugins available from the NotePlan online repository. Shows install/update status by comparing with locally installed plugins. By default only stable releases are shown; set includeBeta to also see beta/pre-release plugins. Use this to discover new plugins or check for updates before calling noteplan_install_plugin.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional filter — matches plugin name or ID (case-insensitive substring)',
+          },
+          includeBeta: {
+            type: 'boolean',
+            description: 'Include beta/pre-release plugins (default: false)',
+          },
+        },
+      },
+    },
+    {
+      name: 'noteplan_install_plugin',
+      description:
+        'Install or update a plugin from the NotePlan online repository. Uses NotePlan\'s built-in installer — handles downloading, dependency resolution, and reload. The installation happens asynchronously. Use noteplan_list_available_plugins first to find valid plugin IDs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pluginId: {
+            type: 'string',
+            description: 'Plugin ID to install or update (e.g., "jgclark.DashboardReact")',
+          },
+        },
+        required: ['pluginId'],
+      },
+    },
+
+    {
+      name: 'noteplan_get_plugin_log',
+      description:
+        'Read the console log captured during the last execution of a plugin. Returns console.log, console.warn, console.error, and JS exception output. Use this after noteplan_ui_run_plugin_command to inspect plugin behavior, debug errors, or enable self-repair workflows.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pluginId: {
+            type: 'string',
+            description: 'Plugin ID whose log to read (e.g., "jgclark.Dashboard")',
+          },
+        },
+        required: ['pluginId'],
+      },
+    },
+    {
+      name: 'noteplan_get_plugin_source',
+      description:
+        'Read the source files (plugin.json and script.js) of an installed NotePlan plugin. Use this to inspect or modify existing plugins — read the source, make changes, then use noteplan_create_plugin to overwrite.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pluginId: {
+            type: 'string',
+            description: 'Plugin ID (e.g., "mcp.dashboard"). Use noteplan_list_plugins to find valid IDs.',
           },
         },
         required: ['pluginId'],
@@ -4091,6 +4255,46 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
     return {
       tools,
       ...(hasMore ? { nextCursor: String(nextOffset) } : {}),
+    };
+  });
+
+  // Register resource listing handler
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return {
+      resources: PLUGIN_API_RESOURCES.map((r) => ({
+        uri: `noteplan://plugin-api/${r.file}`,
+        name: r.name,
+        description: r.desc,
+        mimeType: r.file.endsWith('.md') ? 'text/markdown' : r.file.endsWith('.json') ? 'application/json' : 'text/javascript',
+      })),
+    };
+  });
+
+  // Register resource read handler
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const uri = request.params.uri;
+    const prefix = 'noteplan://plugin-api/';
+    if (!uri.startsWith(prefix)) {
+      throw new Error(`Unknown resource URI: ${uri}`);
+    }
+    const filename = uri.slice(prefix.length);
+    const entry = PLUGIN_API_RESOURCES.find((r) => r.file === filename);
+    if (!entry) {
+      throw new Error(`Unknown resource: ${filename}. Available: ${PLUGIN_API_RESOURCES.map((r) => r.file).join(', ')}`);
+    }
+    const filePath = path.join(PLUGIN_API_DOCS_DIR, entry.file);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Resource file not found on disk: ${filePath}`);
+    }
+    const content = fs.readFileSync(filePath, 'utf-8');
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: entry.file.endsWith('.md') ? 'text/markdown' : entry.file.endsWith('.json') ? 'application/json' : 'text/javascript',
+          text: content,
+        },
+      ],
     };
   });
 
@@ -4389,11 +4593,8 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_ui_search':
           result = uiTools.searchNotes(args as any);
           break;
-        case 'noteplan_ui_run_plugin':
+        case 'noteplan_ui_run_plugin_command':
           result = uiTools.runPlugin(args as any);
-          break;
-        case 'noteplan_ui_reload_plugins':
-          result = uiTools.reloadPlugins(args as any);
           break;
         case 'noteplan_ui_open_view':
           result = uiTools.openView(args as any);
@@ -4401,13 +4602,31 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_ui_toggle_sidebar':
           result = uiTools.toggleSidebar(args as any);
           break;
+        case 'noteplan_ui_close_plugin_window':
+          result = uiTools.closePluginWindow(args as any);
+          break;
 
-        // Plugin creation tools
+        // Plugin tools
+        case 'noteplan_list_plugins':
+          result = pluginTools.listPlugins(args as any);
+          break;
         case 'noteplan_create_plugin':
           result = pluginTools.createPlugin(args as any);
           break;
         case 'noteplan_delete_plugin':
           result = pluginTools.deletePlugin(args as any);
+          break;
+        case 'noteplan_list_available_plugins':
+          result = pluginTools.listAvailablePlugins(args as any);
+          break;
+        case 'noteplan_install_plugin':
+          result = pluginTools.installPlugin(args as any);
+          break;
+        case 'noteplan_get_plugin_log':
+          result = pluginTools.getPluginLog(args as any);
+          break;
+        case 'noteplan_get_plugin_source':
+          result = pluginTools.getPluginSource(args as any);
           break;
 
         // Theme management tools
