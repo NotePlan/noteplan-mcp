@@ -57,6 +57,7 @@ export interface SearchMatch {
 }
 
 export interface Folder {
+  id?: string;
   path: string;
   name: string;
   source: NoteSource;
@@ -110,3 +111,20 @@ export const STATUS_TO_MARKER: Record<TaskStatus, string> = {
   'cancelled': '[-]',
   'scheduled': '[>]',
 };
+
+export type ParagraphType =
+  | 'title' | 'heading' | 'task' | 'checklist'
+  | 'bullet' | 'quote' | 'separator' | 'empty' | 'text';
+
+export interface ParagraphMetadata {
+  type: ParagraphType;
+  headingLevel?: number;       // 1-6 for headings/title
+  taskStatus?: TaskStatus;     // for task/checklist types
+  indentLevel: number;         // tab count
+  tags: string[];
+  mentions: string[];
+  scheduledDate?: string;
+  priority?: number;           // 1/2/3
+  marker?: '*' | '-' | '+';
+  hasCheckbox?: boolean;
+}

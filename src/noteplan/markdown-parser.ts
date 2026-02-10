@@ -1,6 +1,6 @@
 // NotePlan Markdown Parser
 
-import { Task, TaskStatus, TASK_STATUS_MAP } from './types.js';
+import { Task, TaskStatus, TASK_STATUS_MAP, STATUS_TO_MARKER, ParagraphType, ParagraphMetadata } from './types.js';
 import { getTaskPrefix, getTaskMarkerConfigCached } from './preferences.js';
 
 /**
@@ -195,10 +195,24 @@ export function addTask(
   content: string,
   taskContent: string,
   position: 'start' | 'end' | 'after-heading' = 'end',
-  heading?: string
+  heading?: string,
+  options?: {
+    status?: TaskStatus;
+    priority?: number;
+    indentLevel?: number;
+  }
 ): string {
-  const taskPrefix = getTaskPrefix();
-  const taskLine = `${taskPrefix}${taskContent}`;
+  let taskLine: string;
+  if (options && (options.status !== undefined || options.priority !== undefined || options.indentLevel !== undefined)) {
+    taskLine = buildParagraphLine(taskContent, 'task', {
+      taskStatus: options.status ?? 'open',
+      priority: options.priority,
+      indentLevel: options.indentLevel,
+    });
+  } else {
+    const taskPrefix = getTaskPrefix();
+    taskLine = `${taskPrefix}${taskContent}`;
+  }
   const lines = content.split('\n');
 
   if (position === 'start') {
@@ -251,6 +265,207 @@ export function extractHeadings(content: string): { level: number; text: string;
   }
 
   return headings;
+}
+
+/**
+ * Count indent level from leading whitespace.
+ * Tabs count as 1 each; every 2 leading spaces convert to 1 tab-equivalent.
+ */
+function countIndentLevel(line: string): number {
+  let tabs = 0;
+  let spaces = 0;
+  for (const ch of line) {
+    if (ch === '\t') {
+      tabs += 1;
+    } else if (ch === ' ') {
+      spaces += 1;
+    } else {
+      break;
+    }
+  }
+  return tabs + Math.floor(spaces / 2);
+}
+
+/**
+ * Parse a single line and classify it as a paragraph type with metadata.
+ * Reuses parseTaskLine() detection patterns and extract* helpers.
+ */
+export function parseParagraphLine(line: string, lineIndex: number, isFirstLine: boolean): ParagraphMetadata {
+  const config = getTaskMarkerConfigCached();
+  const trimmed = line.trim();
+
+  // 1. Empty
+  if (trimmed === '') {
+    return { type: 'empty', indentLevel: 0, tags: [], mentions: [] };
+  }
+
+  // 2. Separator (---, ***, ___)
+  if (/^(?:---+|\*\*\*+|___+)$/.test(trimmed)) {
+    return { type: 'separator', indentLevel: 0, tags: [], mentions: [] };
+  }
+
+  // Helper to extract optional content metadata and conditionally spread
+  function contentMeta(text: string): Pick<ParagraphMetadata, 'tags' | 'mentions'> & { scheduledDate?: string; priority?: number } {
+    const scheduledDate = extractScheduledDate(text);
+    const priority = extractPriority(text);
+    return {
+      tags: extractTags(text),
+      mentions: extractMentions(text),
+      ...(scheduledDate !== undefined && { scheduledDate }),
+      ...(priority !== undefined && { priority }),
+    };
+  }
+
+  // Helper to build a marker-line result (task, checklist, or bullet)
+  function markerResult(
+    type: ParagraphType,
+    text: string,
+    indent: string,
+    typedMarker: '*' | '-' | '+',
+    hasCheckbox: boolean,
+    taskStatus?: TaskStatus,
+  ): ParagraphMetadata {
+    return {
+      type,
+      indentLevel: countIndentLevel(indent),
+      marker: typedMarker,
+      hasCheckbox,
+      ...(taskStatus && { taskStatus }),
+      ...contentMeta(text),
+    };
+  }
+
+  // 3. Heading (# through ######)
+  const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+  if (headingMatch) {
+    const level = headingMatch[1].length;
+    const content = headingMatch[2];
+    const type: ParagraphType = isFirstLine ? 'title' : 'heading';
+    return {
+      type,
+      headingLevel: level,
+      indentLevel: 0,
+      ...contentMeta(content),
+    };
+  }
+
+  // 4. First line without # → title
+  if (isFirstLine) {
+    return {
+      type: 'title',
+      headingLevel: 1,
+      indentLevel: 0,
+      tags: extractTags(trimmed),
+      mentions: extractMentions(trimmed),
+    };
+  }
+
+  // 5. Quote (> ...)
+  if (/^>\s?/.test(trimmed)) {
+    const quoteContent = trimmed.replace(/^>\s?/, '');
+    const scheduledDate = extractScheduledDate(quoteContent);
+    return {
+      type: 'quote',
+      indentLevel: 0,
+      tags: extractTags(quoteContent),
+      mentions: extractMentions(quoteContent),
+      ...(scheduledDate !== undefined && { scheduledDate }),
+    };
+  }
+
+  // 6. Checkbox line (* [x], - [ ], + [-])
+  const checkboxMatch = line.match(/^(\s*)([*+\-])\s*\[(.)\]\s*(.*)$/);
+  if (checkboxMatch) {
+    const [, indent, marker, statusChar, content] = checkboxMatch;
+    const status = TASK_STATUS_MAP[`[${statusChar}]`] as TaskStatus | undefined;
+    const typedMarker = marker as '*' | '-' | '+';
+    const type: ParagraphType = typedMarker === '+' ? 'checklist' : 'task';
+    return markerResult(type, content, indent, typedMarker, true, status);
+  }
+
+  // 7. Plain marker line (* item, - item, + item)
+  const plainMatch = line.match(/^(\s*)([*+\-])\s+(.+)$/);
+  if (plainMatch) {
+    const [, indent, marker, content] = plainMatch;
+    const typedMarker = marker as '*' | '-' | '+';
+
+    if (typedMarker === '+') {
+      return markerResult('checklist', content, indent, typedMarker, false);
+    }
+
+    const isTaskMarkerChar =
+      (typedMarker === '*' && config.isAsteriskTodo) || (typedMarker === '-' && config.isDashTodo);
+
+    if (isTaskMarkerChar) {
+      return markerResult('task', content, indent, typedMarker, false, 'open');
+    }
+
+    // It's a bullet
+    return markerResult('bullet', content, indent, typedMarker, false);
+  }
+
+  // 8. Everything else → text
+  return {
+    type: 'text',
+    indentLevel: countIndentLevel(line),
+    ...contentMeta(trimmed),
+  };
+}
+
+/**
+ * Build a properly formatted markdown line from structured input.
+ * Uses user preferences for task marker style.
+ */
+export function buildParagraphLine(
+  content: string,
+  type: ParagraphType,
+  options?: {
+    headingLevel?: number;
+    taskStatus?: TaskStatus;
+    indentLevel?: number;
+    priority?: number;
+    hasCheckbox?: boolean;
+  }
+): string {
+  const config = getTaskMarkerConfigCached();
+  const indent = '\t'.repeat(options?.indentLevel ?? 0);
+  const prioritySuffix = options?.priority ? ' ' + '!'.repeat(options.priority) : '';
+
+  switch (type) {
+    case 'title':
+    case 'heading': {
+      const level = options?.headingLevel ?? (type === 'title' ? 1 : 2);
+      return `${'#'.repeat(level)} ${content}`;
+    }
+    case 'task': {
+      const marker = config.defaultTodoCharacter;
+      const status = options?.taskStatus ?? 'open';
+      const wantCheckbox = options?.hasCheckbox ?? config.useCheckbox;
+      if (wantCheckbox || status !== 'open') {
+        return `${indent}${marker} ${STATUS_TO_MARKER[status]} ${content}${prioritySuffix}`;
+      }
+      return `${indent}${marker} ${content}${prioritySuffix}`;
+    }
+    case 'checklist': {
+      const status = options?.taskStatus ?? 'open';
+      const wantCheckbox = options?.hasCheckbox ?? true;
+      if (wantCheckbox || status !== 'open') {
+        return `${indent}+ ${STATUS_TO_MARKER[status]} ${content}${prioritySuffix}`;
+      }
+      return `${indent}+ ${content}${prioritySuffix}`;
+    }
+    case 'bullet':
+      return `${indent}- ${content}`;
+    case 'quote':
+      return `> ${content}`;
+    case 'separator':
+      return '---';
+    case 'empty':
+      return '';
+    case 'text':
+    default:
+      return content;
+  }
 }
 
 /**

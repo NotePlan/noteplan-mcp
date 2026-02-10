@@ -166,11 +166,25 @@ export function insertContentAtPosition(
       if (!heading) {
         throw new Error('Heading is required for after-heading position');
       }
-      // Find the heading (case-insensitive)
-      const headingPattern = new RegExp(`^#{1,6}\\s*${escapeRegex(heading)}\\s*$`, 'i');
-      const headingIndex = lines.findIndex((l) => headingPattern.test(l));
+      const targetHeading = normalizeHeadingForMatch(heading);
+      const headingIndex = lines.findIndex((lineValue) => {
+        const lineHeading = extractAtxHeadingText(lineValue);
+        if (!lineHeading) return false;
+        return normalizeHeadingForMatch(lineHeading) === targetHeading;
+      });
 
       if (headingIndex === -1) {
+        const availableHeadings = lines
+          .map((lineValue) => extractAtxHeadingText(lineValue))
+          .filter((value): value is string => Boolean(value))
+          .slice(0, 15);
+        if (availableHeadings.length > 0) {
+          throw new Error(
+            `Heading "${heading}" not found. Available headings include: ${availableHeadings.join(
+              ' | '
+            )}`
+          );
+        }
         throw new Error(`Heading "${heading}" not found`);
       }
 
@@ -222,9 +236,18 @@ export function deleteLines(content: string, startLine: number, endLine: number)
   return lines.join('\n');
 }
 
-/**
- * Escape special regex characters
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function extractAtxHeadingText(line: string): string | null {
+  const match = line.match(/^\s{0,3}(#{1,6})\s*(.*?)\s*#*\s*$/);
+  if (!match) return null;
+  const text = match[2]?.trim() || '';
+  if (!text) return null;
+  return text;
+}
+
+function normalizeHeadingForMatch(value: string): string {
+  let normalized = value.trim();
+  normalized = normalized.replace(/^\s{0,3}#{1,6}\s*/, '');
+  normalized = normalized.replace(/\s+#+\s*$/, '');
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+  return normalized.toLowerCase();
 }

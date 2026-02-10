@@ -26,6 +26,7 @@ const POSSIBLE_PATHS = [
 let db: Database.Database | null = null;
 let dbChecked = false;
 let cachedDbPath: string | null = null;
+const SPACE_TRASH_FOLDER_TITLE = '@Trash';
 
 /**
  * Find the spaces database path
@@ -71,6 +72,15 @@ export function getDatabase(): Database.Database | null {
       return null;
     }
   }
+}
+
+/**
+ * Get resolved teamspace database path (if available)
+ */
+export function getDatabasePath(): string | null {
+  if (cachedDbPath) return cachedDbPath;
+  cachedDbPath = findDatabasePath();
+  return cachedDbPath;
 }
 
 /**
@@ -142,6 +152,81 @@ function getSpaceDescendantIds(database: Database.Database, spaceId: string): st
   }
 }
 
+function getDescendantIdsForRoots(database: Database.Database, rootIds: string[]): string[] {
+  if (rootIds.length === 0) return [];
+  try {
+    const placeholders = rootIds.map(() => '?').join(',');
+    const rows = database
+      .prepare(
+        `
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM notes WHERE id IN (${placeholders})
+          UNION ALL
+          SELECT n.id FROM notes n
+          INNER JOIN subtree s ON n.parent = s.id
+        )
+        SELECT id FROM subtree
+      `
+      )
+      .all(...rootIds) as { id: string }[];
+    return rows.map((row) => row.id);
+  } catch (error) {
+    console.error('Error getting descendants from roots:', error);
+    return [];
+  }
+}
+
+function getTrashDescendantIds(database: Database.Database, spaceId?: string): Set<string> {
+  try {
+    let trashFolderRows = database
+      .prepare(
+        `
+        SELECT id
+        FROM notes
+        WHERE is_dir = 1
+        AND lower(title) = lower(?)
+      `
+      )
+      .all(SPACE_TRASH_FOLDER_TITLE) as { id: string }[];
+
+    if (spaceId) {
+      const spaceDescendantIds = new Set(getSpaceDescendantIds(database, spaceId));
+      trashFolderRows = trashFolderRows.filter((row) => spaceDescendantIds.has(row.id));
+    }
+
+    const trashFolderIds = trashFolderRows.map((row) => row.id);
+    if (trashFolderIds.length === 0) return new Set();
+    return new Set(getDescendantIdsForRoots(database, trashFolderIds));
+  } catch (error) {
+    console.error('Error getting trash descendants:', error);
+    return new Set();
+  }
+}
+
+function filterRowsByTrash(
+  database: Database.Database,
+  rows: SQLiteNoteRow[],
+  spaceId?: string,
+  includeTrash = false
+): SQLiteNoteRow[] {
+  if (includeTrash) return rows;
+  const trashDescendants = getTrashDescendantIds(database, spaceId);
+  if (trashDescendants.size === 0) return rows;
+  return rows.filter((row) => !trashDescendants.has(row.id));
+}
+
+function normalizeListSpaceOptions(
+  spaceIdOrOptions?: string | { spaceId?: string; includeTrash?: boolean }
+): { spaceId?: string; includeTrash: boolean } {
+  if (typeof spaceIdOrOptions === 'string') {
+    return { spaceId: spaceIdOrOptions, includeTrash: false };
+  }
+  return {
+    spaceId: spaceIdOrOptions?.spaceId,
+    includeTrash: spaceIdOrOptions?.includeTrash === true,
+  };
+}
+
 /**
  * Find the root space ID by traversing parent chain
  */
@@ -187,9 +272,12 @@ function rowToNote(row: SQLiteNoteRow, database?: Database.Database): Note {
 /**
  * List notes in a teamspace
  */
-export function listSpaceNotes(spaceId?: string): Note[] {
+export function listSpaceNotes(
+  spaceIdOrOptions?: string | { spaceId?: string; includeTrash?: boolean }
+): Note[] {
   const database = getDatabase();
   if (!database) return [];
+  const { spaceId, includeTrash } = normalizeListSpaceOptions(spaceIdOrOptions);
 
   try {
     let query = `
@@ -213,7 +301,8 @@ export function listSpaceNotes(spaceId?: string): Note[] {
     }
 
     const rows = database.prepare(query).all(...params) as SQLiteNoteRow[];
-    return rows.map(row => rowToNote(row, database));
+    const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
+    return filteredRows.map(row => rowToNote(row, database));
   } catch (error) {
     console.error('Error listing teamspace notes:', error);
     return [];
@@ -249,7 +338,11 @@ export function getSpaceNote(identifier: string): Note | null {
 /**
  * Get a teamspace note by title
  */
-export function getSpaceNoteByTitle(title: string, spaceId?: string): Note | null {
+export function getSpaceNoteByTitle(
+  title: string,
+  spaceId?: string,
+  includeTrash = false
+): Note | null {
   const database = getDatabase();
   if (!database) return null;
 
@@ -276,7 +369,9 @@ export function getSpaceNoteByTitle(title: string, spaceId?: string): Note | nul
       params.push(...descendantIds);
     }
 
-    const row = database.prepare(query).get(...params) as SQLiteNoteRow | undefined;
+    const rows = database.prepare(query).all(...params) as SQLiteNoteRow[];
+    const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
+    const row = filteredRows[0];
     return row ? rowToNote(row, database) : null;
   } catch (error) {
     console.error('Error getting teamspace note by title:', error);
@@ -292,12 +387,13 @@ export function searchSpaceNotes(
   options: {
     spaceId?: string;
     limit?: number;
+    includeTrash?: boolean;
   } = {}
 ): Note[] {
   const database = getDatabase();
   if (!database) return [];
 
-  const { spaceId, limit = 50 } = options;
+  const { spaceId, limit = 50, includeTrash = false } = options;
 
   try {
     let sql = `
@@ -328,7 +424,8 @@ export function searchSpaceNotes(
     params.push(limit);
 
     const rows = database.prepare(sql).all(...params) as SQLiteNoteRow[];
-    return rows.map(row => rowToNote(row, database));
+    const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
+    return filteredRows.map(row => rowToNote(row, database));
   } catch (error) {
     console.error('Error searching teamspace notes:', error);
     return [];
@@ -350,12 +447,12 @@ function parseSearchPatterns(input: string): string[] {
  */
 export function searchSpaceNotesFTS(
   query: string,
-  options: { spaceId?: string; limit?: number } = {}
+  options: { spaceId?: string; limit?: number; includeTrash?: boolean } = {}
 ): Note[] {
   const database = getDatabase();
   if (!database) return [];
 
-  const { spaceId, limit = 50 } = options;
+  const { spaceId, limit = 50, includeTrash = false } = options;
 
   // Parse OR patterns
   const patterns = parseSearchPatterns(query);
@@ -396,7 +493,8 @@ export function searchSpaceNotesFTS(
     params.push(limit);
 
     const rows = database.prepare(sql).all(...params) as SQLiteNoteRow[];
-    return rows.map((row) => rowToNote(row, database));
+    const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
+    return filteredRows.map((row) => rowToNote(row, database));
   } catch (error) {
     console.error('Error searching space notes:', error);
     return [];
@@ -406,9 +504,12 @@ export function searchSpaceNotesFTS(
 /**
  * List folders in teamspace
  */
-export function listSpaceFolders(spaceId?: string): Folder[] {
+export function listSpaceFolders(
+  spaceIdOrOptions?: string | { spaceId?: string; includeTrash?: boolean }
+): Folder[] {
   const database = getDatabase();
   if (!database) return [];
+  const { spaceId, includeTrash } = normalizeListSpaceOptions(spaceIdOrOptions);
 
   try {
     let query = `
@@ -427,9 +528,13 @@ export function listSpaceFolders(spaceId?: string): Folder[] {
       params.push(...descendantIds);
     }
 
-    const rows = database.prepare(query).all(...params) as { id: string; title: string; filename: string; parent: string }[];
+    let rows = database.prepare(query).all(...params) as { id: string; title: string; filename: string; parent: string }[];
+    if (!includeTrash) {
+      rows = rows.filter((row) => row.title?.toLowerCase() !== SPACE_TRASH_FOLDER_TITLE.toLowerCase());
+    }
 
     return rows.map((row) => ({
+      id: row.id,
       path: row.filename,
       name: row.title || row.id,
       source: 'space' as const,
@@ -438,6 +543,63 @@ export function listSpaceFolders(spaceId?: string): Folder[] {
   } catch (error) {
     console.error('Error listing teamspace folders:', error);
     return [];
+  }
+}
+
+export function resolveSpaceFolder(
+  spaceId: string,
+  identifier: string,
+  options: { includeTrash?: boolean } = {}
+): Folder | null {
+  const query = identifier.trim();
+  if (!query) return null;
+  const lowerQuery = query.toLowerCase();
+  const folders = listSpaceFolders({ spaceId, includeTrash: options.includeTrash === true });
+
+  const exactById = folders.find((folder) => folder.id === query);
+  if (exactById) return exactById;
+
+  const exactByPath = folders.find((folder) => folder.path.toLowerCase() === lowerQuery);
+  if (exactByPath) return exactByPath;
+
+  const exactByName = folders.filter((folder) => folder.name.toLowerCase() === lowerQuery);
+  if (exactByName.length === 1) {
+    return exactByName[0];
+  }
+
+  return null;
+}
+
+export function isSpaceNoteInTrash(identifier: string): boolean {
+  const database = getDatabase();
+  if (!database) return false;
+
+  try {
+    const row = database
+      .prepare(
+        `
+        WITH RECURSIVE parent_chain AS (
+          SELECT id, parent, is_dir, title
+          FROM notes
+          WHERE (id = ? OR filename = ?)
+          AND is_dir = 0
+          UNION ALL
+          SELECT n.id, n.parent, n.is_dir, n.title
+          FROM notes n
+          INNER JOIN parent_chain pc ON n.id = pc.parent
+        )
+        SELECT id
+        FROM parent_chain
+        WHERE is_dir = 1
+        AND lower(title) = lower(?)
+        LIMIT 1
+      `
+      )
+      .get(identifier, identifier, SPACE_TRASH_FOLDER_TITLE) as { id: string } | undefined;
+    return Boolean(row?.id);
+  } catch (error) {
+    console.error('Error checking TeamSpace trash status:', error);
+    return false;
   }
 }
 

@@ -2,6 +2,10 @@
 
 import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
+import {
+  issueConfirmationToken,
+  validateAndConsumeConfirmationToken,
+} from '../utils/confirmation-tokens.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -36,6 +40,28 @@ function isDebugTimingsEnabled(value: unknown): boolean {
   return false;
 }
 
+function normalizeFolderPathInput(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  let normalized = value.trim().replace(/\\/g, '/');
+  normalized = normalized.replace(/^\/+|\/+$/g, '');
+  if (!normalized || normalized === 'Notes') return undefined;
+  if (normalized.startsWith('Notes/')) {
+    normalized = normalized.slice('Notes/'.length);
+  }
+  return normalized || undefined;
+}
+
+function confirmationFailureMessage(toolName: string, reason: string): string {
+  const refreshHint = `Call ${toolName} with dryRun=true to get a new confirmationToken.`;
+  if (reason === 'missing') {
+    return `Confirmation token is required for ${toolName}. ${refreshHint}`;
+  }
+  if (reason === 'expired') {
+    return `Confirmation token is expired for ${toolName}. ${refreshHint}`;
+  }
+  return `Confirmation token is invalid for ${toolName}. ${refreshHint}`;
+}
+
 export const listSpacesSchema = z.object({
   query: z.string().optional().describe('Filter spaces by name/id substring'),
   limit: z.number().min(1).max(200).optional().default(50).describe('Maximum number of spaces to return'),
@@ -62,7 +88,24 @@ export const listFoldersSchema = z.object({
     .optional()
     .describe('Include space folders (default: true only when space is provided)'),
   query: z.string().optional().describe('Filter folders by name/path substring'),
-  maxDepth: z.number().min(1).max(20).optional().describe('Max local folder depth (1 = top level, default: 1)'),
+  parentPath: z
+    .string()
+    .optional()
+    .describe(
+      'Optional parent folder path. Use canonical paths like "20 - Areas" (or "Notes/20 - Areas").'
+    ),
+  recursive: z
+    .boolean()
+    .optional()
+    .describe('When parentPath is set: true = include all descendants, false = only direct children (default: true)'),
+  maxDepth: z
+    .number()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe(
+      'Max local folder depth (1 = top level, default: 1). If parentPath is provided and maxDepth is omitted, depth auto-expands to include that branch.'
+    ),
   limit: z.number().min(1).max(500).optional().default(50).describe('Maximum number of folders to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
@@ -104,6 +147,142 @@ export const resolveFolderSchema = z.object({
     .optional()
     .default(0.06)
     .describe('If top scores are within this delta, treat as ambiguous'),
+});
+
+export const createFolderSchema = z.object({
+  path: z
+    .string()
+    .optional()
+    .describe('Local folder path under Notes (e.g., "20 - Areas/Marketing")'),
+  space: z.string().optional().describe('Space ID for TeamSpace folder creation'),
+  name: z
+    .string()
+    .optional()
+    .describe('TeamSpace folder name (required when space is provided)'),
+  parent: z
+    .string()
+    .optional()
+    .describe('TeamSpace parent folder reference (ID/path/name or "root", default: space root)'),
+}).superRefine((input, ctx) => {
+  if (input.space) {
+    if (!input.name || input.name.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'name is required when space is provided',
+        path: ['name'],
+      });
+    }
+    return;
+  }
+
+  if (!input.path || input.path.trim().length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'path is required for local folder creation',
+      path: ['path'],
+    });
+  }
+});
+
+export const moveFolderSchema = z.object({
+  sourcePath: z
+    .string()
+    .optional()
+    .describe('Local source folder path under Notes'),
+  destinationFolder: z
+    .string()
+    .optional()
+    .describe('Local destination folder path under Notes (or "Notes" for root)'),
+  space: z.string().optional().describe('Space ID for TeamSpace folder move'),
+  source: z
+    .string()
+    .optional()
+    .describe('TeamSpace source folder reference (ID/path/name)'),
+  destination: z
+    .string()
+    .optional()
+    .describe('TeamSpace destination folder reference (ID/path/name or "root")'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview move impact and get confirmationToken without mutating folders'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for move execution'),
+}).superRefine((input, ctx) => {
+  if (input.space) {
+    if (!input.source || input.source.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'source is required when space is provided',
+        path: ['source'],
+      });
+    }
+    if (!input.destination || input.destination.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'destination is required when space is provided',
+        path: ['destination'],
+      });
+    }
+    return;
+  }
+
+  if (!input.sourcePath || input.sourcePath.trim().length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'sourcePath is required for local folder move',
+      path: ['sourcePath'],
+    });
+  }
+  if (!input.destinationFolder || input.destinationFolder.trim().length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'destinationFolder is required for local folder move',
+      path: ['destinationFolder'],
+    });
+  }
+});
+
+export const renameFolderSchema = z.object({
+  sourcePath: z
+    .string()
+    .optional()
+    .describe('Local source folder path under Notes'),
+  newName: z.string().describe('New folder name'),
+  space: z.string().optional().describe('Space ID for TeamSpace folder rename'),
+  source: z
+    .string()
+    .optional()
+    .describe('TeamSpace source folder reference (ID/path/name)'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview rename impact and get confirmationToken without mutating folders'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for rename execution'),
+}).superRefine((input, ctx) => {
+  if (input.space) {
+    if (!input.source || input.source.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'source is required when space is provided',
+        path: ['source'],
+      });
+    }
+    return;
+  }
+
+  if (!input.sourcePath || input.sourcePath.trim().length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'sourcePath is required for local folder rename',
+      path: ['sourcePath'],
+    });
+  }
 });
 
 export function listSpaces(params?: z.infer<typeof listSpacesSchema>) {
@@ -167,7 +346,14 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
   );
   const stageTimings: Record<string, number> = {};
 
-  const maxDepth = toOptionalBoundedInt(input.maxDepth, 1, 20) ?? 1;
+  const parentPath = normalizeFolderPathInput((input as { parentPath?: unknown }).parentPath);
+  const recursive = toOptionalBoolean((input as { recursive?: unknown }).recursive) ?? true;
+  const requestedMaxDepth = toOptionalBoundedInt(input.maxDepth, 1, 20);
+  const parentDepth = parentPath ? parentPath.split('/').filter(Boolean).length : 0;
+  const maxDepth = requestedMaxDepth
+    ?? (parentPath
+      ? (recursive ? 20 : Math.min(20, parentDepth + 1))
+      : 1);
   const listStart = Date.now();
   const folders = store.listFolders({
     space: input.space,
@@ -175,6 +361,8 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     includeSpaces: toOptionalBoolean(input.includeSpaces),
     query: typeof input.query === 'string' ? input.query : undefined,
     maxDepth,
+    parentPath,
+    recursive,
   });
   const listFoldersMs = Date.now() - listStart;
   if (includeStageTimings) {
@@ -194,6 +382,7 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
 
   const mapStart = Date.now();
   const mappedFolders = page.map((f) => ({
+    id: f.id,
     path: f.path,
     name: f.name,
     source: f.source,
@@ -211,6 +400,8 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     offset,
     limit,
     maxDepth,
+    parentPath: parentPath ?? null,
+    recursive,
     hasMore,
     nextCursor,
     folders: mappedFolders,
@@ -224,12 +415,23 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
     if (!input.space) {
       performanceHints.push('Set space to scope folder listing to one workspace.');
     }
-    if (maxDepth > 1) {
+    if (maxDepth > 1 && requestedMaxDepth !== undefined) {
       performanceHints.push('Lower maxDepth (for example 1) to reduce local folder traversal.');
+    }
+    if (!parentPath) {
+      performanceHints.push('Set parentPath to scope folder traversal to one branch.');
     }
   }
   if (hasMore && limit > 100) {
     performanceHints.push('Use a smaller limit (for example 25-50) and paginate with nextCursor.');
+  }
+  if (parentPath && recursive) {
+    performanceHints.push('Set recursive=false to return only direct subfolders of parentPath.');
+  }
+  if (parentPath && requestedMaxDepth !== undefined && requestedMaxDepth <= parentDepth) {
+    performanceHints.push(
+      `maxDepth=${requestedMaxDepth} may be too shallow for parentPath depth ${parentDepth}; set maxDepth>=${parentDepth + 1} to include children.`
+    );
   }
   if (performanceHints.length > 0) {
     result.performanceHints = performanceHints;
@@ -294,6 +496,7 @@ export function findFolders(params: z.infer<typeof findFoldersSchema>) {
     maxDepth,
     count: scored.length,
     matches: scored.map((entry) => ({
+      id: entry.folder.id,
       path: entry.folder.path,
       name: entry.folder.name,
       source: entry.folder.source,
@@ -365,6 +568,7 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
   const ambiguous = Boolean(second) && scoreDelta < ambiguityDelta;
   const resolved = confident && !ambiguous ? top : undefined;
   const mappedCandidates = candidates.map((entry) => ({
+    id: entry.folder.id,
     path: entry.folder.path,
     name: entry.folder.name,
     source: entry.folder.source,
@@ -384,6 +588,7 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
     resolved: resolved
       ? {
           path: resolved.folder.path,
+          id: resolved.folder.id,
           name: resolved.folder.name,
           source: resolved.folder.source,
           spaceId: resolved.folder.spaceId,
@@ -422,4 +627,184 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
   }
 
   return result;
+}
+
+export function createFolder(params: z.infer<typeof createFolderSchema>) {
+  const input = params ?? ({} as z.infer<typeof createFolderSchema>);
+  try {
+    if (input.space) {
+      const created = store.createFolder({
+        space: input.space,
+        name: input.name || '',
+        parent: input.parent,
+      });
+      if (created.source !== 'space') {
+        throw new Error('Invalid TeamSpace folder creation state');
+      }
+      return {
+        success: true,
+        message: `TeamSpace folder created at ${created.path}`,
+        source: created.source,
+        spaceId: created.spaceId,
+        id: created.id,
+        path: created.path,
+        name: created.name,
+        parentId: created.parentId,
+      };
+    }
+
+    const created = store.createFolder({
+      path: input.path || '',
+    });
+    return {
+      success: true,
+      message: `Folder created at ${created.path}`,
+      source: created.source,
+      path: created.path,
+      name: created.name,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create folder',
+    };
+  }
+}
+
+export function moveFolder(params: z.infer<typeof moveFolderSchema>) {
+  const input = params ?? ({} as z.infer<typeof moveFolderSchema>);
+  try {
+    const preview = input.space
+      ? store.previewMoveFolder({
+          space: input.space,
+          source: input.source || '',
+          destination: input.destination || '',
+        })
+      : store.previewMoveFolder({
+          sourcePath: input.sourcePath || '',
+          destinationFolder: input.destinationFolder || '',
+        });
+
+    const confirmationTarget = `${preview.fromPath}=>${preview.toPath}`;
+    if (input.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'noteplan_move_folder',
+        target: confirmationTarget,
+        action: 'move_folder',
+      });
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: folder ${preview.fromPath} would move to ${preview.toPath}`,
+        ...preview,
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(input.confirmationToken, {
+      tool: 'noteplan_move_folder',
+      target: confirmationTarget,
+      action: 'move_folder',
+    });
+    if (!confirmation.ok) {
+      return {
+        success: false,
+        error: confirmationFailureMessage('noteplan_move_folder', confirmation.reason),
+      };
+    }
+
+    const moved = input.space
+      ? store.moveFolder({
+          space: input.space,
+          source: input.source || '',
+          destination: input.destination || '',
+        })
+      : store.moveFolder({
+          sourcePath: input.sourcePath || '',
+          destinationFolder: input.destinationFolder || '',
+        });
+
+    return {
+      success: true,
+      message:
+        moved.source === 'space'
+          ? `TeamSpace folder moved to ${moved.toPath}`
+          : `Folder moved to ${moved.toPath}`,
+      ...moved,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to move folder',
+    };
+  }
+}
+
+export function renameFolder(params: z.infer<typeof renameFolderSchema>) {
+  const input = params ?? ({} as z.infer<typeof renameFolderSchema>);
+  try {
+    const preview = input.space
+      ? store.previewRenameFolder({
+          space: input.space,
+          source: input.source || '',
+          newName: input.newName || '',
+        })
+      : store.previewRenameFolder({
+          sourcePath: input.sourcePath || '',
+          newName: input.newName || '',
+        });
+
+    const confirmationTarget = `${preview.fromPath}=>${preview.toPath}`;
+    if (input.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'noteplan_rename_folder',
+        target: confirmationTarget,
+        action: 'rename_folder',
+      });
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: folder ${preview.fromPath} would rename to ${preview.toPath}`,
+        ...preview,
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(input.confirmationToken, {
+      tool: 'noteplan_rename_folder',
+      target: confirmationTarget,
+      action: 'rename_folder',
+    });
+    if (!confirmation.ok) {
+      return {
+        success: false,
+        error: confirmationFailureMessage('noteplan_rename_folder', confirmation.reason),
+      };
+    }
+
+    const renamed = input.space
+      ? store.renameFolder({
+          space: input.space,
+          source: input.source || '',
+          newName: input.newName || '',
+        })
+      : store.renameFolder({
+          sourcePath: input.sourcePath || '',
+          newName: input.newName || '',
+        });
+
+    return {
+      success: true,
+      message:
+        renamed.source === 'space'
+          ? `TeamSpace folder renamed to ${renamed.toPath}`
+          : `Folder renamed to ${renamed.toPath}`,
+      ...renamed,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to rename folder',
+    };
+  }
 }

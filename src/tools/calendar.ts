@@ -157,6 +157,43 @@ export const getNotesInRangeSchema = z.object({
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
+export const getRecentPeriodicNotesSchema = z.object({
+  type: z
+    .enum(['weekly', 'monthly', 'quarterly', 'yearly'])
+    .optional()
+    .default('weekly')
+    .describe('Type of periodic note'),
+  count: z
+    .number()
+    .min(1)
+    .max(50)
+    .optional()
+    .default(6)
+    .describe('How many matching periodic notes to return'),
+  fromDate: z
+    .string()
+    .optional()
+    .describe('Reference date (YYYY-MM-DD). Defaults to today'),
+  includeContent: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Include full note content (default: false)'),
+  includeMissing: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Include entries for missing periods (default: false)'),
+  maxLookback: z
+    .number()
+    .min(1)
+    .max(260)
+    .optional()
+    .default(52)
+    .describe('Max period slots to inspect while collecting matches'),
+  space: z.string().optional().describe('Space ID'),
+});
+
 export const getNotesInFolderSchema = z.object({
   folder: z.string().describe('Folder path (e.g., "Projects", "10 - Projects")'),
   includeContent: z.boolean().optional().describe('Include full note content (default: false)'),
@@ -164,6 +201,24 @@ export const getNotesInFolderSchema = z.object({
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
+
+function shiftDateBackByPeriod(date: Date, type: 'weekly' | 'monthly' | 'quarterly' | 'yearly'): Date {
+  const shifted = new Date(date);
+  switch (type) {
+    case 'weekly':
+      shifted.setDate(shifted.getDate() - 7);
+      return shifted;
+    case 'monthly':
+      shifted.setMonth(shifted.getMonth() - 1);
+      return shifted;
+    case 'quarterly':
+      shifted.setMonth(shifted.getMonth() - 3);
+      return shifted;
+    case 'yearly':
+      shifted.setFullYear(shifted.getFullYear() - 1);
+      return shifted;
+  }
+}
 
 /**
  * Get a periodic note (weekly, monthly, quarterly, yearly)
@@ -284,6 +339,98 @@ export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to get periodic note',
+    };
+  }
+}
+
+export function getRecentPeriodicNotes(params: z.infer<typeof getRecentPeriodicNotesSchema>) {
+  try {
+    const type = (params.type ?? 'weekly') as 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+    const count = toBoundedInt(params.count, 6, 1, 50);
+    const maxLookback = toBoundedInt(params.maxLookback, 52, 1, 260);
+    const includeContent = params.includeContent === true;
+    const includeMissing = params.includeMissing === true;
+    const parsedFromDate = params.fromDate ? new Date(params.fromDate) : new Date();
+    if (Number.isNaN(parsedFromDate.getTime())) {
+      return {
+        success: false,
+        error: `Invalid fromDate: ${params.fromDate}`,
+      };
+    }
+
+    const notes: Array<Record<string, unknown>> = [];
+    const missing: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+    let cursor = parsedFromDate;
+    let inspectedSlots = 0;
+
+    while (inspectedSlots < maxLookback && notes.length < count) {
+      const dateToken = formatDateString(cursor);
+      const periodic = getPeriodicNote({
+        type,
+        date: dateToken,
+        space: params.space,
+      });
+
+      if (periodic.success && periodic.note) {
+        const note = periodic.note as {
+          title: string;
+          filename: string;
+          content: string;
+          type: string;
+          displayName?: string;
+        };
+        if (!seen.has(note.filename)) {
+          seen.add(note.filename);
+          notes.push({
+            title: note.title,
+            filename: note.filename,
+            type: note.type,
+            displayName: note.displayName,
+            referenceDate: dateToken,
+            content: includeContent ? note.content : undefined,
+            preview: includeContent
+              ? undefined
+              : `${note.content.slice(0, 200)}${note.content.length > 200 ? '...' : ''}`,
+          });
+        }
+      } else if (includeMissing) {
+        missing.push({
+          referenceDate: dateToken,
+          error: periodic.error ?? 'Periodic note not found',
+          triedPaths: periodic.triedPaths,
+          displayName: periodic.displayName,
+        });
+      }
+
+      cursor = shiftDateBackByPeriod(cursor, type);
+      inspectedSlots += 1;
+    }
+
+    const response: Record<string, unknown> = {
+      success: true,
+      type,
+      fromDate: formatDateString(parsedFromDate),
+      count: notes.length,
+      requestedCount: count,
+      inspectedSlots,
+      maxLookback,
+      notes,
+    };
+    if (includeMissing) {
+      response.missing = missing;
+    }
+    if (inspectedSlots >= maxLookback && notes.length < count) {
+      response.performanceHints = [
+        `Reached maxLookback=${maxLookback} before collecting requestedCount=${count}. Increase maxLookback or relax filters.`,
+      ];
+    }
+
+    return response;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get recent periodic notes',
     };
   }
 }

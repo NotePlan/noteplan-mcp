@@ -13,8 +13,11 @@ import * as searchTools from './tools/search.js';
 import * as taskTools from './tools/tasks.js';
 import * as calendarTools from './tools/calendar.js';
 import * as spaceTools from './tools/spaces.js';
+import * as filterTools from './tools/filters.js';
 import * as eventTools from './tools/events.js';
 import * as reminderTools from './tools/reminders.js';
+import * as embeddingsTools from './tools/embeddings.js';
+import * as memoryTools from './tools/memory.js';
 
 type ToolDefinition = {
   name: string;
@@ -33,6 +36,13 @@ type ToolAnnotations = {
 
 const TOOLS_LIST_PAGE_SIZE = 20;
 
+function normalizeToolName(name: string): string {
+  const separatorIndex = name.lastIndexOf(':');
+  if (separatorIndex === -1) return name;
+  const normalized = name.slice(separatorIndex + 1).trim();
+  return normalized || name;
+}
+
 function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     type: 'object',
@@ -50,6 +60,13 @@ function outputSchemaWithErrors(properties: Record<string, unknown> = {}): Recor
       suggestedNextTools: {
         type: 'array',
         items: { type: 'string' },
+      },
+      memoryHints: {
+        type: 'object',
+        properties: {
+          storedMemories: { type: 'number' },
+          tip: { type: 'string' },
+        },
       },
       ...properties,
       error: { type: 'string' },
@@ -119,7 +136,27 @@ const PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   hasMore: { type: 'boolean' },
   nextCursor: { type: ['string', 'null'] },
   content: { type: 'string' },
-  lines: { type: 'array', items: { type: 'object' } },
+  lines: {
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        line: { type: 'number' },
+        lineIndex: { type: 'number' },
+        content: { type: 'string' },
+        type: { type: 'string', enum: ['title', 'heading', 'task', 'checklist', 'bullet', 'quote', 'separator', 'empty', 'text'] },
+        indentLevel: { type: 'number' },
+        headingLevel: { type: 'number' },
+        taskStatus: { type: 'string', enum: ['open', 'done', 'cancelled', 'scheduled'] },
+        priority: { type: 'number' },
+        marker: { type: 'string', enum: ['*', '-', '+'] },
+        hasCheckbox: { type: 'boolean' },
+        tags: { type: 'array', items: { type: 'string' } },
+        mentions: { type: 'array', items: { type: 'string' } },
+        scheduledDate: { type: 'string' },
+      },
+    },
+  },
 });
 const SEARCH_PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   query: { type: 'string' },
@@ -133,11 +170,44 @@ const SEARCH_PARAGRAPHS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   rangeEndLine: { type: 'number' },
   searchedLineCount: { type: 'number' },
   note: { type: 'object' },
-  matches: { type: 'array', items: { type: 'object' } },
+  matches: {
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        line: { type: 'number' },
+        lineIndex: { type: 'number' },
+        content: { type: 'string' },
+        type: { type: 'string', enum: ['title', 'heading', 'task', 'checklist', 'bullet', 'quote', 'separator', 'empty', 'text'] },
+        indentLevel: { type: 'number' },
+        headingLevel: { type: 'number' },
+        taskStatus: { type: 'string', enum: ['open', 'done', 'cancelled', 'scheduled'] },
+        priority: { type: 'number' },
+        marker: { type: 'string', enum: ['*', '-', '+'] },
+        hasCheckbox: { type: 'boolean' },
+        tags: { type: 'array', items: { type: 'string' } },
+        mentions: { type: 'array', items: { type: 'string' } },
+        scheduledDate: { type: 'string' },
+        paragraphStartLine: { type: 'number' },
+        paragraphEndLine: { type: 'number' },
+        paragraph: { type: 'string' },
+        paragraphTruncated: { type: 'boolean' },
+        contextBefore: { type: 'array', items: { type: 'string' } },
+        contextAfter: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  },
 });
 const SEARCH_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
   query: { type: 'string' },
+  searchField: { type: 'string' },
+  queryMode: { type: 'string' },
+  effectiveQuery: { type: 'string' },
+  tokenTerms: { type: 'array', items: { type: 'string' } },
+  minTokenMatches: { type: 'number' },
   count: { type: 'number' },
+  propertyFilters: { type: 'object', additionalProperties: { type: 'string' } },
+  propertyCaseSensitive: { type: 'boolean' },
   partialResults: { type: 'boolean' },
   searchBackend: { type: 'string' },
   warnings: { type: 'array', items: { type: 'string' } },
@@ -176,6 +246,9 @@ const SEARCH_TASKS_GLOBAL_OUTPUT_SCHEMA = outputSchemaWithErrors({
   totalNotes: { type: 'number' },
   truncatedByMaxNotes: { type: 'boolean' },
   maxNotes: { type: 'number' },
+  noteTypes: { type: 'array', items: { type: 'string' } },
+  preferCalendar: { type: 'boolean' },
+  periodicOnly: { type: 'boolean' },
   matches: { type: 'array', items: { type: 'object' } },
 });
 const RANGE_NOTES_OUTPUT_SCHEMA = outputSchemaWithErrors({
@@ -221,12 +294,34 @@ const TAGS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   nextCursor: { type: ['string', 'null'] },
   tags: { type: 'array', items: { type: 'string' } },
 });
+const FILTERS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  filters: { type: 'array', items: { type: 'object' } },
+});
+const FILTER_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  filter: { type: 'object' },
+  mappedQuery: { type: 'object' },
+  unsupportedRules: { type: 'array', items: { type: 'string' } },
+  matches: { type: 'array', items: { type: 'object' } },
+});
+const FILTER_PARAMS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  parameters: { type: 'array', items: { type: 'object' } },
+  timeframeValues: { type: 'array', items: { type: 'string' } },
+});
 const LIST_FOLDERS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   count: { type: 'number' },
   totalCount: { type: 'number' },
   offset: { type: 'number' },
   limit: { type: 'number' },
   maxDepth: { type: 'number' },
+  parentPath: { type: ['string', 'null'] },
+  recursive: { type: 'boolean' },
   hasMore: { type: 'boolean' },
   nextCursor: { type: ['string', 'null'] },
   folders: { type: 'array', items: { type: 'object' } },
@@ -291,6 +386,70 @@ const GET_TOOL_DETAILS_OUTPUT_SCHEMA = outputSchemaWithErrors({
   missing: { type: 'array', items: { type: 'string' } },
   tools: { type: 'array', items: { type: 'object' } },
 });
+const EMBEDDINGS_STATUS_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  enabled: { type: 'boolean' },
+  configured: { type: 'boolean' },
+  provider: { type: 'string' },
+  model: { type: 'string' },
+  baseUrl: { type: 'string' },
+  dbPath: { type: 'string' },
+  hasApiKey: { type: 'boolean' },
+  chunkChars: { type: 'number' },
+  chunkOverlap: { type: 'number' },
+  previewChars: { type: 'number' },
+  noteCount: { type: 'number' },
+  chunkCount: { type: 'number' },
+  lastSyncAt: { type: ['string', 'null'] },
+  lastIndexedUpdateAt: { type: ['string', 'null'] },
+  warning: { type: 'string' },
+});
+const EMBEDDINGS_SYNC_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  provider: { type: 'string' },
+  model: { type: 'string' },
+  scope: { type: 'object' },
+  totalCandidates: { type: 'number' },
+  scannedNotes: { type: 'number' },
+  indexedNotes: { type: 'number' },
+  unchangedNotes: { type: 'number' },
+  addedNotes: { type: 'number' },
+  updatedNotes: { type: 'number' },
+  indexedChunks: { type: 'number' },
+  prunedNotes: { type: 'number' },
+  prunedChunks: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  nextCursor: { type: ['string', 'null'] },
+  warnings: { type: 'array', items: { type: 'string' } },
+});
+const EMBEDDINGS_SEARCH_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  query: { type: 'string' },
+  provider: { type: 'string' },
+  model: { type: 'string' },
+  includeText: { type: 'boolean' },
+  minScore: { type: 'number' },
+  scannedChunks: { type: 'number' },
+  count: { type: 'number' },
+  matches: { type: 'array', items: { type: 'object' } },
+});
+const MEMORY_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  memory: { type: 'object' },
+  totalMemories: { type: 'number' },
+  message: { type: 'string' },
+});
+const MEMORY_DELETE_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  deletedId: { type: 'string' },
+  remainingCount: { type: 'number' },
+  message: { type: 'string' },
+});
+const MEMORY_LIST_OUTPUT_SCHEMA = outputSchemaWithErrors({
+  count: { type: 'number' },
+  totalCount: { type: 'number' },
+  offset: { type: 'number' },
+  limit: { type: 'number' },
+  hasMore: { type: 'boolean' },
+  memories: { type: 'array', items: { type: 'object' } },
+});
 
 function getToolOutputSchema(toolName: string): Record<string, unknown> {
   switch (toolName) {
@@ -299,6 +458,8 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_get_calendar_note':
     case 'noteplan_get_periodic_note':
       return NOTE_OUTPUT_SCHEMA;
+    case 'noteplan_get_recent_periodic_notes':
+      return RANGE_NOTES_OUTPUT_SCHEMA;
     case 'noteplan_list_notes':
       return NOTES_LIST_OUTPUT_SCHEMA;
     case 'noteplan_resolve_note':
@@ -320,13 +481,22 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_add_task':
     case 'noteplan_complete_task':
     case 'noteplan_update_task':
+    case 'noteplan_create_folder':
+    case 'noteplan_move_folder':
+    case 'noteplan_rename_folder':
+    case 'noteplan_save_filter':
+    case 'noteplan_rename_filter':
     case 'noteplan_update_note':
     case 'noteplan_delete_note':
+    case 'noteplan_move_note':
+    case 'noteplan_rename_note_file':
+    case 'noteplan_restore_note':
     case 'noteplan_set_property':
     case 'noteplan_remove_property':
     case 'noteplan_insert_content':
     case 'noteplan_append_content':
     case 'noteplan_delete_lines':
+    case 'noteplan_replace_lines':
     case 'noteplan_edit_line':
     case 'noteplan_add_to_today':
     case 'calendar_create_event':
@@ -336,6 +506,7 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'reminders_complete':
     case 'reminders_update':
     case 'reminders_delete':
+    case 'noteplan_embeddings_reset':
       return MESSAGE_OUTPUT_SCHEMA;
     case 'noteplan_get_notes_in_range':
       return RANGE_NOTES_OUTPUT_SCHEMA;
@@ -345,6 +516,13 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
       return SPACES_OUTPUT_SCHEMA;
     case 'noteplan_list_tags':
       return TAGS_OUTPUT_SCHEMA;
+    case 'noteplan_list_filters':
+      return FILTERS_OUTPUT_SCHEMA;
+    case 'noteplan_get_filter':
+    case 'noteplan_get_filter_tasks':
+      return FILTER_OUTPUT_SCHEMA;
+    case 'noteplan_list_filter_parameters':
+      return FILTER_PARAMS_OUTPUT_SCHEMA;
     case 'noteplan_list_folders':
       return LIST_FOLDERS_OUTPUT_SCHEMA;
     case 'noteplan_find_folders':
@@ -363,6 +541,19 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
       return SEARCH_TOOLS_OUTPUT_SCHEMA;
     case 'noteplan_get_tool_details':
       return GET_TOOL_DETAILS_OUTPUT_SCHEMA;
+    case 'noteplan_embeddings_status':
+      return EMBEDDINGS_STATUS_OUTPUT_SCHEMA;
+    case 'noteplan_embeddings_sync':
+      return EMBEDDINGS_SYNC_OUTPUT_SCHEMA;
+    case 'noteplan_embeddings_search':
+      return EMBEDDINGS_SEARCH_OUTPUT_SCHEMA;
+    case 'noteplan_memory_save':
+    case 'noteplan_memory_update':
+      return MEMORY_OUTPUT_SCHEMA;
+    case 'noteplan_memory_delete':
+      return MEMORY_DELETE_OUTPUT_SCHEMA;
+    case 'noteplan_memory_list':
+      return MEMORY_LIST_OUTPUT_SCHEMA;
     default:
       return GENERIC_TOOL_OUTPUT_SCHEMA;
   }
@@ -450,30 +641,47 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_search_tasks_global',
     'noteplan_get_calendar_note',
     'noteplan_get_periodic_note',
+    'noteplan_get_recent_periodic_notes',
     'noteplan_get_notes_in_range',
     'noteplan_get_notes_in_folder',
     'noteplan_list_spaces',
     'noteplan_list_tags',
+    'noteplan_list_filters',
+    'noteplan_get_filter',
+    'noteplan_get_filter_tasks',
+    'noteplan_list_filter_parameters',
     'noteplan_list_folders',
     'noteplan_find_folders',
     'noteplan_resolve_folder',
+    'noteplan_embeddings_status',
+    'noteplan_embeddings_search',
     'noteplan_search_tools',
     'noteplan_get_tool_details',
     'calendar_get_events',
     'calendar_list_calendars',
     'reminders_get',
     'reminders_list_lists',
+    'noteplan_memory_list',
   ]);
 
   const destructiveTools = new Set([
     'noteplan_delete_note',
+    'noteplan_move_note',
+    'noteplan_rename_note_file',
+    'noteplan_move_folder',
+    'noteplan_rename_folder',
     'noteplan_delete_lines',
+    'noteplan_replace_lines',
     'noteplan_remove_property',
     'noteplan_update_note',
     'noteplan_edit_line',
     'noteplan_update_task',
+    'noteplan_rename_filter',
+    'noteplan_embeddings_reset',
     'calendar_delete_event',
     'reminders_delete',
+    'noteplan_memory_delete',
+    'noteplan_memory_update',
   ]);
 
   const nonIdempotentTools = new Set([
@@ -481,13 +689,26 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_insert_content',
     'noteplan_append_content',
     'noteplan_delete_note',
+    'noteplan_move_note',
+    'noteplan_rename_note_file',
+    'noteplan_restore_note',
+    'noteplan_create_folder',
+    'noteplan_move_folder',
+    'noteplan_rename_folder',
+    'noteplan_save_filter',
+    'noteplan_rename_filter',
     'noteplan_delete_lines',
+    'noteplan_replace_lines',
     'noteplan_add_task',
     'noteplan_add_to_today',
+    'noteplan_embeddings_sync',
+    'noteplan_embeddings_reset',
     'calendar_create_event',
     'calendar_delete_event',
     'reminders_create',
     'reminders_delete',
+    'noteplan_memory_save',
+    'noteplan_memory_delete',
   ]);
 
   const openWorldTools = new Set([
@@ -502,6 +723,8 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'reminders_update',
     'reminders_delete',
     'reminders_list_lists',
+    'noteplan_embeddings_sync',
+    'noteplan_embeddings_search',
   ]);
 
   return {
@@ -525,9 +748,12 @@ const QUERY_SYNONYMS: Record<string, string[]> = {
   disambiguate: ['resolve', 'canonical', 'match'],
   edit: ['update', 'modify', 'change'],
   delete: ['remove', 'erase', 'clear'],
+  restore: ['recover', 'undo', 'undelete'],
   create: ['add', 'new', 'make'],
   paragraph: ['line', 'block', 'section', 'text'],
   lines: ['line', 'paragraph', 'content'],
+  embeddings: ['semantic', 'vector', 'similarity', 'meaning'],
+  semantic: ['embeddings', 'vector', 'similarity'],
 };
 
 function getToolSearchAliases(toolName: string): string[] {
@@ -539,6 +765,9 @@ function getToolSearchAliases(toolName: string): string[] {
 
   if (toolName.startsWith('reminders_')) {
     aliases.push('reminder', 'reminders', 'todo', 'task', 'checklist');
+  }
+  if (toolName.includes('embeddings_')) {
+    aliases.push('embeddings', 'semantic search', 'vector search', 'similarity');
   }
 
   if (toolName.includes('resolve_folder')) {
@@ -565,8 +794,23 @@ function getToolSearchAliases(toolName: string): string[] {
   if (toolName.includes('get_tasks') || toolName.includes('add_task') || toolName.includes('update_task') || toolName.includes('complete_task')) {
     aliases.push('tasks', 'todos', 'checklist', 'task management');
   }
+  if (toolName.includes('get_recent_periodic_notes')) {
+    aliases.push('recent weekly notes', 'recent periodic notes', 'weekly notes', 'monthly notes');
+  }
+  if (toolName.includes('list_filters') || toolName.includes('get_filter') || toolName.includes('save_filter') || toolName.includes('rename_filter')) {
+    aliases.push('filters', 'saved filters', 'task filters', 'noteplan filters');
+  }
+  if (toolName.includes('get_filter_tasks')) {
+    aliases.push('filter tasks', 'tasks from filter', 'run filter');
+  }
+  if (toolName.includes('list_filter_parameters')) {
+    aliases.push('filter parameters', 'filter keys', 'filter schema');
+  }
   if (toolName.includes('search_paragraphs')) {
     aliases.push('search paragraph', 'find paragraph', 'find matching lines', 'paragraph lookup');
+  }
+  if (toolName.includes('replace_lines')) {
+    aliases.push('replace lines', 'batch line edit', 'atomic range edit', 'multi-line replace');
   }
   if (toolName.includes('search_tasks')) {
     aliases.push('search tasks', 'find task', 'task lookup', 'task line index');
@@ -574,8 +818,29 @@ function getToolSearchAliases(toolName: string): string[] {
   if (toolName.includes('search_tasks_global')) {
     aliases.push('global tasks', 'all tasks', 'tasks across notes', 'open tasks');
   }
+  if (toolName.includes('move_note')) {
+    aliases.push('move note', 'move file', 'relocate note', 'reorganize folder');
+  }
+  if (toolName.includes('rename_note_file')) {
+    aliases.push('rename note file', 'rename filename', 'sync filename with title');
+  }
+  if (toolName.includes('create_folder')) {
+    aliases.push('create folder', 'new folder', 'make folder');
+  }
+  if (toolName.includes('move_folder')) {
+    aliases.push('move folder', 'reorganize folder', 'relocate folder');
+  }
+  if (toolName.includes('rename_folder')) {
+    aliases.push('rename folder', 'rename directory');
+  }
+  if (toolName.includes('restore_note')) {
+    aliases.push('restore note', 'undo delete note', 'recover note from trash');
+  }
   if (toolName.includes('get_note') || toolName.includes('list_notes') || toolName.includes('create_note') || toolName.includes('update_note')) {
     aliases.push('notes', 'documents', 'markdown');
+  }
+  if (toolName.includes('memory_')) {
+    aliases.push('memory', 'memories', 'preference', 'preferences', 'remember', 'correction');
   }
 
   return aliases;
@@ -659,6 +924,22 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
     };
   }
 
+  if (message.includes('embeddings are disabled')) {
+    return {
+      code: 'ERR_EMBEDDINGS_DISABLED',
+      hint: 'Enable embeddings in MCP env: NOTEPLAN_EMBEDDINGS_ENABLED=true.',
+      suggestedTool: 'noteplan_embeddings_status',
+    };
+  }
+
+  if (message.includes('embeddings api key is missing')) {
+    return {
+      code: 'ERR_EMBEDDINGS_NOT_CONFIGURED',
+      hint: 'Set NOTEPLAN_EMBEDDINGS_API_KEY (and optionally provider/model/base URL), then retry sync/search.',
+      suggestedTool: 'noteplan_embeddings_status',
+    };
+  }
+
   if (message.includes('provide one note reference')) {
     return {
       code: 'ERR_INVALID_ARGUMENT',
@@ -710,6 +991,37 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
       suggestedTool: 'noteplan_delete_lines',
     };
   }
+  if (message.includes('empty replacement content is blocked')) {
+    return {
+      code: 'ERR_EMPTY_CONTENT_BLOCKED',
+      hint: 'Use noteplan_delete_lines for deletion, or set allowEmptyContent=true for intentional empty replacement.',
+      suggestedTool: 'noteplan_delete_lines',
+    };
+  }
+
+  if (message.includes('supported for local notes only') || message.includes('supported for project notes only')) {
+    return {
+      code: 'ERR_UNSUPPORTED_TARGET',
+      hint: 'These tools currently operate on local project notes under Notes/.',
+      suggestedTool: 'noteplan_get_note',
+    };
+  }
+
+  if (message.includes('not in teamspace @trash') || message.includes('local note is not in @trash')) {
+    return {
+      code: 'ERR_NOT_IN_TRASH',
+      hint: 'Restore only works for notes currently in trash.',
+      suggestedTool: 'noteplan_delete_note',
+    };
+  }
+
+  if (message.includes('note is in trash')) {
+    return {
+      code: 'ERR_NOTE_IN_TRASH',
+      hint: 'Use noteplan_restore_note to recover this note, then retry the operation.',
+      suggestedTool: 'noteplan_restore_note',
+    };
+  }
 
   if (message.includes('full note replacement is blocked')) {
     return {
@@ -748,6 +1060,14 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
       code: 'ERR_AMBIGUOUS_TARGET',
       hint: 'Resolve the target first, then retry with the canonical identifier.',
       suggestedTool: toolName.includes('folder') ? 'noteplan_resolve_folder' : 'noteplan_resolve_note',
+    };
+  }
+
+  if (message.includes('not found') && toolName.includes('filter')) {
+    return {
+      code: 'ERR_NOT_FOUND',
+      hint: 'List filters first, then retry with an exact filter name.',
+      suggestedTool: 'noteplan_list_filters',
     };
   }
 
@@ -811,6 +1131,7 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
       break;
     case 'noteplan_get_paragraphs':
     case 'noteplan_search_paragraphs':
+    case 'noteplan_replace_lines':
       suggestedNextTools = ['noteplan_edit_line', 'noteplan_insert_content', 'noteplan_delete_lines'];
       break;
     case 'noteplan_get_tasks':
@@ -821,11 +1142,69 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
     case 'noteplan_search':
       suggestedNextTools = ['noteplan_get_note', 'noteplan_resolve_note'];
       break;
+    case 'noteplan_get_recent_periodic_notes':
+      suggestedNextTools = ['noteplan_get_note', 'noteplan_search_tasks_global'];
+      break;
+    case 'noteplan_list_filters':
+      suggestedNextTools = ['noteplan_get_filter', 'noteplan_get_filter_tasks'];
+      break;
+    case 'noteplan_get_filter':
+      suggestedNextTools = ['noteplan_get_filter_tasks', 'noteplan_save_filter'];
+      break;
+    case 'noteplan_get_filter_tasks':
+      suggestedNextTools = ['noteplan_complete_task', 'noteplan_update_task'];
+      break;
+    case 'noteplan_list_filter_parameters':
+      suggestedNextTools = ['noteplan_save_filter', 'noteplan_get_filter'];
+      break;
+    case 'noteplan_delete_note':
+      suggestedNextTools = ['noteplan_restore_note', 'noteplan_list_notes'];
+      break;
+    case 'noteplan_move_note':
+    case 'noteplan_rename_note_file':
+      suggestedNextTools = ['noteplan_get_note', 'noteplan_list_notes'];
+      break;
+    case 'noteplan_restore_note':
+      suggestedNextTools = ['noteplan_get_note', 'noteplan_list_notes'];
+      break;
     case 'noteplan_search_tools':
       suggestedNextTools = ['noteplan_get_tool_details'];
       break;
+    case 'noteplan_embeddings_status':
+      suggestedNextTools = ['noteplan_embeddings_sync', 'noteplan_embeddings_search'];
+      break;
+    case 'noteplan_embeddings_sync':
+      suggestedNextTools = ['noteplan_embeddings_search', 'noteplan_embeddings_status'];
+      break;
+    case 'noteplan_embeddings_search':
+      suggestedNextTools = ['noteplan_get_note', 'noteplan_resolve_note'];
+      break;
+    case 'noteplan_embeddings_reset':
+      suggestedNextTools = ['noteplan_embeddings_sync', 'noteplan_embeddings_status'];
+      break;
     case 'noteplan_resolve_folder':
       suggestedNextTools = ['noteplan_create_note', 'noteplan_list_notes'];
+      break;
+    case 'noteplan_create_folder':
+      suggestedNextTools = ['noteplan_list_folders', 'noteplan_create_note'];
+      break;
+    case 'noteplan_move_folder':
+    case 'noteplan_rename_folder':
+      suggestedNextTools = ['noteplan_list_folders', 'noteplan_resolve_folder'];
+      break;
+    case 'noteplan_save_filter':
+    case 'noteplan_rename_filter':
+      suggestedNextTools = ['noteplan_get_filter', 'noteplan_get_filter_tasks'];
+      break;
+    case 'noteplan_memory_save':
+    case 'noteplan_memory_update':
+      suggestedNextTools = ['noteplan_memory_list'];
+      break;
+    case 'noteplan_memory_list':
+      suggestedNextTools = ['noteplan_memory_update', 'noteplan_memory_delete'];
+      break;
+    case 'noteplan_memory_delete':
+      suggestedNextTools = ['noteplan_memory_list'];
       break;
     default:
       suggestedNextTools = [];
@@ -836,6 +1215,42 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
     ...typed,
     suggestedNextTools,
   };
+}
+
+const MEMORY_HINT_TOOLS = new Set([
+  'noteplan_insert_content',
+  'noteplan_append_content',
+  'noteplan_edit_line',
+  'noteplan_replace_lines',
+  'noteplan_delete_lines',
+  'noteplan_add_task',
+  'noteplan_add_to_today',
+  'noteplan_complete_task',
+  'noteplan_update_task',
+  'noteplan_set_property',
+  'noteplan_create_note',
+  'noteplan_update_note',
+]);
+
+function withMemoryHints(result: unknown, toolName: string): unknown {
+  if (!MEMORY_HINT_TOOLS.has(toolName)) return result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const typed = result as Record<string, unknown>;
+  if (typed.success !== true) return result;
+
+  try {
+    const count = memoryTools.getMemoryCount();
+    const tip =
+      count > 0
+        ? `You have ${count} stored memory/memories. Consider checking noteplan_memory_list before making formatting or style decisions.`
+        : 'No memories stored yet. If the user states a preference or corrects your formatting, save it with noteplan_memory_save.';
+    return {
+      ...typed,
+      memoryHints: { storedMemories: count, tip },
+    };
+  } catch {
+    return result;
+  }
 }
 
 function withDuration(result: unknown, durationMs: number, includeTiming: boolean): unknown {
@@ -866,6 +1281,7 @@ export function createServer(): Server {
       },
     }
   );
+  const embeddingsToolsEnabled = embeddingsTools.areEmbeddingsToolsEnabled();
 
   const toolDefinitions: ToolDefinition[] = [
         // Note operations
@@ -910,7 +1326,7 @@ export function createServer(): Server {
               },
               limit: {
                 type: 'number',
-                description: 'Maximum lines to return when includeContent=true (default: 200, max: 1000)',
+                description: 'Maximum lines to return when includeContent=true (default: 500, max: 1000)',
               },
               offset: {
                 type: 'number',
@@ -929,13 +1345,15 @@ export function createServer(): Server {
         },
         {
           name: 'noteplan_list_notes',
-          description: 'List notes with filtering and pagination.',
+          description:
+            'List notes with filtering and pagination. Folder filters target project-note folders under Notes/ (e.g., "20 - Areas" or "Notes/20 - Areas").',
           inputSchema: {
             type: 'object',
             properties: {
               folder: {
                 type: 'string',
-                description: 'Filter by folder path',
+                description:
+                  'Project folder path filter (e.g., "20 - Areas" or "Notes/20 - Areas")',
               },
               space: {
                 type: 'string',
@@ -1075,10 +1493,14 @@ export function createServer(): Server {
         },
         {
           name: 'noteplan_delete_note',
-          description: 'Delete a note (moves to trash). Requires dryRun-issued confirmationToken for execution. Recommended flow: resolve note first, dryRun, then delete canonical target.',
+          description: 'Delete a note by moving it to trash. Local notes move to local @Trash; TeamSpace notes move to TeamSpace @Trash. Requires dryRun-issued confirmationToken.',
           inputSchema: {
             type: 'object',
             properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for TeamSpace notes)',
+              },
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note to delete',
@@ -1092,24 +1514,138 @@ export function createServer(): Server {
                 description: 'Confirmation token issued by dryRun for delete execution',
               },
             },
-            required: ['filename'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+            ],
+          },
+        },
+        {
+          name: 'noteplan_move_note',
+          description:
+            'Move a note to another folder. Local notes move within Notes; TeamSpace notes move by parent folder in the same space. Requires dryRun-issued confirmationToken.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for TeamSpace notes)',
+              },
+              filename: {
+                type: 'string',
+                description: 'Filename/path of the note to move',
+              },
+              destinationFolder: {
+                type: 'string',
+                description: 'Destination folder. Local: path in Notes (if full path is passed, basename must match current file). TeamSpace: folder ID/path/name or "root"',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview move impact and get confirmationToken without modifying the note',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for move execution',
+              },
+            },
+            required: ['destinationFolder'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+            ],
+          },
+        },
+        {
+          name: 'noteplan_rename_note_file',
+          description:
+            'Rename the filename of a local project note (file path only, does not edit title/content). Requires dryRun-issued confirmationToken before execution. Useful for aligning filenames with note titles.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              filename: {
+                type: 'string',
+                description: 'Filename/path of the local project note to rename',
+              },
+              newFilename: {
+                type: 'string',
+                description: 'New filename. Can be bare filename or full path in the same folder; current extension is preserved by default',
+              },
+              keepExtension: {
+                type: 'boolean',
+                description: 'Keep current extension (.md/.txt) even if newFilename includes another extension (default: true)',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview rename impact and get confirmationToken without modifying the note',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for rename execution',
+              },
+            },
+            required: ['filename', 'newFilename'],
+          },
+        },
+        {
+          name: 'noteplan_restore_note',
+          description:
+            'Restore a trashed note. Use the id/filename returned by noteplan_delete_note. Local notes restore from local @Trash into Notes. TeamSpace notes restore from TeamSpace @Trash into space root (or destination folder). Requires dryRun-issued confirmationToken.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for TeamSpace notes)',
+              },
+              filename: {
+                type: 'string',
+                description: 'Filename/path of the trashed note to restore',
+              },
+              destinationFolder: {
+                type: 'string',
+                description: 'Restore destination. Local: path in Notes. TeamSpace: folder ID/path/name or "root"',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview restore impact and get confirmationToken without modifying the note',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for restore execution',
+              },
+            },
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+            ],
           },
         },
 
         // Note structure
         {
           name: 'noteplan_get_paragraphs',
-          description: `Get note content with line numbers, optional line-range filters, and pagination.
+          description: `Get note content with line numbers, paragraph type metadata, optional line-range filters, and pagination.
 
 Returns each line with:
 - line: 1-indexed line number (for display/user communication)
 - lineIndex: 0-indexed line number (use this for API calls like complete_task/update_task)
 - content: the text content of that line
+- type: paragraph type (title, heading, task, checklist, bullet, quote, separator, empty, text)
+- indentLevel: tab indentation depth (0 = no indent)
+- headingLevel: 1-6 (only for title/heading types)
+- taskStatus: open/done/cancelled/scheduled (only for task/checklist types)
+- priority: 1-3 (only when !/!!/!!! present)
+- marker: */- /+ (only for task/checklist/bullet types)
+- hasCheckbox: whether line uses [ ] checkbox syntax (only for task/checklist)
+- tags: array of #hashtags found in the line (only when present)
+- mentions: array of @mentions found in the line (only when present)
+- scheduledDate: YYYY-MM-DD (only when >date present)
 
 Use this when you need to:
 - See exactly which line contains what content
 - Find the correct lineIndex for task updates/completion
 - Determine 1-indexed line values for insert_content, edit_line, or delete_lines
+- Understand the structure of a note (which lines are tasks, headings, etc.)
 
 For large notes, use startLine/endLine and cursor pagination to fetch progressively.`,
           inputSchema: {
@@ -1145,7 +1681,11 @@ For large notes, use startLine/endLine and cursor pagination to fetch progressiv
         },
         {
           name: 'noteplan_search_paragraphs',
-          description: `Find matching lines/paragraph blocks inside one note, with pagination and line references for targeted edits.
+          description: `Find matching lines/paragraph blocks inside one note, with pagination, line references, and paragraph type metadata for targeted edits.
+
+Each match includes type metadata: type (title/heading/task/checklist/bullet/quote/separator/empty/text), indentLevel, and conditional fields headingLevel, taskStatus, priority, marker, hasCheckbox, tags, mentions, scheduledDate.
+
+At least one note reference is required: id, title, filename, or date. If none is provided, this returns an error.
 
 Recommended flow:
 1. noteplan_resolve_note
@@ -1293,20 +1833,54 @@ Positions:
 - "start": After frontmatter (if present), at beginning of body
 - "end": At the end of the note
 - "after-heading": After a specific heading (requires heading parameter)
-- "at-line": At a specific line number (requires line parameter, 1-indexed)
+- "at-line": At a specific line number (requires line parameter, 1-indexed). Content is inserted BEFORE the target line.
 
 Use this when the user wants to:
 - Add a paragraph under a heading
 - Insert content at a specific location
 - Add content at the start without touching frontmatter
 
-This is SAFER than reading and rewriting the whole note.`,
+Inserting empty/blank lines:
+- To insert ONE empty line before line N: use position="at-line", line=N, content="" (empty string). This splices a single blank line before the target.
+- Do NOT use content="\\n" — the content is spliced into the line array as-is, so "\\n" produces TWO blank lines (one from the newline character, one from the array join).
+- To insert an empty line with type metadata, use type="empty" with content="".
+
+Newline behavior: The content string is inserted as a single element into the line array, then lines are joined with \\n. Multi-line content (containing \\n) works but each \\n in your content adds an additional line. For a single blank line, always use content="".
+
+Structured typing: set "type" to auto-format content with correct markdown markers. For example, type="task" with taskStatus="open" generates the correct task prefix from user preferences. Available types: title, heading, task, checklist, bullet, quote, separator, empty, text.
+
+IMPORTANT: Always use tab characters (\\t) for indentation. NotePlan does not use spaces for indentation.
+
+This is SAFER than reading and rewriting the whole note.
+List/task lines are normalized to tab indentation by default (indentationStyle="tabs").
+
+Tip: you can target the note via id, filename, title, date, or query.`,
           inputSchema: {
             type: 'object',
             properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for space notes)',
+              },
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              title: {
+                type: 'string',
+                description: 'Note title target (resolved if unique)',
+              },
+              date: {
+                type: 'string',
+                description: 'Calendar note date target (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)',
+              },
+              query: {
+                type: 'string',
+                description: 'Resolvable note query (fuzzy note lookup before insert)',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID scope for title/date/query resolution',
               },
               content: {
                 type: 'string',
@@ -1319,14 +1893,48 @@ This is SAFER than reading and rewriting the whole note.`,
               },
               heading: {
                 type: 'string',
-                description: 'Heading name (required for after-heading position)',
+                description: 'Heading text (required for after-heading; pass with or without leading # marks)',
               },
               line: {
                 type: 'number',
                 description: 'Line number, 1-indexed (required for at-line position)',
               },
+              indentationStyle: {
+                type: 'string',
+                enum: ['tabs', 'preserve'],
+                description: 'Indentation normalization for inserted list/task lines. Default: tabs',
+              },
+              type: {
+                type: 'string',
+                enum: ['title', 'heading', 'task', 'checklist', 'bullet', 'quote', 'separator', 'empty', 'text'],
+                description: 'Paragraph type — auto-formats content with correct markdown markers when set',
+              },
+              taskStatus: {
+                type: 'string',
+                enum: ['open', 'done', 'cancelled', 'scheduled'],
+                description: 'Task/checklist status (default: open). Only used when type is task or checklist',
+              },
+              headingLevel: {
+                type: 'number',
+                description: 'Heading level 1-6 (only used when type is heading or title)',
+              },
+              priority: {
+                type: 'number',
+                description: 'Priority 1-3 (! / !! / !!!) appended to task/checklist lines',
+              },
+              indentLevel: {
+                type: 'number',
+                description: 'Tab indentation level for task/checklist/bullet lines (0-10)',
+              },
             },
-            required: ['filename', 'content', 'position'],
+            required: ['content', 'position'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+              { required: ['title'] },
+              { required: ['date'] },
+              { required: ['query'] },
+            ],
           },
         },
         {
@@ -1337,20 +1945,55 @@ Use this when the user wants to add content to the end of a note.
 This is a shorthand for insert_content with position="end".
 
 This is SAFER than reading and rewriting the whole note.
-Prefer this only for explicit append intent; otherwise use noteplan_insert_content for positional control.`,
+Prefer this only for explicit append intent; otherwise use noteplan_insert_content for positional control.
+List/task lines are normalized to tab indentation by default (indentationStyle="tabs").
+
+Tip: you can target the note via id, filename, title, date, or query.`,
           inputSchema: {
             type: 'object',
             properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for space notes)',
+              },
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              title: {
+                type: 'string',
+                description: 'Note title target (resolved if unique)',
+              },
+              date: {
+                type: 'string',
+                description: 'Calendar note date target (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)',
+              },
+              query: {
+                type: 'string',
+                description: 'Resolvable note query (fuzzy note lookup before append)',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID scope for title/date/query resolution',
               },
               content: {
                 type: 'string',
                 description: 'Content to append',
               },
+              indentationStyle: {
+                type: 'string',
+                enum: ['tabs', 'preserve'],
+                description: 'Indentation normalization for appended list/task lines. Default: tabs',
+              },
             },
-            required: ['filename', 'content'],
+            required: ['content'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+              { required: ['title'] },
+              { required: ['date'] },
+              { required: ['query'] },
+            ],
           },
         },
         {
@@ -1365,6 +2008,7 @@ Use this when the user wants to:
 
 This is SAFER than reading and rewriting the whole note.
 Execution requires a dryRun-issued confirmationToken.
+⚠️ If deleted lines contain attachment references like ![file](...) or ![image](...), NotePlan may auto-trash the referenced attachment files.
 
 Recommended flow:
 1. noteplan_resolve_note
@@ -1398,6 +2042,59 @@ Recommended flow:
           },
         },
         {
+          name: 'noteplan_replace_lines',
+          description: `Atomically replace a contiguous range of lines in one operation.
+
+Use this for multi-line rewrites to avoid line-number drift across repeated edit_line calls.
+Execution requires a dryRun-issued confirmationToken.
+⚠️ If replaced lines remove attachment references like ![file](...) or ![image](...), NotePlan may auto-trash referenced attachment files.
+List/task lines are normalized to tab indentation by default (indentationStyle="tabs").
+
+Recommended flow:
+1. noteplan_resolve_note
+2. noteplan_search_paragraphs or noteplan_get_paragraphs
+3. noteplan_replace_lines`,
+          inputSchema: {
+            type: 'object',
+            properties: {
+              filename: {
+                type: 'string',
+                description: 'Filename/path of the note',
+              },
+              startLine: {
+                type: 'number',
+                description: 'First line to replace (1-indexed, inclusive)',
+              },
+              endLine: {
+                type: 'number',
+                description: 'Last line to replace (1-indexed, inclusive)',
+              },
+              content: {
+                type: 'string',
+                description: 'Replacement content for the selected line range',
+              },
+              indentationStyle: {
+                type: 'string',
+                enum: ['tabs', 'preserve'],
+                description: 'Indentation normalization for replacement list/task lines. Default: tabs',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview replacement impact and get confirmationToken without modifying the note',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for replace execution',
+              },
+              allowEmptyContent: {
+                type: 'boolean',
+                description: 'Allow replacing selected lines with empty/blank text (default: false). Prefer noteplan_delete_lines for pure deletion.',
+              },
+            },
+            required: ['filename', 'startLine', 'endLine', 'content'],
+          },
+        },
+        {
           name: 'noteplan_edit_line',
           description: `Edit a specific line in a note without rewriting the entire note.
 
@@ -1413,7 +2110,16 @@ Example: To cross out "Buy milk" on line 5:
 1. Get current line content via noteplan_get_paragraphs
 2. Call noteplan_edit_line with line=5, content="~~Buy milk~~"
 
+IMPORTANT: Always use tab characters (\\t) for indentation. NotePlan does not use spaces for indentation.
+Paragraph types: title, heading, task, checklist, bullet, quote, separator, empty, text.
+Task states: open (* [ ]), done (* [x]), cancelled (* [-]), scheduled (* [>]). The marker (*/- ) depends on user preferences.
+
 This is SAFER than noteplan_update_note which replaces the entire note.
+If content contains newline characters, this becomes a multi-line replacement and line numbers can shift.
+⚠️ If the edit removes attachment references like ![file](...) or ![image](...), NotePlan may auto-trash referenced attachment files.
+List/task lines are normalized to tab indentation by default (indentationStyle="tabs").
+
+To insert a blank line BEFORE a line, use noteplan_insert_content with position="at-line", content="" instead of embedding \\n in edit_line content.
 
 Recommended flow:
 1. noteplan_resolve_note
@@ -1434,6 +2140,11 @@ Recommended flow:
                 type: 'string',
                 description: 'New content for the line (include any markdown formatting)',
               },
+              indentationStyle: {
+                type: 'string',
+                enum: ['tabs', 'preserve'],
+                description: 'Indentation normalization for edited list/task lines. Default: tabs',
+              },
               allowEmptyContent: {
                 type: 'boolean',
                 description: 'Allow replacing line content with empty/blank text (default: false)',
@@ -1447,13 +2158,30 @@ Recommended flow:
         {
           name: 'noteplan_search',
           description:
-            'Full-text search across notes. Returns IDs to retrieve full notes with noteplan_get_note.',
+            'Search across notes by content (full-text) or metadata (title/filename) via searchField. Use this to discover notes by content/keywords/phrases and optional frontmatter property filters (e.g. {"category":"marketing"}). Use queryMode=smart/any/all for multi-word token matching (instead of strict phrase-only search), and query="*" for browse mode (metadata listing, no text match scoring). Folder filters accept canonical paths from noteplan_list_folders/noteplan_resolve_folder, with or without "Notes/" prefix.',
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
                 description: 'Search query. Supports OR patterns like "meeting|standup"',
+              },
+              searchField: {
+                type: 'string',
+                enum: ['content', 'title', 'filename', 'title_or_filename'],
+                description:
+                  'Search scope. Use "title" or "title_or_filename" for fast note discovery by version/name. Default: content',
+              },
+              queryMode: {
+                type: 'string',
+                enum: ['phrase', 'smart', 'any', 'all'],
+                description:
+                  'Multi-word behavior for content search: phrase (exact phrase), smart (token OR + relevance threshold), any (any token), all (all tokens). Default: smart',
+              },
+              minTokenMatches: {
+                type: 'number',
+                description:
+                  'When queryMode is smart/any/all, minimum token matches required per note (auto by default)',
               },
               types: {
                 type: 'array',
@@ -1463,7 +2191,7 @@ Recommended flow:
               folders: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Filter by folders',
+                description: 'Filter by folders (canonical path, e.g. "20 - Areas"; "Notes/20 - Areas" is also accepted). If multiple folders are provided, the first is used for full-text scope.',
               },
               space: {
                 type: 'string',
@@ -1484,6 +2212,15 @@ Recommended flow:
               contextLines: {
                 type: 'number',
                 description: 'Lines of context around matches (0-5, default: 0)',
+              },
+              propertyFilters: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Exact frontmatter property filters (all must match), e.g. {"category":"marketing"}',
+              },
+              propertyCaseSensitive: {
+                type: 'boolean',
+                description: 'Case-sensitive frontmatter property matching (default: false)',
               },
               modifiedAfter: {
                 type: 'string',
@@ -1567,7 +2304,7 @@ Recommended flow:
         {
           name: 'noteplan_search_tasks',
           description:
-            'Search task lines inside one note and return matching task line indexes for targeted task updates. Requires one note reference (id, filename, title, or date). For cross-note task lookup use noteplan_search_tasks_global.',
+            'Search task lines inside one note and return matching task line indexes for targeted task updates. Requires one note reference (id, filename, title, or date); if none is provided, this returns an error. For cross-note task lookup use noteplan_search_tasks_global.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1633,13 +2370,13 @@ Recommended flow:
         {
           name: 'noteplan_search_tasks_global',
           description:
-            'Search tasks across multiple notes and return note+line references for targeted updates/completions.',
+            'Search tasks across multiple notes and return note+line references for targeted updates/completions. Supports query="*" wildcard to list tasks without keyword filtering. Use noteTypes/preferCalendar/periodicOnly to prioritize weekly/daily note workflows.',
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
-                description: 'Task query text across notes',
+                description: 'Task query text across notes. Use "*" to match all tasks.',
               },
               caseSensitive: {
                 type: 'boolean',
@@ -1666,6 +2403,19 @@ Recommended flow:
                 type: 'string',
                 description: 'Filter candidate notes by title/filename/folder substring',
               },
+              noteTypes: {
+                type: 'array',
+                items: { type: 'string', enum: ['calendar', 'note', 'trash'] },
+                description: 'Restrict scanned notes by type',
+              },
+              preferCalendar: {
+                type: 'boolean',
+                description: 'Prioritize calendar notes before maxNotes truncation (default: false)',
+              },
+              periodicOnly: {
+                type: 'boolean',
+                description: 'Only scan periodic calendar notes (weekly/monthly/quarterly/yearly)',
+              },
               maxNotes: {
                 type: 'number',
                 description: 'Maximum notes to scan (default: 500, max: 2000)',
@@ -1689,7 +2439,7 @@ Recommended flow:
         {
           name: 'noteplan_add_task',
           description:
-            'Add a task to a daily note date or project note file. Daily note target dates are auto-created if missing.',
+            'Add a task to a daily note date or project note file. Daily note target dates are auto-created if missing. The task marker (*/- with or without checkbox) is determined by the user\'s NotePlan preferences — do not include a marker in content. Use tab characters (\\t) for indentation, never spaces.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1714,6 +2464,19 @@ Recommended flow:
                 type: 'string',
                 description: 'Space ID when targeting daily notes',
               },
+              status: {
+                type: 'string',
+                enum: ['open', 'done', 'cancelled', 'scheduled'],
+                description: 'Task status (default: open)',
+              },
+              priority: {
+                type: 'number',
+                description: 'Priority 1-3 (! / !! / !!!) appended to the task',
+              },
+              indentLevel: {
+                type: 'number',
+                description: 'Tab indentation level (default: 0, max: 10)',
+              },
             },
             required: ['target', 'content'],
           },
@@ -1721,7 +2484,7 @@ Recommended flow:
         {
           name: 'noteplan_complete_task',
           description:
-            'Mark a task as done. Accepts lineIndex (0-based) or line (1-based). Prefer this over noteplan_update_task when only marking done.',
+            'Mark a task as done. Accepts lineIndex (0-based) or line (1-based). lineIndex is 0-based: use lineIndex from noteplan_get_tasks or noteplan_get_paragraphs, not the 1-indexed line value. Prefer this over noteplan_update_task when only marking done.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1731,11 +2494,11 @@ Recommended flow:
               },
               lineIndex: {
                 type: 'number',
-                description: 'Line index of the task (0-based)',
+                description: 'Line index of the task (0-based, from noteplan_get_tasks or noteplan_get_paragraphs lineIndex)',
               },
               line: {
                 type: 'number',
-                description: 'Line number of the task (1-based)',
+                description: 'Line number of the task (1-based, not interchangeable with lineIndex)',
               },
             },
             required: ['filename'],
@@ -1745,7 +2508,7 @@ Recommended flow:
         {
           name: 'noteplan_update_task',
           description:
-            'Update a task content or status (open, done, cancelled, scheduled). Accepts lineIndex (0-based) or line (1-based). For simply marking done, prefer noteplan_complete_task.',
+            'Update a task content or status (open, done, cancelled, scheduled). Accepts lineIndex (0-based) or line (1-based). lineIndex is 0-based: use lineIndex from noteplan_get_tasks or noteplan_get_paragraphs, not the 1-indexed line value. For simply marking done, prefer noteplan_complete_task.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1755,11 +2518,11 @@ Recommended flow:
               },
               lineIndex: {
                 type: 'number',
-                description: 'Line index of the task (0-based)',
+                description: 'Line index of the task (0-based, from noteplan_get_tasks or noteplan_get_paragraphs lineIndex)',
               },
               line: {
                 type: 'number',
-                description: 'Line number of the task (1-based)',
+                description: 'Line number of the task (1-based, not interchangeable with lineIndex)',
               },
               content: {
                 type: 'string',
@@ -1876,6 +2639,45 @@ Recommended flow:
               },
             },
             required: ['type'],
+          },
+        },
+        {
+          name: 'noteplan_get_recent_periodic_notes',
+          description:
+            'Get a recent sequence of periodic notes (weekly/monthly/quarterly/yearly) from a reference date, ideal for quickly scanning the latest weekly notes.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['weekly', 'monthly', 'quarterly', 'yearly'],
+                description: 'Type of periodic note (default: weekly)',
+              },
+              count: {
+                type: 'number',
+                description: 'How many notes to return (default: 6, max: 50)',
+              },
+              fromDate: {
+                type: 'string',
+                description: 'Reference date (YYYY-MM-DD). Defaults to today.',
+              },
+              includeContent: {
+                type: 'boolean',
+                description: 'Include full note content (default: false)',
+              },
+              includeMissing: {
+                type: 'boolean',
+                description: 'Include missing period slots in response (default: false)',
+              },
+              maxLookback: {
+                type: 'number',
+                description: 'Maximum period slots to inspect (default: 52, max: 260)',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID',
+              },
+            },
           },
         },
         {
@@ -2014,9 +2816,161 @@ Recommended flow:
           },
         },
         {
+          name: 'noteplan_list_filters',
+          description: 'List saved NotePlan Filters with pagination.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: 'Filter names by substring',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum filters to return (default: 50)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+            },
+          },
+        },
+        {
+          name: 'noteplan_get_filter',
+          description: 'Get one saved Filter with parsed parameter values.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: 'Filter name',
+              },
+            },
+            required: ['name'],
+          },
+        },
+        {
+          name: 'noteplan_save_filter',
+          description: 'Create or update a saved Filter by writing filter items (param/value/display).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: 'Filter name',
+              },
+              overwrite: {
+                type: 'boolean',
+                description: 'Overwrite existing filter if true (default: true)',
+              },
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    param: {
+                      type: 'string',
+                      description: 'Filter parameter key (e.g., fp_open, fp_keyword)',
+                    },
+                    value: {
+                      oneOf: [
+                        { type: 'string' },
+                        { type: 'boolean' },
+                        { type: 'number' },
+                        { type: 'array', items: { type: 'string' } },
+                      ],
+                      description: 'Filter parameter value',
+                    },
+                    display: {
+                      type: 'boolean',
+                      description: 'UI display flag (default: true)',
+                    },
+                  },
+                  required: ['param', 'value'],
+                },
+                description: 'Filter item list',
+              },
+            },
+            required: ['name', 'items'],
+          },
+        },
+        {
+          name: 'noteplan_rename_filter',
+          description: 'Rename a saved Filter.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              oldName: {
+                type: 'string',
+                description: 'Existing filter name',
+              },
+              newName: {
+                type: 'string',
+                description: 'New filter name',
+              },
+              overwrite: {
+                type: 'boolean',
+                description: 'Allow replacing existing target name',
+              },
+            },
+            required: ['oldName', 'newName'],
+          },
+        },
+        {
+          name: 'noteplan_get_filter_tasks',
+          description: 'Execute a saved Filter against note tasks and return task matches with note+line references.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: 'Filter name to run',
+              },
+              maxNotes: {
+                type: 'number',
+                description: 'Maximum notes to scan (default: 500)',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum task matches to return (default: 30)',
+              },
+              offset: {
+                type: 'number',
+                description: 'Pagination offset (default: 0)',
+              },
+              cursor: {
+                type: 'string',
+                description: 'Cursor token from previous page (preferred over offset)',
+              },
+              space: {
+                type: 'string',
+                description: 'Optional space ID scope',
+              },
+              folder: {
+                type: 'string',
+                description: 'Optional folder scope',
+              },
+            },
+            required: ['name'],
+          },
+        },
+        {
+          name: 'noteplan_list_filter_parameters',
+          description: 'List supported Filter parameter keys and timeframe values for constructing saved filters.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        {
           name: 'noteplan_list_folders',
           description:
-            'List folders with pagination and optional filtering. Defaults to local folders only.',
+            'List folders with pagination and optional filtering. Defaults to local folders only. Use parentPath + recursive=false to list direct subfolders.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2036,9 +2990,20 @@ Recommended flow:
                 type: 'string',
                 description: 'Filter by folder name/path substring',
               },
+              parentPath: {
+                type: 'string',
+                description:
+                  'Optional parent folder path (e.g., "20 - Areas" or "Notes/20 - Areas")',
+              },
+              recursive: {
+                type: 'boolean',
+                description:
+                  'When parentPath is set: true = include all descendants, false = only direct children (default: true)',
+              },
               maxDepth: {
                 type: 'number',
-                description: 'Max local folder depth (1 = top level, default: 1)',
+                description:
+                  'Max local folder depth (1 = top level, default: 1). If parentPath is provided and maxDepth is omitted, depth auto-expands to include that branch.',
               },
               limit: {
                 type: 'number',
@@ -2058,7 +3023,7 @@ Recommended flow:
         {
           name: 'noteplan_find_folders',
           description:
-            'Find likely folder matches for browsing/exploration. Use when user wants multiple options, not a single canonical folder.',
+            'Find likely folder matches for browsing/exploration. Use when user wants multiple options, not a single canonical folder. Use noteplan_resolve_folder when you need one canonical folder for create/list/update operations.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2131,6 +3096,105 @@ Recommended flow:
               },
             },
             required: ['query'],
+          },
+        },
+        {
+          name: 'noteplan_create_folder',
+          description:
+            'Create a folder. Local mode: provide path under Notes. TeamSpace mode: provide space + name and optional parent (ID/path/name or "root").',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: 'Local folder path under Notes (e.g., "20 - Areas/Marketing")',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID for TeamSpace folder creation',
+              },
+              name: {
+                type: 'string',
+                description: 'Folder name for TeamSpace folder creation',
+              },
+              parent: {
+                type: 'string',
+                description: 'TeamSpace parent folder reference (ID/path/name or "root")',
+              },
+            },
+          },
+        },
+        {
+          name: 'noteplan_move_folder',
+          description:
+            'Move a folder. Local mode: sourcePath + destinationFolder. TeamSpace mode: space + source + destination. Requires dryRun-issued confirmationToken.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              sourcePath: {
+                type: 'string',
+                description: 'Local source folder path under Notes',
+              },
+              destinationFolder: {
+                type: 'string',
+                description: 'Local destination folder under Notes (or "Notes" for root)',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID for TeamSpace folder move',
+              },
+              source: {
+                type: 'string',
+                description: 'TeamSpace source folder reference (ID/path/name)',
+              },
+              destination: {
+                type: 'string',
+                description: 'TeamSpace destination folder reference (ID/path/name or "root")',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview move impact and get confirmationToken without mutating folders',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for move execution',
+              },
+            },
+          },
+        },
+        {
+          name: 'noteplan_rename_folder',
+          description:
+            'Rename a folder in place. Local mode: sourcePath + newName. TeamSpace mode: space + source + newName. Requires dryRun-issued confirmationToken.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              sourcePath: {
+                type: 'string',
+                description: 'Local source folder path under Notes',
+              },
+              newName: {
+                type: 'string',
+                description: 'New folder name',
+              },
+              space: {
+                type: 'string',
+                description: 'Space ID for TeamSpace folder rename',
+              },
+              source: {
+                type: 'string',
+                description: 'TeamSpace source folder reference (ID/path/name)',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview rename impact and get confirmationToken without mutating folders',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for rename execution',
+              },
+            },
+            required: ['newName'],
           },
         },
 
@@ -2470,6 +3534,247 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           },
         },
       ];
+  if (embeddingsToolsEnabled) {
+    toolDefinitions.push(
+      {
+        name: 'noteplan_embeddings_status',
+        description:
+          'Get embeddings configuration/index status. Returns provider/model, index counts, and whether embeddings are configured.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            space: {
+              type: 'string',
+              description: 'Optional TeamSpace ID scope for status counts',
+            },
+          },
+        },
+      },
+      {
+        name: 'noteplan_embeddings_sync',
+        description:
+          'Build or refresh the local embeddings index from NotePlan notes. Optional scope filters and pagination allow incremental sync.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            space: {
+              type: 'string',
+              description: 'Optional TeamSpace ID scope',
+            },
+            types: {
+              type: 'array',
+              items: { type: 'string', enum: ['calendar', 'note', 'trash'] },
+              description: 'Optional note type filter for sync scope',
+            },
+            noteQuery: {
+              type: 'string',
+              description: 'Optional title/filename/folder substring filter for sync scope',
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum notes to scan per sync run (default: 500, max: 5000)',
+            },
+            offset: {
+              type: 'number',
+              description: 'Pagination offset in note candidate set (default: 0)',
+            },
+            forceReembed: {
+              type: 'boolean',
+              description: 'Recompute embeddings even if note content hash has not changed',
+            },
+            pruneMissing: {
+              type: 'boolean',
+              description:
+                'When true, remove stale index rows for missing notes (applies only for full-scope sync runs)',
+            },
+            batchSize: {
+              type: 'number',
+              description: 'Embedding API batch size (default from config, max: 64)',
+            },
+            maxChunksPerNote: {
+              type: 'number',
+              description: 'Maximum chunks indexed per note (default from config)',
+            },
+          },
+        },
+      },
+      {
+        name: 'noteplan_embeddings_search',
+        description:
+          'Semantic search over the local embeddings index. Returns preview payload by default; set includeText=true for full chunk text.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Semantic query text',
+            },
+            space: {
+              type: 'string',
+              description: 'Optional TeamSpace ID scope',
+            },
+            source: {
+              type: 'string',
+              enum: ['local', 'space'],
+              description: 'Optional source filter',
+            },
+            types: {
+              type: 'array',
+              items: { type: 'string', enum: ['calendar', 'note', 'trash'] },
+              description: 'Optional note type filter',
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum matches to return (default: 10, max: 100)',
+            },
+            minScore: {
+              type: 'number',
+              description: 'Minimum cosine similarity threshold (0-1, default: 0.2)',
+            },
+            includeText: {
+              type: 'boolean',
+              description:
+                'Include full chunk text in response. Default false returns preview-only payload to keep context small.',
+            },
+            previewChars: {
+              type: 'number',
+              description: 'Preview length per result when includeText=false',
+            },
+            maxChunks: {
+              type: 'number',
+              description: 'Maximum indexed chunks to scan before ranking (default: 8000)',
+            },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'noteplan_embeddings_reset',
+        description:
+          'Delete embeddings index rows (all or one TeamSpace scope). Requires dryRun-issued confirmationToken.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            space: {
+              type: 'string',
+              description: 'Optional TeamSpace ID scope for reset',
+            },
+            dryRun: {
+              type: 'boolean',
+              description: 'Preview reset impact and get confirmationToken',
+            },
+            confirmationToken: {
+              type: 'string',
+              description: 'Confirmation token issued by dryRun for reset execution',
+            },
+          },
+        },
+      }
+    );
+  }
+
+  // Memory tools — always available
+  toolDefinitions.push(
+    {
+      name: 'noteplan_memory_save',
+      description:
+        'Save a memory about user preferences, corrections, or patterns. Use when:\n' +
+        '- User corrects your formatting or style ("No, use ## not ###")\n' +
+        '- User states a preference ("always use bullet lists for action items")\n' +
+        '- User teaches a naming convention or workflow pattern\n' +
+        '- You notice a repeated pattern worth remembering\n' +
+        'Suggested tags: style, formatting, workflow, correction, naming, structure, preference',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          content: {
+            type: 'string',
+            description: 'The memory content to save (1-2000 characters)',
+            minLength: 1,
+            maxLength: 2000,
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: 10,
+            description: 'Optional tags for categorizing the memory (max 10). Suggested: style, formatting, workflow, correction, naming, structure, preference',
+          },
+        },
+        required: ['content'],
+      },
+    },
+    {
+      name: 'noteplan_memory_list',
+      description:
+        'List or search stored memories about user preferences and corrections. Check memories:\n' +
+        '- Before making formatting or style decisions\n' +
+        '- When the user says "remember" or "like I said before"\n' +
+        '- At the start of complex editing sessions\n' +
+        '- When unsure about a convention the user may have stated previously',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tag: {
+            type: 'string',
+            description: 'Filter by exact tag (case-insensitive)',
+          },
+          query: {
+            type: 'string',
+            description: 'Search content by substring (case-insensitive)',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum memories to return (default: 50, max: 200)',
+          },
+          offset: {
+            type: 'number',
+            description: 'Pagination offset (default: 0)',
+          },
+        },
+      },
+    },
+    {
+      name: 'noteplan_memory_update',
+      description: 'Update content or tags of an existing memory.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The memory ID to update',
+          },
+          content: {
+            type: 'string',
+            description: 'New content for the memory (1-2000 characters)',
+            minLength: 1,
+            maxLength: 2000,
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: 10,
+            description: 'New tags for the memory',
+          },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'noteplan_memory_delete',
+      description: 'Delete a stored memory by ID.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The memory ID to delete',
+          },
+        },
+        required: ['id'],
+      },
+    }
+  );
+
   const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
     ...tool,
     inputSchema: withDebugTimingsInputSchema(tool.inputSchema),
@@ -2489,7 +3794,14 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
 
   // Register tool listing handler
   server.setRequestHandler(ListToolsRequestSchema, async (request) => {
-    const offset = toBoundedInt(request.params?.cursor, 0, 0, Number.MAX_SAFE_INTEGER);
+    const rawCursor = request.params?.cursor;
+    if (rawCursor === undefined || rawCursor === null || rawCursor === '') {
+      // Compatibility mode: some MCP clients currently do not follow `nextCursor`.
+      // Returning the full list on the initial request keeps all tools callable.
+      return { tools: compactToolDefinitions };
+    }
+
+    const offset = toBoundedInt(rawCursor, 0, 0, Number.MAX_SAFE_INTEGER);
     const tools = compactToolDefinitions.slice(offset, offset + TOOLS_LIST_PAGE_SIZE);
     const nextOffset = offset + tools.length;
     const hasMore = nextOffset < compactToolDefinitions.length;
@@ -2503,13 +3815,14 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
   // Register tool call handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const normalizedName = normalizeToolName(name);
     const includeTiming = isDebugTimingsEnabled(args);
     const startTime = Date.now();
 
     try {
       let result;
 
-      switch (name) {
+      switch (normalizedName) {
         // Note operations
         case 'noteplan_get_note':
           result = noteTools.getNote(args as any);
@@ -2528,6 +3841,15 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         case 'noteplan_delete_note':
           result = noteTools.deleteNote(args as any);
+          break;
+        case 'noteplan_move_note':
+          result = noteTools.moveNote(args as any);
+          break;
+        case 'noteplan_rename_note_file':
+          result = noteTools.renameNoteFile(args as any);
+          break;
+        case 'noteplan_restore_note':
+          result = noteTools.restoreNote(args as any);
           break;
 
         // Note structure
@@ -2553,6 +3875,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         case 'noteplan_delete_lines':
           result = noteTools.deleteLines(args as any);
+          break;
+        case 'noteplan_replace_lines':
+          result = noteTools.replaceLines(args as any);
           break;
         case 'noteplan_edit_line':
           result = noteTools.editLine(args as any);
@@ -2596,6 +3921,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_get_periodic_note':
           result = calendarTools.getPeriodicNote(args as any);
           break;
+        case 'noteplan_get_recent_periodic_notes':
+          result = calendarTools.getRecentPeriodicNotes(args as any);
+          break;
         case 'noteplan_get_notes_in_range':
           result = calendarTools.getNotesInRange(args as any);
           break;
@@ -2610,6 +3938,24 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_list_tags':
           result = spaceTools.listTags(args as any);
           break;
+        case 'noteplan_list_filters':
+          result = filterTools.listFilters(args as any);
+          break;
+        case 'noteplan_get_filter':
+          result = filterTools.getFilter(args as any);
+          break;
+        case 'noteplan_save_filter':
+          result = filterTools.saveFilter(args as any);
+          break;
+        case 'noteplan_rename_filter':
+          result = filterTools.renameFilter(args as any);
+          break;
+        case 'noteplan_get_filter_tasks':
+          result = filterTools.getFilterTasks(args as any);
+          break;
+        case 'noteplan_list_filter_parameters':
+          result = filterTools.listFilterParameters();
+          break;
         case 'noteplan_list_folders':
           result = spaceTools.listFolders(args as any);
           break;
@@ -2618,6 +3964,15 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         case 'noteplan_resolve_folder':
           result = spaceTools.resolveFolder(args as any);
+          break;
+        case 'noteplan_create_folder':
+          result = spaceTools.createFolder(args as any);
+          break;
+        case 'noteplan_move_folder':
+          result = spaceTools.moveFolder(args as any);
+          break;
+        case 'noteplan_rename_folder':
+          result = spaceTools.renameFolder(args as any);
           break;
 
         // macOS Calendar events
@@ -2656,6 +4011,18 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'reminders_list_lists':
           result = reminderTools.listReminderLists(args as any);
           break;
+        case 'noteplan_embeddings_status':
+          result = embeddingsTools.embeddingsStatus(args as any);
+          break;
+        case 'noteplan_embeddings_sync':
+          result = await embeddingsTools.embeddingsSync(args as any);
+          break;
+        case 'noteplan_embeddings_search':
+          result = await embeddingsTools.embeddingsSearch(args as any);
+          break;
+        case 'noteplan_embeddings_reset':
+          result = embeddingsTools.embeddingsReset(args as any);
+          break;
         case 'noteplan_search_tools': {
           const input = (args ?? {}) as { query?: unknown; limit?: unknown };
           const query = typeof input.query === 'string' ? input.query.trim() : '';
@@ -2684,7 +4051,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_get_tool_details': {
           const input = (args ?? {}) as { names?: unknown };
           const names = Array.isArray(input.names)
-            ? input.names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+            ? input.names
+                .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+                .map((toolName) => normalizeToolName(toolName))
             : [];
           const uniqueNames = Array.from(new Set(names));
           if (uniqueNames.length === 0) {
@@ -2715,13 +4084,27 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         }
 
+        case 'noteplan_memory_save':
+          result = memoryTools.saveMemory(args as any);
+          break;
+        case 'noteplan_memory_list':
+          result = memoryTools.listMemories(args as any);
+          break;
+        case 'noteplan_memory_update':
+          result = memoryTools.updateMemory(args as any);
+          break;
+        case 'noteplan_memory_delete':
+          result = memoryTools.deleteMemory(args as any);
+          break;
+
         default:
-          throw new Error(`Unknown tool: ${name}`);
+          throw new Error(`Unknown tool: ${name} (normalized: ${normalizedName})`);
       }
 
-      const enrichedResult = enrichErrorResult(result, name);
-      const resultWithSuggestions = withSuggestedNextTools(enrichedResult, name);
-      const resultWithDuration = withDuration(resultWithSuggestions, Date.now() - startTime, includeTiming);
+      const enrichedResult = enrichErrorResult(result, normalizedName);
+      const resultWithSuggestions = withSuggestedNextTools(enrichedResult, normalizedName);
+      const resultWithMemory = withMemoryHints(resultWithSuggestions, normalizedName);
+      const resultWithDuration = withDuration(resultWithMemory, Date.now() - startTime, includeTiming);
       return {
         content: [
           {
@@ -2732,7 +4115,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const meta = inferToolErrorMeta(name, errorMessage);
+      const meta = inferToolErrorMeta(normalizedName, errorMessage);
       const errorResult: Record<string, unknown> = {
         success: false,
         error: errorMessage,

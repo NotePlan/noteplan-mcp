@@ -9,7 +9,7 @@ import {
   updateTaskContent,
   addTask,
 } from '../noteplan/markdown-parser.js';
-import { TaskStatus } from '../noteplan/types.js';
+import { TaskStatus, NoteType } from '../noteplan/types.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -19,6 +19,30 @@ function toBoundedInt(value: unknown, defaultValue: number, min: number, max: nu
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeType(value: unknown): NoteType | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'note' || normalized === 'calendar' || normalized === 'trash') {
+    return normalized as NoteType;
+  }
+  return null;
+}
+
+function normalizeTypeList(values: unknown): NoteType[] | undefined {
+  if (!Array.isArray(values)) return undefined;
+  const unique = new Set<NoteType>();
+  for (const entry of values) {
+    const normalized = normalizeType(entry);
+    if (normalized) unique.add(normalized);
+  }
+  return unique.size > 0 ? Array.from(unique) : undefined;
+}
+
+function isPeriodicCalendarNote(note: { type: NoteType; date?: string }): boolean {
+  if (note.type !== 'calendar' || !note.date) return false;
+  return note.date.includes('-');
 }
 
 function resolveTaskLineIndex(input: {
@@ -110,6 +134,14 @@ export const getTasksSchema = z.object({
   limit: z.number().min(1).max(500).optional().default(100).describe('Maximum tasks to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.title && !input.filename && !input.date) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, title, filename, or date',
+      path: ['id'],
+    });
+  }
 });
 
 export const searchTasksSchema = z.object({
@@ -128,6 +160,14 @@ export const searchTasksSchema = z.object({
   limit: z.number().min(1).max(200).optional().default(20).describe('Maximum matches to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.title && !input.filename && !input.date) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, title, filename, or date',
+      path: ['id'],
+    });
+  }
 });
 
 export const searchTasksGlobalSchema = z.object({
@@ -141,6 +181,20 @@ export const searchTasksGlobalSchema = z.object({
   folder: z.string().optional().describe('Restrict to a specific folder path'),
   space: z.string().optional().describe('Restrict to a specific space ID'),
   noteQuery: z.string().optional().describe('Filter notes by title/filename/folder substring'),
+  noteTypes: z
+    .array(z.enum(['calendar', 'note', 'trash']))
+    .optional()
+    .describe('Restrict scanned notes by type'),
+  preferCalendar: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Prioritize calendar notes before maxNotes truncation'),
+  periodicOnly: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('When true, only scan periodic calendar notes (weekly/monthly/quarterly/yearly)'),
   maxNotes: z.number().min(1).max(2000).optional().default(500).describe('Maximum notes to scan'),
   limit: z.number().min(1).max(300).optional().default(30).describe('Maximum matches to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
@@ -162,6 +216,22 @@ export const addTaskSchema = z.object({
     .optional()
     .describe('Heading to add task under (when position is after-heading)'),
   space: z.string().optional().describe('Space ID when targeting daily notes'),
+  status: z
+    .enum(['open', 'done', 'cancelled', 'scheduled'])
+    .optional()
+    .describe('Task status (default: open)'),
+  priority: z
+    .number()
+    .min(1)
+    .max(3)
+    .optional()
+    .describe('Priority 1-3 (! / !! / !!!) appended to the task'),
+  indentLevel: z
+    .number()
+    .min(0)
+    .max(10)
+    .optional()
+    .describe('Tab indentation level (default: 0)'),
 });
 
 export const completeTaskSchema = z.object({
@@ -390,21 +460,41 @@ export function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema
   const caseSensitive = params.caseSensitive ?? false;
   const wholeWord = params.wholeWord ?? false;
   const normalizedQuery = caseSensitive ? query : query.toLowerCase();
+  const wildcardQuery = query === '*';
   const matcher = wholeWord
     ? new RegExp(`\\b${escapeRegExp(query)}\\b`, caseSensitive ? '' : 'i')
     : null;
   const maxNotes = toBoundedInt(params.maxNotes, 500, 1, 2000);
   const noteQuery = typeof params.noteQuery === 'string' ? params.noteQuery.trim().toLowerCase() : '';
+  const noteTypes = normalizeTypeList((params as { noteTypes?: unknown }).noteTypes);
+  const preferCalendar = params.preferCalendar === true;
+  const periodicOnly = params.periodicOnly === true;
   const allNotes = store.listNotes({
     folder: params.folder,
     space: params.space,
   });
-  const filteredNotes = noteQuery
+  let filteredNotes = noteQuery
     ? allNotes.filter((note) => {
         const haystack = `${note.title} ${note.filename} ${note.folder || ''}`.toLowerCase();
         return haystack.includes(noteQuery);
       })
     : allNotes;
+  if (noteTypes && noteTypes.length > 0) {
+    filteredNotes = filteredNotes.filter((note) => noteTypes.includes(note.type));
+  }
+  if (periodicOnly) {
+    filteredNotes = filteredNotes.filter((note) => isPeriodicCalendarNote(note));
+  }
+  if (preferCalendar) {
+    filteredNotes = [...filteredNotes].sort((a, b) => {
+      const aCalendar = a.type === 'calendar' ? 1 : 0;
+      const bCalendar = b.type === 'calendar' ? 1 : 0;
+      if (aCalendar !== bCalendar) return bCalendar - aCalendar;
+      const aModified = a.modifiedAt?.getTime() ?? 0;
+      const bModified = b.modifiedAt?.getTime() ?? 0;
+      return bModified - aModified;
+    });
+  }
   const scannedNotes = filteredNotes.slice(0, maxNotes);
   const truncatedByMaxNotes = filteredNotes.length > scannedNotes.length;
 
@@ -417,7 +507,11 @@ export function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema
 
     tasks.forEach((task) => {
       const haystack = caseSensitive ? task.content : task.content.toLowerCase();
-      const isMatch = matcher ? matcher.test(task.content) : haystack.includes(normalizedQuery);
+      const isMatch = wildcardQuery
+        ? true
+        : matcher
+          ? matcher.test(task.content)
+          : haystack.includes(normalizedQuery);
       if (!isMatch) return;
 
       allMatches.push({
@@ -463,6 +557,9 @@ export function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema
     totalNotes: filteredNotes.length,
     truncatedByMaxNotes,
     maxNotes,
+    noteTypes,
+    preferCalendar,
+    periodicOnly,
     matches: page,
   };
 
@@ -499,14 +596,25 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
       };
     }
 
+    const taskOptions = (params.status !== undefined || params.priority !== undefined || params.indentLevel !== undefined)
+      ? {
+          status: params.status as TaskStatus | undefined,
+          priority: params.priority,
+          indentLevel: params.indentLevel,
+        }
+      : undefined;
     const newContent = addTask(
       note.content,
       params.content,
       params.position as 'start' | 'end' | 'after-heading',
-      params.heading
+      params.heading,
+      taskOptions
     );
 
-    store.updateNote(note.filename, newContent);
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    store.updateNote(writeIdentifier, newContent, {
+      source: note.source,
+    });
 
     return {
       success: true,
@@ -549,7 +657,10 @@ export function completeTask(params: z.infer<typeof completeTaskSchema>) {
     const originalLine = lines[lineIndex] || '';
 
     const newContent = updateTaskStatus(note.content, lineIndex, 'done');
-    const updatedNote = store.updateNote(note.filename, newContent);
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    const updatedNote = store.updateNote(writeIdentifier, newContent, {
+      source: note.source,
+    });
 
     const newLines = updatedNote.content.split('\n');
     const updatedLine = newLines[lineIndex] || '';
@@ -622,7 +733,10 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
       newContent = updateTaskContent(newContent, lineIndex, params.content);
     }
 
-    store.updateNote(note.filename, newContent);
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    store.updateNote(writeIdentifier, newContent, {
+      source: note.source,
+    });
 
     return {
       success: true,
