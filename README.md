@@ -54,51 +54,50 @@ Or download the installer from [nodejs.org](https://nodejs.org).
 
 ### 2. Download the Server
 
-Download the latest release from the [Releases page](https://github.com/NotePlan/noteplan-mcp/releases) and extract it to a permanent location, for example:
+Download the latest release from the [Releases page](https://github.com/NotePlan/noteplan-mcp/releases) and extract it:
 
 ```bash
-mkdir -p ~/noteplan-mcp
-cd ~/noteplan-mcp
-tar -xzf ~/Downloads/noteplan-mcp-vX.X.X.tar.gz
+cd ~/Downloads
+tar -xzf noteplan-mcp-v*.tar.gz
 ```
 
 The release includes everything pre-built — no compilation needed.
 
 ### 3. Configure Your AI Client
 
-Pick the client you use and add the server config.
+#### Claude Code
 
-**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Run this single command in your terminal:
+
+```bash
+claude mcp add noteplan node ~/Downloads/noteplan-mcp/dist/index.js
+```
+
+That's it — no file editing needed. Restart Claude Code and the NotePlan tools will appear.
+
+#### Claude Desktop
+
+1. First, get the full path to the server by running this in Terminal:
+   ```bash
+   echo ~/Downloads/noteplan-mcp/dist/index.js
+   ```
+   Copy the output (e.g. `/Users/yourname/Downloads/noteplan-mcp/dist/index.js`).
+
+2. Open Claude Desktop and go to **Settings > Developer > Edit Config**
+3. Add the `noteplan` server inside `mcpServers`, pasting your full path:
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
       "command": "node",
-      "args": ["/Users/YOUR_USERNAME/noteplan-mcp/dist/index.js"]
+      "args": ["/Users/yourname/Downloads/noteplan-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-**Claude Code** — add to `~/.claude/claude_code_config.json` (or project-level `.claude/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "noteplan": {
-      "command": "node",
-      "args": ["/Users/YOUR_USERNAME/noteplan-mcp/dist/index.js"]
-    }
-  }
-}
-```
-
-Replace `/Users/YOUR_USERNAME/noteplan-mcp` with the actual path where you extracted the release.
-
-### 4. Restart Claude
-
-Restart Claude Desktop or Claude Code. The NotePlan tools will appear automatically.
+4. Save the file and restart Claude Desktop
 
 ### Optional: Semantic Embeddings
 
@@ -109,7 +108,7 @@ To enable the optional semantic search tools, add embeddings environment variabl
   "mcpServers": {
     "noteplan": {
       "command": "node",
-      "args": ["/Users/YOUR_USERNAME/noteplan-mcp/dist/index.js"],
+      "args": ["~/Downloads/noteplan-mcp/dist/index.js"],
       "env": {
         "NOTEPLAN_EMBEDDINGS_ENABLED": "true",
         "NOTEPLAN_EMBEDDINGS_PROVIDER": "openai",
