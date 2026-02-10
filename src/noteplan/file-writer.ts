@@ -24,7 +24,9 @@ function ensurePathInsideRoot(candidatePath: string, rootPath: string, label: st
 }
 
 function toLocalNoteAbsolutePath(filePath: string): string {
-  return path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
+  const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
+  ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
+  return fullPath;
 }
 
 function normalizeLocalFolderPath(folderPath: string, label = 'Folder path'): string {
@@ -208,6 +210,7 @@ export interface FolderLocalPreview {
  */
 export function writeNoteFile(filePath: string, content: string): void {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
+  ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
 
   // Ensure directory exists
   const dir = path.dirname(fullPath);
@@ -284,6 +287,7 @@ export function createCalendarNote(dateStr: string, content: string): string {
  */
 export function appendToNote(filePath: string, content: string): void {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
+  ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
 
   if (!fs.existsSync(fullPath)) {
     throw new Error(`Note not found: ${filePath}`);
@@ -302,6 +306,7 @@ export function appendToNote(filePath: string, content: string): void {
  */
 export function prependToNote(filePath: string, content: string): void {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
+  ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
 
   if (!fs.existsSync(fullPath)) {
     throw new Error(`Note not found: ${filePath}`);
@@ -550,6 +555,56 @@ export function createFolder(folderPath: string): string {
     fs.mkdirSync(fullPath, { recursive: true });
   }
   return normalized;
+}
+
+/**
+ * Preview deleting a local folder (validates and returns normalized path)
+ */
+export function previewDeleteLocalFolder(folderPath: string): string {
+  const normalized = normalizeLocalFolderPath(folderPath, 'Source folder');
+  if (!normalized) {
+    throw new Error('Folder path is required');
+  }
+  const fullPath = path.join(getNotesPath(), normalized);
+  ensurePathInsideRoot(fullPath, getNotesPath(), 'Source folder');
+  if (!fs.existsSync(fullPath)) {
+    throw new Error(`Folder not found: ${normalized}`);
+  }
+  if (!fs.statSync(fullPath).isDirectory()) {
+    throw new Error(`Not a folder: ${normalized}`);
+  }
+
+  const folderName = path.basename(fullPath);
+  if (folderName.toLowerCase() === '@trash') {
+    throw new Error('Cannot delete the @Trash folder');
+  }
+
+  return normalized;
+}
+
+/**
+ * Delete a local folder (move to @Trash)
+ */
+export function deleteLocalFolder(folderPath: string): string {
+  const normalized = previewDeleteLocalFolder(folderPath);
+  const fullPath = path.join(getNotesPath(), normalized);
+  const folderName = path.basename(fullPath);
+
+  // Move to @Trash folder
+  const trashPath = path.join(getNotePlanPath(), '@Trash');
+  if (!fs.existsSync(trashPath)) {
+    fs.mkdirSync(trashPath, { recursive: true });
+  }
+
+  let targetPath = path.join(trashPath, folderName);
+  let counter = 1;
+  while (fs.existsSync(targetPath)) {
+    targetPath = path.join(trashPath, `${folderName}-${counter}`);
+    counter++;
+  }
+
+  fs.renameSync(fullPath, targetPath);
+  return path.relative(getNotePlanPath(), targetPath);
 }
 
 /**

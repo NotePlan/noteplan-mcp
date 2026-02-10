@@ -46,7 +46,7 @@ const TOOLS_LIST_PAGE_SIZE = 20;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PLUGIN_API_DOCS_DIR = path.join(__dirname, '../../Shared/Supporting Files/np.myplugin');
+const PLUGIN_API_DOCS_DIR = path.join(__dirname, '../docs/plugin-api');
 
 const PLUGIN_API_RESOURCES = [
   { file: 'getting-started.md', name: 'Getting Started Guide', desc: 'How to create NotePlan plugins — structure, setup, first plugin, testing, HTML views' },
@@ -523,6 +523,7 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_create_folder':
     case 'noteplan_move_folder':
     case 'noteplan_rename_folder':
+    case 'noteplan_delete_folder':
     case 'noteplan_save_filter':
     case 'noteplan_rename_filter':
     case 'noteplan_update_note':
@@ -738,6 +739,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_rename_note_file',
     'noteplan_move_folder',
     'noteplan_rename_folder',
+    'noteplan_delete_folder',
     'noteplan_delete_lines',
     'noteplan_replace_lines',
     'noteplan_remove_property',
@@ -764,6 +766,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_create_folder',
     'noteplan_move_folder',
     'noteplan_rename_folder',
+    'noteplan_delete_folder',
     'noteplan_save_filter',
     'noteplan_rename_filter',
     'noteplan_delete_lines',
@@ -1270,6 +1273,9 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
     case 'noteplan_move_folder':
     case 'noteplan_rename_folder':
       suggestedNextTools = ['noteplan_list_folders', 'noteplan_resolve_folder'];
+      break;
+    case 'noteplan_delete_folder':
+      suggestedNextTools = ['noteplan_list_folders'];
       break;
     case 'noteplan_save_filter':
     case 'noteplan_rename_filter':
@@ -3296,6 +3302,37 @@ Recommended flow:
           },
         },
 
+        {
+          name: 'noteplan_delete_folder',
+          description:
+            'Delete a folder by moving it to @Trash. Local mode: provide path. TeamSpace mode: provide space + source. Requires dryRun-issued confirmationToken.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: 'Local folder path under Notes to delete',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID for TeamSpace folder deletion',
+              },
+              source: {
+                type: 'string',
+                description: 'TeamSpace source folder reference (ID/path/name)',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview deletion impact and get confirmationToken without deleting',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Confirmation token issued by dryRun for delete execution',
+              },
+            },
+          },
+        },
+
         // macOS Calendar events
         {
           name: 'calendar_get_events',
@@ -4470,6 +4507,9 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         case 'noteplan_rename_folder':
           result = spaceTools.renameFolder(args as any);
           break;
+        case 'noteplan_delete_folder':
+          result = spaceTools.deleteFolder(args as any);
+          break;
 
         // macOS Calendar events
         case 'calendar_get_events':
@@ -4664,6 +4704,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
       const resultWithSuggestions = withSuggestedNextTools(enrichedResult, normalizedName);
       const resultWithMemory = withMemoryHints(resultWithSuggestions, normalizedName);
       const resultWithDuration = withDuration(resultWithMemory, Date.now() - startTime, includeTiming);
+      const hasOutputSchema = Boolean(toolDefinitionByName.get(normalizedName)?.outputSchema);
       return {
         content: [
           {
@@ -4671,6 +4712,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
             text: JSON.stringify(resultWithDuration),
           },
         ],
+        ...(hasOutputSchema ? { structuredContent: resultWithDuration } : {}),
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -4684,6 +4726,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         retryable: meta.retryable,
       };
       const errorWithDuration = withDuration(errorResult, Date.now() - startTime, includeTiming);
+      const hasOutputSchema = Boolean(toolDefinitionByName.get(normalizedName)?.outputSchema);
       return {
         content: [
           {
@@ -4691,6 +4734,7 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
             text: JSON.stringify(errorWithDuration),
           },
         ],
+        ...(hasOutputSchema ? { structuredContent: errorWithDuration } : {}),
         isError: true,
       };
     }

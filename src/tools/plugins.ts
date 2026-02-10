@@ -215,9 +215,8 @@ globalThis.${jsFunction} = async function() {
 
   const result: Record<string, unknown> = {
     success: true,
-    message: `Plugin "${pluginName}" created at ${pluginDir}`,
+    message: `Plugin "${pluginName}" created successfully`,
     pluginId,
-    pluginDir,
     commandName,
   };
 
@@ -249,7 +248,7 @@ export function deletePlugin(args: z.infer<typeof deletePluginSchema>): Record<s
   const pluginDir = path.join(pluginsPath, pluginId);
 
   if (!fs.existsSync(pluginDir)) {
-    return { success: false, error: `Plugin "${pluginId}" not found at ${pluginDir}` };
+    return { success: false, error: `Plugin "${pluginId}" not found` };
   }
 
   const context = { tool: 'noteplan_delete_plugin', target: pluginId, action: 'delete' };
@@ -260,7 +259,6 @@ export function deletePlugin(args: z.infer<typeof deletePluginSchema>): Record<s
       success: false,
       error: 'Confirmation required to delete plugin',
       pluginId,
-      pluginDir,
       ...token,
     };
   }
@@ -417,7 +415,7 @@ export function getPluginSource(args: unknown): Record<string, unknown> {
   const pluginDir = path.join(pluginsPath, pluginId);
 
   if (!fs.existsSync(pluginDir)) {
-    return { success: false, error: `Plugin "${pluginId}" not found at ${pluginDir}` };
+    return { success: false, error: `Plugin "${pluginId}" not found` };
   }
 
   const manifestPath = path.join(pluginDir, 'plugin.json');

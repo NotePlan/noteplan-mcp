@@ -264,6 +264,13 @@ export function readNoteFile(filePath: string): Note | null {
   try {
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
 
+    // Reject paths outside the NotePlan data directory
+    const resolvedFull = path.resolve(fullPath);
+    const resolvedRoot = path.resolve(getNotePlanPath());
+    if (resolvedFull !== resolvedRoot && !resolvedFull.startsWith(`${resolvedRoot}${path.sep}`)) {
+      return null;
+    }
+
     if (!fs.existsSync(fullPath)) {
       return null;
     }
@@ -319,6 +326,13 @@ export function listNotesInDirectory(dirPath: string, type: NoteType = 'note'): 
   try {
     const fullPath = path.isAbsolute(dirPath) ? dirPath : path.join(getNotePlanPath(), dirPath);
 
+    // Reject paths outside the NotePlan data directory
+    const resolvedFull = path.resolve(fullPath);
+    const resolvedRoot = path.resolve(getNotePlanPath());
+    if (resolvedFull !== resolvedRoot && !resolvedFull.startsWith(`${resolvedRoot}${path.sep}`)) {
+      return notes;
+    }
+
     if (!fs.existsSync(fullPath)) {
       return notes;
     }
@@ -347,6 +361,34 @@ export function listNotesInDirectory(dirPath: string, type: NoteType = 'note'): 
   }
 
   return notes;
+}
+
+/**
+ * Count notes and subfolders in a directory (recursive, lightweight — no file reads)
+ */
+export function countNotesInDirectory(dirPath: string): { noteCount: number; folderCount: number } {
+  let noteCount = 0;
+  let folderCount = 0;
+  try {
+    const fullPath = path.isAbsolute(dirPath) ? dirPath : path.join(getNotePlanPath(), dirPath);
+    if (!fs.existsSync(fullPath)) return { noteCount, folderCount };
+
+    const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.') || entry.name === '@Trash' || entry.name === '@Archive') continue;
+        folderCount++;
+        const sub = countNotesInDirectory(path.join(fullPath, entry.name));
+        noteCount += sub.noteCount;
+        folderCount += sub.folderCount;
+      } else if (entry.name.endsWith('.md') || entry.name.endsWith('.txt')) {
+        noteCount++;
+      }
+    }
+  } catch {
+    // silently ignore unreadable directories
+  }
+  return { noteCount, folderCount };
 }
 
 /**

@@ -36,69 +36,80 @@ Once installed, just talk to Claude naturally. Here are some examples:
 
 ## Installation
 
-### Prerequisites
+### 1. Install Node.js
 
-- **Node.js 18+** (`node -v` to check)
-- **Xcode Command Line Tools** — required to compile the Swift calendar/reminders helpers (`xcode-select --install` if not already installed)
-
-### Build
+The server requires **Node.js 18+** to run. Check if you already have it:
 
 ```bash
-cd noteplan-mcp
-npm install
-npm run build
+node -v
 ```
 
-The `build` step compiles both the TypeScript source and two Swift helper binaries (`calendar-helper` and `reminders-helper`) used for native Calendar and Reminders access.
-
-### Verify
+If not installed, the easiest way on macOS is via [Homebrew](https://brew.sh):
 
 ```bash
-npm run smoke:workflow
+brew install node
 ```
 
-### Configure Claude Desktop
+Or download the installer from [nodejs.org](https://nodejs.org).
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+### 2. Download the Server
+
+Download the latest release from the [Releases page](https://github.com/NotePlan/noteplan-mcp/releases) and extract it to a permanent location, for example:
+
+```bash
+mkdir -p ~/noteplan-mcp
+cd ~/noteplan-mcp
+tar -xzf ~/Downloads/noteplan-mcp-vX.X.X.tar.gz
+```
+
+The release includes everything pre-built — no compilation needed.
+
+### 3. Configure Your AI Client
+
+Pick the client you use and add the server config.
+
+**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/noteplan-mcp/dist/index.js"]
+      "args": ["/Users/YOUR_USERNAME/noteplan-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-Replace `/ABSOLUTE/PATH/TO` with the actual path on your machine (e.g. `/Users/you/Projects/noteplan-mcp`).
-
-### Configure Claude Code
-
-Add to `~/.claude/claude_code_config.json` (or project-level `.claude/settings.json`):
+**Claude Code** — add to `~/.claude/claude_code_config.json` (or project-level `.claude/settings.json`):
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/noteplan-mcp/dist/index.js"]
+      "args": ["/Users/YOUR_USERNAME/noteplan-mcp/dist/index.js"]
     }
   }
 }
 ```
+
+Replace `/Users/YOUR_USERNAME/noteplan-mcp` with the actual path where you extracted the release.
+
+### 4. Restart Claude
+
+Restart Claude Desktop or Claude Code. The NotePlan tools will appear automatically.
 
 ### Optional: Semantic Embeddings
 
-To enable the optional semantic search tools, add embeddings environment variables:
+To enable the optional semantic search tools, add embeddings environment variables to the server config above:
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/noteplan-mcp/dist/index.js"],
+      "args": ["/Users/YOUR_USERNAME/noteplan-mcp/dist/index.js"],
       "env": {
         "NOTEPLAN_EMBEDDINGS_ENABLED": "true",
         "NOTEPLAN_EMBEDDINGS_PROVIDER": "openai",
@@ -114,6 +125,41 @@ To enable the optional semantic search tools, add embeddings environment variabl
 - `NOTEPLAN_EMBEDDINGS_PROVIDER`: `openai` (default), `mistral`, or `custom`.
 - `NOTEPLAN_EMBEDDINGS_BASE_URL`: for `custom`, assumes OpenAI-compatible `/v1/embeddings`.
 - `NOTEPLAN_EMBEDDINGS_ENABLED`: defaults to `false`; when false, embeddings tools are not listed.
+
+<details>
+<summary><strong>Build from Source</strong> (for contributors and development)</summary>
+
+#### Prerequisites
+
+- **Node.js 18+** (`node -v`)
+- **Xcode Command Line Tools** — needed to compile the Swift calendar/reminders helpers (`xcode-select --install`)
+
+#### Build
+
+```bash
+git clone https://github.com/NotePlan/noteplan-mcp.git
+cd noteplan-mcp
+npm install
+npm run build
+```
+
+The `build` step compiles the TypeScript source and two Swift helper binaries (`calendar-helper` and `reminders-helper`) for native Calendar and Reminders access.
+
+#### Verify
+
+```bash
+npm run smoke:workflow
+```
+
+#### Development
+
+```bash
+npm run dev   # watch mode — recompiles TypeScript on save
+```
+
+Then configure Claude Desktop or Claude Code to point at the local `dist/index.js` as shown above.
+
+</details>
 
 ## Features
 

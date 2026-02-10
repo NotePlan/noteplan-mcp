@@ -8,6 +8,9 @@ dist/
 scripts/calendar-helper
 scripts/reminders-helper
 
+# Environment files
+.env*
+
 # OS files
 .DS_Store
 

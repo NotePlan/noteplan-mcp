@@ -245,6 +245,45 @@ export const moveFolderSchema = z.object({
   }
 });
 
+export const deleteFolderSchema = z.object({
+  path: z
+    .string()
+    .optional()
+    .describe('Local folder path under Notes to delete'),
+  space: z.string().optional().describe('Space name or ID for TeamSpace folder deletion'),
+  source: z
+    .string()
+    .optional()
+    .describe('TeamSpace source folder reference (ID/path/name)'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview deletion impact and get confirmationToken without deleting'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for delete execution'),
+}).superRefine((input, ctx) => {
+  if (input.space) {
+    if (!input.source || input.source.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'source is required when space is provided',
+        path: ['source'],
+      });
+    }
+    return;
+  }
+
+  if (!input.path || input.path.trim().length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'path is required for local folder deletion',
+      path: ['path'],
+    });
+  }
+});
+
 export const renameFolderSchema = z.object({
   sourcePath: z
     .string()
@@ -692,10 +731,16 @@ export function moveFolder(params: z.infer<typeof moveFolderSchema>) {
         target: confirmationTarget,
         action: 'move_folder',
       });
+      const noteCount = preview.affectedNoteCount ?? 0;
+      const folderCount = preview.affectedFolderCount ?? 0;
+      const parts = [];
+      if (noteCount > 0) parts.push(`${noteCount} note${noteCount !== 1 ? 's' : ''}`);
+      if (folderCount > 0) parts.push(`${folderCount} subfolder${folderCount !== 1 ? 's' : ''}`);
+      const affectedSummary = parts.length > 0 ? ` (contains ${parts.join(' and ')})` : ' (empty)';
       return {
         success: true,
         dryRun: true,
-        message: `Dry run: folder ${preview.fromPath} would move to ${preview.toPath}`,
+        message: `Dry run: folder ${preview.fromPath} would move to ${preview.toPath}${affectedSummary}`,
         ...preview,
         ...token,
       };
@@ -736,6 +781,77 @@ export function moveFolder(params: z.infer<typeof moveFolderSchema>) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to move folder',
+    };
+  }
+}
+
+export function deleteFolder(params: z.infer<typeof deleteFolderSchema>) {
+  const input = params ?? ({} as z.infer<typeof deleteFolderSchema>);
+  try {
+    const preview = input.space
+      ? store.previewDeleteFolder({
+          space: input.space,
+          source: input.source || '',
+        })
+      : store.previewDeleteFolder({
+          path: input.path || '',
+        });
+
+    const confirmationTarget = preview.fromPath;
+    if (input.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'noteplan_delete_folder',
+        target: confirmationTarget,
+        action: 'delete_folder',
+      });
+      const noteCount = preview.affectedNoteCount ?? 0;
+      const folderCount = preview.affectedFolderCount ?? 0;
+      const parts = [];
+      if (noteCount > 0) parts.push(`${noteCount} note${noteCount !== 1 ? 's' : ''}`);
+      if (folderCount > 0) parts.push(`${folderCount} subfolder${folderCount !== 1 ? 's' : ''}`);
+      const affectedSummary = parts.length > 0 ? ` (contains ${parts.join(' and ')})` : ' (empty)';
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: folder ${preview.fromPath} would be moved to @Trash${affectedSummary}`,
+        ...preview,
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(input.confirmationToken, {
+      tool: 'noteplan_delete_folder',
+      target: confirmationTarget,
+      action: 'delete_folder',
+    });
+    if (!confirmation.ok) {
+      return {
+        success: false,
+        error: confirmationFailureMessage('noteplan_delete_folder', confirmation.reason),
+      };
+    }
+
+    const deleted = input.space
+      ? store.deleteFolder({
+          space: input.space,
+          source: input.source || '',
+        })
+      : store.deleteFolder({
+          path: input.path || '',
+        });
+
+    return {
+      success: true,
+      message:
+        deleted.source === 'space'
+          ? `TeamSpace folder moved to @Trash`
+          : `Folder moved to @Trash`,
+      ...deleted,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete folder',
     };
   }
 }

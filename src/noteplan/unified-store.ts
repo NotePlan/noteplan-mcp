@@ -1216,6 +1216,8 @@ export interface LocalFolderMoveResult {
   fromPath: string;
   toPath: string;
   destinationFolder: string;
+  affectedNoteCount?: number;
+  affectedFolderCount?: number;
 }
 
 export interface SpaceFolderMoveResult {
@@ -1225,9 +1227,31 @@ export interface SpaceFolderMoveResult {
   fromPath: string;
   toPath: string;
   destinationParentId: string;
+  affectedNoteCount?: number;
+  affectedFolderCount?: number;
 }
 
 export type FolderMoveResult = LocalFolderMoveResult | SpaceFolderMoveResult;
+
+export interface LocalFolderDeleteResult {
+  source: 'local';
+  fromPath: string;
+  trashedPath: string;
+  affectedNoteCount?: number;
+  affectedFolderCount?: number;
+}
+
+export interface SpaceFolderDeleteResult {
+  source: 'space';
+  spaceId: string;
+  folderId: string;
+  fromPath: string;
+  trashFolderId: string;
+  affectedNoteCount?: number;
+  affectedFolderCount?: number;
+}
+
+export type FolderDeleteResult = LocalFolderDeleteResult | SpaceFolderDeleteResult;
 
 export interface LocalFolderRenameResult {
   source: 'local';
@@ -1449,6 +1473,7 @@ export function previewMoveFolder(
       throw new Error('Destination folder cannot be @Trash');
     }
 
+    const counts = sqliteReader.countSpaceFolderContents(source.id);
     return {
       source: 'space',
       spaceId,
@@ -1456,15 +1481,21 @@ export function previewMoveFolder(
       fromPath: source.path,
       toPath: destination.id === spaceId ? source.name : `${destination.path}/${source.name}`,
       destinationParentId: destination.id,
+      affectedNoteCount: counts.noteCount,
+      affectedFolderCount: counts.folderCount,
     };
   }
 
   const preview = fileWriter.previewMoveLocalFolder(options.sourcePath, options.destinationFolder);
+  const fullPath = path.join(fileReader.getNotesPath(), preview.fromFolder);
+  const counts = fileReader.countNotesInDirectory(fullPath);
   return {
     source: 'local',
     fromPath: preview.fromFolder,
     toPath: preview.toFolder,
     destinationFolder: preview.destinationFolder || options.destinationFolder,
+    affectedNoteCount: counts.noteCount,
+    affectedFolderCount: counts.folderCount,
   };
 }
 
@@ -1497,6 +1528,70 @@ export function moveFolder(
     fromPath: moved.fromFolder,
     toPath: moved.toFolder,
     destinationFolder: moved.destinationFolder || options.destinationFolder,
+  };
+}
+
+export function previewDeleteFolder(
+  options: { path: string } | { space: string; source: string }
+): FolderDeleteResult {
+  if ('space' in options) {
+    const spaceId = resolveSpaceId(options.space.trim());
+    if (!spaceId) {
+      throw new Error('space is required');
+    }
+    const source = resolveSpaceFolderReference(spaceId, options.source, {
+      allowRoot: false,
+      includeTrash: true,
+    });
+    const counts = sqliteReader.countSpaceFolderContents(source.id);
+    return {
+      source: 'space',
+      spaceId,
+      folderId: source.id,
+      fromPath: source.path,
+      trashFolderId: '(pending)',
+      affectedNoteCount: counts.noteCount,
+      affectedFolderCount: counts.folderCount,
+    };
+  }
+
+  const normalized = fileWriter.previewDeleteLocalFolder(options.path);
+  const fullPath = path.join(fileReader.getNotesPath(), normalized);
+  const counts = fileReader.countNotesInDirectory(fullPath);
+  return {
+    source: 'local',
+    fromPath: normalized,
+    trashedPath: '(pending)',
+    affectedNoteCount: counts.noteCount,
+    affectedFolderCount: counts.folderCount,
+  };
+}
+
+export function deleteFolder(
+  options: { path: string } | { space: string; source: string }
+): FolderDeleteResult {
+  const preview = previewDeleteFolder(options);
+  if ('space' in options) {
+    if (preview.source !== 'space') {
+      throw new Error('Invalid folder delete state');
+    }
+    const deleted = sqliteWriter.deleteSpaceFolder(preview.folderId);
+    invalidateListingCaches();
+    return {
+      source: 'space',
+      spaceId: preview.spaceId,
+      folderId: preview.folderId,
+      fromPath: preview.fromPath,
+      trashFolderId: deleted.trashFolderId,
+    };
+  }
+
+  const trashedPath = fileWriter.deleteLocalFolder(options.path);
+  invalidateListingCaches();
+  return {
+    source: 'local',
+    fromPath: preview.fromPath,
+    trashedPath,
   };
 }
 

@@ -259,7 +259,7 @@ export function createSpaceNote(
     return filename;
   } catch (error) {
     console.error('Error creating space note:', error);
-    throw new Error(`Failed to create space note: ${error}`);
+    throw new Error(`Failed to create space note: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -325,7 +325,7 @@ export function createSpaceCalendarNote(
     return canonicalFilename;
   } catch (error) {
     console.error('Error creating space calendar note:', error);
-    throw new Error(`Failed to create space calendar note: ${error}`);
+    throw new Error(`Failed to create space calendar note: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -358,7 +358,7 @@ export function updateSpaceNote(identifier: string, content: string): void {
     queueMcpChange(database, node.id);
   } catch (error) {
     console.error('Error updating space note:', error);
-    throw new Error(`Failed to update space note: ${error}`);
+    throw new Error(`Failed to update space note: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -391,7 +391,7 @@ export function updateSpaceNoteTitle(identifier: string, title: string): void {
     queueMcpChange(database, node.id);
   } catch (error) {
     console.error('Error updating space note title:', error);
-    throw new Error(`Failed to update space note title: ${error}`);
+    throw new Error(`Failed to update space note title: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -440,7 +440,7 @@ export function moveSpaceNote(identifier: string, destinationParentId: string): 
     };
   } catch (error) {
     console.error('Error moving space note:', error);
-    throw new Error(`Failed to move space note: ${error}`);
+    throw new Error(`Failed to move space note: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -540,7 +540,7 @@ export function createSpaceFolder(spaceId: string, name: string, parent?: string
     return folderId;
   } catch (error) {
     console.error('Error creating space folder:', error);
-    throw new Error(`Failed to create space folder: ${error}`);
+    throw new Error(`Failed to create space folder: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -598,7 +598,71 @@ export function moveSpaceFolder(identifier: string, destinationParentId: string)
     };
   } catch (error) {
     console.error('Error moving space folder:', error);
-    throw new Error(`Failed to move space folder: ${error}`);
+    throw new Error(`Failed to move space folder: ${error instanceof Error ? error.message : 'unknown error'}`);
+  }
+}
+
+/**
+ * Delete a space folder by moving it into the space @Trash folder
+ */
+export function deleteSpaceFolder(identifier: string): SpaceTrashResult {
+  const database = getDatabase();
+  if (!database) {
+    throw new Error('Space database not available');
+  }
+
+  const node = getSpaceNode(identifier);
+  if (node.is_dir !== 1) {
+    throw new Error('Only folders can be deleted with this operation');
+  }
+
+  const spaceId = findRootSpaceIdForNode(database, node.id);
+  if (node.id === spaceId) {
+    throw new Error('Space root cannot be deleted');
+  }
+
+  // Prevent deleting the @Trash folder itself
+  if (node.title?.toLowerCase() === SPACE_TRASH_FOLDER_TITLE.toLowerCase() && node.parent === spaceId) {
+    throw new Error('Cannot delete the @Trash folder');
+  }
+
+  const trashFolderId = ensureSpaceTrashFolder(spaceId);
+
+  // Prevent moving trash into itself
+  if (node.id === trashFolderId) {
+    throw new Error('Cannot delete the @Trash folder');
+  }
+  if (isDescendantFolder(database, node.id, trashFolderId)) {
+    throw new Error('Folder is already in @Trash');
+  }
+
+  const now = currentSqliteTimestamp();
+  try {
+    const result = database
+      .prepare(
+        `
+        UPDATE notes
+        SET parent = ?, modified_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(trashFolderId, now, node.id);
+
+    if (result.changes === 0) {
+      throw new Error(`Folder not found: ${identifier}`);
+    }
+    queueMcpChange(database, node.id, node.parent ?? undefined);
+
+    return {
+      noteId: node.id,
+      previousParent: node.parent,
+      destinationParentId: trashFolderId,
+      spaceId,
+      trashFolderId,
+    };
+  } catch (error) {
+    console.error('Error deleting space folder:', error);
+    throw new Error(`Failed to delete space folder: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -674,7 +738,7 @@ export function renameSpaceFolder(identifier: string, title: string): SpaceRenam
     };
   } catch (error) {
     console.error('Error renaming space folder:', error);
-    throw new Error(`Failed to rename space folder: ${error}`);
+    throw new Error(`Failed to rename space folder: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 

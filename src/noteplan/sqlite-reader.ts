@@ -152,6 +152,31 @@ function getSpaceDescendantIds(database: Database.Database, spaceId: string): st
   }
 }
 
+/**
+ * Count notes and subfolders under a space folder (recursive)
+ */
+export function countSpaceFolderContents(folderId: string): { noteCount: number; folderCount: number } {
+  const database = getDatabase();
+  if (!database) return { noteCount: 0, folderCount: 0 };
+  try {
+    const row = database.prepare(`
+      WITH RECURSIVE subtree AS (
+        SELECT id, is_dir FROM notes WHERE parent = ?
+        UNION ALL
+        SELECT n.id, n.is_dir FROM notes n
+        INNER JOIN subtree s ON n.parent = s.id
+      )
+      SELECT
+        COUNT(CASE WHEN is_dir = 0 THEN 1 END) AS noteCount,
+        COUNT(CASE WHEN is_dir = 1 THEN 1 END) AS folderCount
+      FROM subtree
+    `).get(folderId) as { noteCount: number; folderCount: number } | undefined;
+    return row ?? { noteCount: 0, folderCount: 0 };
+  } catch {
+    return { noteCount: 0, folderCount: 0 };
+  }
+}
+
 function getDescendantIdsForRoots(database: Database.Database, rootIds: string[]): string[] {
   if (rootIds.length === 0) return [];
   try {
