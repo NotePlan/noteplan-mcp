@@ -18,6 +18,9 @@ import * as eventTools from './tools/events.js';
 import * as reminderTools from './tools/reminders.js';
 import * as embeddingsTools from './tools/embeddings.js';
 import * as memoryTools from './tools/memory.js';
+import * as uiTools from './tools/ui.js';
+import * as pluginTools from './tools/plugins.js';
+import * as themeTools from './tools/themes.js';
 
 type ToolDefinition = {
   name: string;
@@ -507,6 +510,19 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'reminders_update':
     case 'reminders_delete':
     case 'noteplan_embeddings_reset':
+    case 'noteplan_ui_open_note':
+    case 'noteplan_ui_open_today':
+    case 'noteplan_ui_search':
+    case 'noteplan_ui_run_plugin':
+    case 'noteplan_ui_reload_plugins':
+    case 'noteplan_ui_open_view':
+    case 'noteplan_ui_toggle_sidebar':
+    case 'noteplan_create_plugin':
+    case 'noteplan_delete_plugin':
+    case 'noteplan_list_themes':
+    case 'noteplan_get_theme':
+    case 'noteplan_save_theme':
+    case 'noteplan_set_theme':
       return MESSAGE_OUTPUT_SCHEMA;
     case 'noteplan_get_notes_in_range':
       return RANGE_NOTES_OUTPUT_SCHEMA;
@@ -662,6 +678,8 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'reminders_get',
     'reminders_list_lists',
     'noteplan_memory_list',
+    'noteplan_list_themes',
+    'noteplan_get_theme',
   ]);
 
   const destructiveTools = new Set([
@@ -682,6 +700,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'reminders_delete',
     'noteplan_memory_delete',
     'noteplan_memory_update',
+    'noteplan_delete_plugin',
   ]);
 
   const nonIdempotentTools = new Set([
@@ -709,6 +728,11 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'reminders_delete',
     'noteplan_memory_save',
     'noteplan_memory_delete',
+    'noteplan_create_plugin',
+    'noteplan_delete_plugin',
+    'noteplan_ui_run_plugin',
+    'noteplan_ui_toggle_sidebar',
+    'noteplan_save_theme',
   ]);
 
   const openWorldTools = new Set([
@@ -3771,6 +3795,265 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
         },
         required: ['id'],
       },
+    },
+
+    // UI control tools (AppleScript)
+    {
+      name: 'noteplan_ui_open_note',
+      description:
+        'Open a note in the NotePlan UI by title or filename (at least one required). Optionally open in a new window or split view.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Title of the note to open',
+          },
+          filename: {
+            type: 'string',
+            description: 'Filename of the note to open',
+          },
+          inNewWindow: {
+            type: 'boolean',
+            description: 'Open in a new window (default: false)',
+          },
+          inSplitView: {
+            type: 'boolean',
+            description: 'Open in split view (default: false)',
+          },
+        },
+      },
+    },
+    {
+      name: 'noteplan_ui_open_today',
+      description: "Open today's daily note in the NotePlan UI.",
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'noteplan_ui_search',
+      description: 'Search notes in the NotePlan UI by keyword.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search text',
+          },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'noteplan_ui_run_plugin',
+      description: 'Run a plugin command in NotePlan.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pluginId: {
+            type: 'string',
+            description: 'Plugin ID',
+          },
+          command: {
+            type: 'string',
+            description: 'Command name',
+          },
+          arguments: {
+            type: 'string',
+            description: 'JSON arguments string',
+          },
+        },
+        required: ['pluginId', 'command'],
+      },
+    },
+    {
+      name: 'noteplan_ui_reload_plugins',
+      description: 'Reload all plugins in NotePlan.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'noteplan_ui_open_view',
+      description: 'Open a named view in the NotePlan UI (e.g., a plugin sidebar view).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'Name of the view to open',
+          },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'noteplan_ui_toggle_sidebar',
+      description: 'Toggle the sidebar visibility in NotePlan.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+
+    // Plugin creation tools
+    {
+      name: 'noteplan_create_plugin',
+      description:
+        'Create a NotePlan plugin with an HTML view. Writes plugin.json and script.js to the Plugins folder, optionally reloads and launches it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pluginId: {
+            type: 'string',
+            description: 'Plugin ID (e.g., "mcp.dashboard")',
+          },
+          pluginName: {
+            type: 'string',
+            description: 'Display name of the plugin',
+          },
+          commandName: {
+            type: 'string',
+            description: 'The command name',
+          },
+          html: {
+            type: 'string',
+            description: 'Full HTML content for the plugin view',
+          },
+          icon: {
+            type: 'string',
+            description: 'Font Awesome icon name (e.g., "chart-bar")',
+          },
+          iconColor: {
+            type: 'string',
+            description: 'Tailwind color like "blue-500"',
+          },
+          displayMode: {
+            type: 'string',
+            enum: ['main', 'split', 'window'],
+            description: 'Where to display the HTML view (default: "main")',
+          },
+          autoLaunch: {
+            type: 'boolean',
+            description: 'Reload plugins and run after creation (default: true)',
+          },
+        },
+        required: ['pluginId', 'pluginName', 'commandName', 'html'],
+      },
+    },
+    {
+      name: 'noteplan_delete_plugin',
+      description:
+        'Delete a NotePlan plugin by ID. Requires confirmation — call once without token to receive one, then call again with the token to confirm.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pluginId: {
+            type: 'string',
+            description: 'Plugin ID to delete',
+          },
+          confirmationToken: {
+            type: 'string',
+            description: 'Confirmation token (call without to receive one)',
+          },
+        },
+        required: ['pluginId'],
+      },
+    },
+
+    // Theme management tools
+    {
+      name: 'noteplan_list_themes',
+      description:
+        'List all available NotePlan themes (custom + system) and the currently active light/dark theme names.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'noteplan_get_theme',
+      description:
+        'Read the JSON content of a custom theme file from the Themes folder. System themes cannot be read directly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filename: {
+            type: 'string',
+            description: 'Theme filename (e.g., "my-blue-theme.json")',
+          },
+        },
+        required: ['filename'],
+      },
+    },
+    {
+      name: 'noteplan_save_theme',
+      description:
+        'Create or update a custom theme JSON file and optionally activate it. Validates and strips unknown keys.\n\n' +
+        'Valid editor keys: backgroundColor, altBackgroundColor, tintColor, tintColor2, textColor, toolbarBackgroundColor, toolbarIconColor, menuItemColor, timeBlockColor, shouldOverwriteFont, sidebarStyleOverride, sidebarIconColorOverride, sidebarFolderColorOverride.\n\n' +
+        'Valid style keys: body, title1, title2, title3, title4, title-mark1..4, bold, bold-left-mark, bold-right-mark, italic, italic-left-mark, italic-right-mark, boldItalic, boldItalic-left-mark, boldItalic-right-mark, code, code-left-backtick, code-right-backtick, code-fence, checked, checked-canceled, checked-scheduled, todo, checked-todo-characters, tabbed, quote-mark, quote-content, link, schedule-to-date-link, done-date, schedule-from-date-link, note-title-link, hashtag, attag, phonenumber, highlighted, highlighted-left-marker, highlighted-right-marker, strikethrough, strikethrough-left-tilde, strikethrough-right-tilde, underline, underline-left-tilde, underline-right-tilde, working-on, flagged-1, flagged-2, flagged-3, file-attachment.\n\n' +
+        'Valid style properties: font, size, color, foregroundColor, backgroundColor, type, kern, headIndent, firstLineHeadIndent, lineSpacing, paragraphSpacing, paragraphSpacingBefore, underlineStyle, underlineColor, strikethroughStyle, strikethroughColor, leadingBorder, borderRadius, horizontalMargin, leftBorderPadding, rightBorderPadding, isFullWidthBorder, inlineBorder, regex, matchPosition.\n\n' +
+        'Colors use hex format: #RRGGBB or #AARRGGBB.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filename: {
+            type: 'string',
+            description: 'Theme filename, must end in .json (e.g., "mcp-blue-light.json")',
+          },
+          theme: {
+            type: 'object',
+            description: 'The theme object',
+            properties: {
+              name: { type: 'string', description: 'Display name' },
+              style: { type: 'string', enum: ['Light', 'Dark'], description: 'Theme style' },
+              author: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  email: { type: 'string' },
+                },
+              },
+              editor: { type: 'object', description: 'Editor color settings' },
+              styles: { type: 'object', description: 'Text formatting styles' },
+            },
+            required: ['name', 'style', 'editor', 'styles'],
+          },
+          setActive: {
+            type: 'boolean',
+            description: 'Immediately apply the theme (default: true)',
+          },
+          mode: {
+            type: 'string',
+            enum: ['light', 'dark', 'auto'],
+            description: 'Mode to apply for (default: based on theme style)',
+          },
+        },
+        required: ['filename', 'theme'],
+      },
+    },
+    {
+      name: 'noteplan_set_theme',
+      description:
+        'Activate an existing theme (custom or system) via AppleScript. Use noteplan_save_theme to create new themes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'Theme filename or system theme name',
+          },
+          mode: {
+            type: 'string',
+            enum: ['light', 'dark', 'auto'],
+            description: 'Mode to set: light, dark, or auto (default: auto)',
+          },
+        },
+        required: ['name'],
+      },
     }
   );
 
@@ -4094,6 +4377,51 @@ Priority levels: 0 (none), 1 (high), 5 (medium), 9 (low).`,
           break;
         case 'noteplan_memory_delete':
           result = memoryTools.deleteMemory(args as any);
+          break;
+
+        // UI control tools (AppleScript)
+        case 'noteplan_ui_open_note':
+          result = uiTools.openNote(args as any);
+          break;
+        case 'noteplan_ui_open_today':
+          result = uiTools.openToday(args as any);
+          break;
+        case 'noteplan_ui_search':
+          result = uiTools.searchNotes(args as any);
+          break;
+        case 'noteplan_ui_run_plugin':
+          result = uiTools.runPlugin(args as any);
+          break;
+        case 'noteplan_ui_reload_plugins':
+          result = uiTools.reloadPlugins(args as any);
+          break;
+        case 'noteplan_ui_open_view':
+          result = uiTools.openView(args as any);
+          break;
+        case 'noteplan_ui_toggle_sidebar':
+          result = uiTools.toggleSidebar(args as any);
+          break;
+
+        // Plugin creation tools
+        case 'noteplan_create_plugin':
+          result = pluginTools.createPlugin(args as any);
+          break;
+        case 'noteplan_delete_plugin':
+          result = pluginTools.deletePlugin(args as any);
+          break;
+
+        // Theme management tools
+        case 'noteplan_list_themes':
+          result = themeTools.listThemes(args as any);
+          break;
+        case 'noteplan_get_theme':
+          result = themeTools.getTheme(args as any);
+          break;
+        case 'noteplan_save_theme':
+          result = themeTools.saveTheme(args as any);
+          break;
+        case 'noteplan_set_theme':
+          result = themeTools.setTheme(args as any);
           break;
 
         default:
