@@ -238,6 +238,7 @@ export const completeTaskSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
   lineIndex: z.number().optional().describe('Line index of the task (0-based)'),
   line: z.number().optional().describe('Line number of the task (1-based)'),
+  space: z.string().optional().describe('Space name or ID to search in'),
 }).superRefine((input, ctx) => {
   if (input.lineIndex === undefined && input.line === undefined) {
     ctx.addIssue({
@@ -252,6 +253,7 @@ export const updateTaskSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
   lineIndex: z.number().optional().describe('Line index of the task (0-based)'),
   line: z.number().optional().describe('Line number of the task (1-based)'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   content: z.string().optional().describe('New task content'),
   allowEmptyContent: z
     .boolean()
@@ -586,7 +588,7 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
       note = store.ensureCalendarNote(params.target, params.space);
     } else {
       // Target is a filename - get the project note
-      note = store.getNote({ filename: params.target });
+      note = store.getNote({ filename: params.target, space: params.space });
     }
 
     if (!note) {
@@ -644,7 +646,7 @@ export function completeTask(params: z.infer<typeof completeTaskSchema>) {
     }
     const lineIndex = resolved.lineIndex;
 
-    const note = store.getNote({ filename: params.filename });
+    const note = store.getNote({ filename: params.filename, space: params.space });
 
     if (!note) {
       return {
@@ -714,7 +716,7 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
       };
     }
 
-    const note = store.getNote({ filename: params.filename });
+    const note = store.getNote({ filename: params.filename, space: params.space });
 
     if (!note) {
       return {

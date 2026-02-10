@@ -96,6 +96,12 @@ export interface RenameNoteFileResult {
   toFilename: string;
 }
 
+export interface RenameSpaceNoteResult {
+  note: Note;
+  fromTitle: string;
+  toTitle: string;
+}
+
 export interface DeleteNoteResult {
   source: 'local' | 'space';
   fromIdentifier: string;
@@ -1091,6 +1097,32 @@ export function renameNoteFile(
     note: renamedNote,
     fromFilename: preview.fromFilename,
     toFilename: preview.toFilename,
+  };
+}
+
+export function renameSpaceNote(
+  identifier: string,
+  newTitle: string
+): RenameSpaceNoteResult {
+  const note = getNoteByIdentifierOrThrow(identifier);
+  if (note.source !== 'space') {
+    throw new Error('renameSpaceNote is for TeamSpace notes only');
+  }
+  if (note.type !== 'note') {
+    throw new Error('Renaming is supported for project notes only');
+  }
+  const fromTitle = note.title;
+  const writeId = note.id || note.filename;
+  sqliteWriter.updateSpaceNoteTitle(writeId, newTitle);
+  const renamedNote = sqliteReader.getSpaceNote(writeId);
+  if (!renamedNote) {
+    throw new Error('Failed to read note after rename');
+  }
+  invalidateListingCaches();
+  return {
+    note: renamedNote,
+    fromTitle,
+    toTitle: newTitle,
   };
 }
 

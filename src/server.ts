@@ -1572,6 +1572,10 @@ export function createServer(): Server {
                 type: 'string',
                 description: 'Filename/path of the note to update',
               },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
+              },
               content: {
                 type: 'string',
                 description: 'New content for the note. Include frontmatter between --- delimiters at the start if the note has or should have properties.',
@@ -1610,6 +1614,10 @@ export function createServer(): Server {
                 type: 'string',
                 description: 'Filename/path of the note to delete',
               },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
+              },
               dryRun: {
                 type: 'boolean',
                 description: 'Preview deletion impact without deleting (default: false)',
@@ -1640,6 +1648,10 @@ export function createServer(): Server {
                 type: 'string',
                 description: 'Filename/path of the note to move',
               },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
+              },
               destinationFolder: {
                 type: 'string',
                 description: 'Destination folder. Local: path in Notes (if full path is passed, basename must match current file). TeamSpace: folder ID/path/name or "root"',
@@ -1663,21 +1675,33 @@ export function createServer(): Server {
         {
           name: 'noteplan_rename_note_file',
           description:
-            'Rename the filename of a local project note (file path only, does not edit title/content). Requires dryRun-issued confirmationToken before execution. Useful for aligning filenames with note titles.',
+            'Rename a project note. For local notes: renames the file path (use newFilename). For TeamSpace notes: renames the title (use newTitle). Requires dryRun-issued confirmationToken before execution.',
           inputSchema: {
             type: 'object',
             properties: {
+              id: {
+                type: 'string',
+                description: 'Note ID (preferred for TeamSpace notes)',
+              },
               filename: {
                 type: 'string',
-                description: 'Filename/path of the local project note to rename',
+                description: 'Filename/path of the note to rename',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
               },
               newFilename: {
                 type: 'string',
-                description: 'New filename. Can be bare filename or full path in the same folder; current extension is preserved by default',
+                description: 'New filename for local notes. Can be bare filename or full path in the same folder; current extension is preserved by default',
+              },
+              newTitle: {
+                type: 'string',
+                description: 'New title for TeamSpace notes',
               },
               keepExtension: {
                 type: 'boolean',
-                description: 'Keep current extension (.md/.txt) even if newFilename includes another extension (default: true)',
+                description: 'Keep current extension (.md/.txt) even if newFilename includes another extension (default: true, local notes only)',
               },
               dryRun: {
                 type: 'boolean',
@@ -1688,7 +1712,10 @@ export function createServer(): Server {
                 description: 'Confirmation token issued by dryRun for rename execution',
               },
             },
-            required: ['filename', 'newFilename'],
+            anyOf: [
+              { required: ['id'] },
+              { required: ['filename'] },
+            ],
           },
         },
         {
@@ -1705,6 +1732,10 @@ export function createServer(): Server {
               filename: {
                 type: 'string',
                 description: 'Filename/path of the trashed note to restore',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
               },
               destinationFolder: {
                 type: 'string',
@@ -1759,6 +1790,10 @@ For large notes, use startLine/endLine and cursor pagination to fetch progressiv
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
               },
               startLine: {
                 type: 'number',
@@ -1893,6 +1928,10 @@ If the note has no frontmatter, it will be created.`,
                 type: 'string',
                 description: 'Filename/path of the note',
               },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
+              },
               key: {
                 type: 'string',
                 description: 'Property key (e.g., "icon", "bg-color", "status", "priority")',
@@ -1921,6 +1960,10 @@ This is SAFER than reading and rewriting the whole note.`,
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
               },
               key: {
                 type: 'string',
@@ -2125,6 +2168,10 @@ Recommended flow:
                 type: 'string',
                 description: 'Filename/path of the note',
               },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
+              },
               startLine: {
                 type: 'number',
                 description: 'First line to delete (1-indexed, inclusive)',
@@ -2164,6 +2211,10 @@ Recommended flow:
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
               },
               startLine: {
                 type: 'number',
@@ -2235,6 +2286,10 @@ Recommended flow:
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
               },
               line: {
                 type: 'number',
@@ -2596,6 +2651,10 @@ Recommended flow:
                 type: 'string',
                 description: 'Filename/path of the note',
               },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
+              },
               lineIndex: {
                 type: 'number',
                 description: 'Line index of the task (0-based, from noteplan_get_tasks or noteplan_get_paragraphs lineIndex)',
@@ -2619,6 +2678,10 @@ Recommended flow:
               filename: {
                 type: 'string',
                 description: 'Filename/path of the note',
+              },
+              space: {
+                type: 'string',
+                description: 'Space name or ID to search in',
               },
               lineIndex: {
                 type: 'number',

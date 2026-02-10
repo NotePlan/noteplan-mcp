@@ -312,7 +312,7 @@ export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>) {
 
     // Try each path
     for (const notePath of pathsToTry) {
-      const note = store.getNote({ filename: notePath });
+      const note = store.getNote({ filename: notePath, space: params.space });
       if (note) {
         return {
           success: true,

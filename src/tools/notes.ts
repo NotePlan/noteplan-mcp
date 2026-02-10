@@ -50,7 +50,8 @@ function confirmationFailureMessage(toolName: string, reason: string): string {
 
 function resolveNoteTarget(
   id?: string,
-  filename?: string
+  filename?: string,
+  space?: string
 ): { identifier: string; note: ReturnType<typeof store.getNote> } {
   const identifier = (id && id.trim().length > 0 ? id : filename)?.trim();
   if (!identifier) {
@@ -58,8 +59,8 @@ function resolveNoteTarget(
   }
 
   const note = id
-    ? store.getNote({ id: identifier }) ?? store.getNote({ filename: identifier })
-    : store.getNote({ filename: identifier });
+    ? store.getNote({ id: identifier, space }) ?? store.getNote({ filename: identifier, space })
+    : store.getNote({ filename: identifier, space });
   return {
     identifier,
     note,
@@ -81,7 +82,7 @@ function resolveWritableNoteReference(input: WritableNoteReferenceInput): {
   candidates?: Array<{ id: string; title: string; filename: string; score: number }>;
 } {
   if (input.id && input.id.trim().length > 0) {
-    const note = store.getNote({ id: input.id.trim() });
+    const note = store.getNote({ id: input.id.trim(), space: input.space?.trim() });
     return { note, error: note ? undefined : 'Note not found' };
   }
 
@@ -129,7 +130,7 @@ function resolveWritableNoteReference(input: WritableNoteReferenceInput): {
     if (!identifier) {
       return { note: null, error: 'Could not resolve note target' };
     }
-    const note = store.getNote({ id: identifier }) ?? store.getNote({ filename: identifier });
+    const note = store.getNote({ id: identifier, space: input.space?.trim() }) ?? store.getNote({ filename: identifier, space: input.space?.trim() });
     return { note, error: note ? undefined : 'Resolved note no longer exists' };
   }
 
@@ -378,6 +379,7 @@ export const createNoteSchema = z.object({
 
 export const updateNoteSchema = z.object({
   filename: z.string().describe('Filename/path of the note to update'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   content: z
     .string()
     .describe('New content for the note. Include YAML frontmatter between --- delimiters at the start if the note has or should have properties'),
@@ -402,6 +404,7 @@ export const updateNoteSchema = z.object({
 export const deleteNoteSchema = z.object({
   id: z.string().optional().describe('Note ID (preferred for TeamSpace notes)'),
   filename: z.string().optional().describe('Filename/path of the note to delete'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   dryRun: z
     .boolean()
     .optional()
@@ -423,6 +426,7 @@ export const deleteNoteSchema = z.object({
 export const moveNoteSchema = z.object({
   id: z.string().optional().describe('Note ID (preferred for TeamSpace notes)'),
   filename: z.string().optional().describe('Filename/path of the note to move'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   destinationFolder: z
     .string()
     .describe('Destination folder. For local notes: folder path in Notes (if a full path is provided, basename must match current file). For TeamSpace notes: folder ID/path/name or "root"'),
@@ -445,10 +449,17 @@ export const moveNoteSchema = z.object({
 });
 
 export const renameNoteFileSchema = z.object({
-  filename: z.string().describe('Filename/path of the local project note to rename'),
+  id: z.string().optional().describe('Note ID (preferred for TeamSpace notes)'),
+  filename: z.string().optional().describe('Filename/path of the note to rename'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   newFilename: z
     .string()
-    .describe('New file name. Can be bare filename or full path in the same folder; defaults to keeping current extension'),
+    .optional()
+    .describe('New file name for local notes. Can be bare filename or full path in the same folder; defaults to keeping current extension'),
+  newTitle: z
+    .string()
+    .optional()
+    .describe('New title for TeamSpace notes'),
   keepExtension: z
     .boolean()
     .optional()
@@ -462,11 +473,20 @@ export const renameNoteFileSchema = z.object({
     .string()
     .optional()
     .describe('Confirmation token issued by dryRun for rename execution'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.filename) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id or filename',
+      path: ['filename'],
+    });
+  }
 });
 
 export const restoreNoteSchema = z.object({
   id: z.string().optional().describe('Trashed note ID (preferred for TeamSpace notes, usually from noteplan_delete_note response)'),
   filename: z.string().optional().describe('Trashed filename/path to restore (usually from noteplan_delete_note response)'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   destinationFolder: z
     .string()
     .optional()
@@ -809,7 +829,7 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
       };
     }
 
-    const existingNote = store.getNote({ filename: params.filename });
+    const existingNote = store.getNote({ filename: params.filename, space: params.space });
     if (!existingNote) {
       return {
         success: false,
@@ -886,7 +906,7 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
 
 export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
   try {
-    const target = resolveNoteTarget(params.id, params.filename);
+    const target = resolveNoteTarget(params.id, params.filename, params.space);
     const note = target.note;
     if (!note) {
       return {
@@ -955,7 +975,7 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
 
 export function moveNote(params: z.infer<typeof moveNoteSchema>) {
   try {
-    const target = resolveNoteTarget(params.id, params.filename);
+    const target = resolveNoteTarget(params.id, params.filename, params.space);
     if (!target.note) {
       return {
         success: false,
@@ -1034,7 +1054,7 @@ export function moveNote(params: z.infer<typeof moveNoteSchema>) {
 
 export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
   try {
-    const target = resolveNoteTarget(params.id, params.filename);
+    const target = resolveNoteTarget(params.id, params.filename, params.space);
     if (!target.note) {
       return {
         success: false,
@@ -1112,8 +1132,90 @@ export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
 
 export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
   try {
+    // Resolve the note to determine if it's local or space
+    const target = resolveNoteTarget(params.id, params.filename, params.space);
+    if (!target.note) {
+      return { success: false, error: 'Note not found' };
+    }
+
+    const note = target.note;
+
+    // Space note: rename title
+    if (note.source === 'space') {
+      if (!params.newTitle) {
+        return {
+          success: false,
+          error: 'newTitle is required for TeamSpace notes (use newFilename for local notes)',
+        };
+      }
+      const writeId = note.id || note.filename;
+      const confirmationTarget = `${note.title}=>${params.newTitle}`;
+
+      if (params.dryRun === true) {
+        const token = issueConfirmationToken({
+          tool: 'noteplan_rename_note_file',
+          target: confirmationTarget,
+          action: 'rename_note_file',
+        });
+        return {
+          success: true,
+          dryRun: true,
+          message: `Dry run: TeamSpace note would be renamed from "${note.title}" to "${params.newTitle}"`,
+          fromTitle: note.title,
+          toTitle: params.newTitle,
+          note: {
+            id: note.id,
+            title: note.title,
+            filename: note.filename,
+            type: note.type,
+            source: note.source,
+            folder: note.folder,
+            spaceId: note.spaceId,
+          },
+          ...token,
+        };
+      }
+
+      const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+        tool: 'noteplan_rename_note_file',
+        target: confirmationTarget,
+        action: 'rename_note_file',
+      });
+      if (!confirmation.ok) {
+        return {
+          success: false,
+          error: confirmationFailureMessage('noteplan_rename_note_file', confirmation.reason),
+        };
+      }
+
+      const renamed = store.renameSpaceNote(writeId, params.newTitle);
+      return {
+        success: true,
+        message: `TeamSpace note renamed from "${renamed.fromTitle}" to "${renamed.toTitle}"`,
+        fromTitle: renamed.fromTitle,
+        toTitle: renamed.toTitle,
+        note: {
+          id: renamed.note.id,
+          title: renamed.note.title,
+          filename: renamed.note.filename,
+          type: renamed.note.type,
+          source: renamed.note.source,
+          folder: renamed.note.folder,
+          spaceId: renamed.note.spaceId,
+        },
+      };
+    }
+
+    // Local note: rename file
+    if (!params.newFilename) {
+      return {
+        success: false,
+        error: 'newFilename is required for local notes (use newTitle for TeamSpace notes)',
+      };
+    }
+
     const keepExtension = params.keepExtension ?? true;
-    const preview = store.previewRenameNoteFile(params.filename, params.newFilename, keepExtension);
+    const preview = store.previewRenameNoteFile(note.filename, params.newFilename, keepExtension);
     const confirmationTarget = `${preview.fromFilename}=>${preview.toFilename}`;
 
     if (params.dryRun === true) {
@@ -1153,7 +1255,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
       };
     }
 
-    const renamed = store.renameNoteFile(params.filename, params.newFilename, keepExtension);
+    const renamed = store.renameNoteFile(note.filename, params.newFilename, keepExtension);
     return {
       success: true,
       message: `Note renamed to ${renamed.toFilename}`,
@@ -1171,7 +1273,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to rename note file',
+      error: error instanceof Error ? error.message : 'Failed to rename note',
     };
   }
 }
@@ -1179,6 +1281,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
 // Get note with line numbers
 export const getParagraphsSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   startLine: z.number().min(1).optional().describe('First line to include (1-indexed, inclusive)'),
   endLine: z.number().min(1).optional().describe('Last line to include (1-indexed, inclusive)'),
   limit: z.number().min(1).max(1000).optional().default(200).describe('Maximum lines to return'),
@@ -1219,7 +1322,7 @@ export const searchParagraphsSchema = z.object({
 });
 
 export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
-  const note = store.getNote({ filename: params.filename });
+  const note = store.getNote({ filename: params.filename, space: params.space });
 
   if (!note) {
     return {
@@ -1422,12 +1525,14 @@ export function searchParagraphs(params: z.infer<typeof searchParagraphsSchema>)
 // Granular note operation schemas
 export const setPropertySchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   key: z.string().describe('Property key (e.g., "icon", "bg-color", "status")'),
   value: z.string().describe('Property value'),
 });
 
 export const removePropertySchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   key: z.string().describe('Property key to remove'),
 });
 
@@ -1513,6 +1618,7 @@ export const appendContentSchema = z.object({
 
 export const deleteLinesSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   startLine: z.number().describe('First line to delete (1-indexed, inclusive)'),
   endLine: z.number().describe('Last line to delete (1-indexed, inclusive)'),
   dryRun: z
@@ -1527,6 +1633,7 @@ export const deleteLinesSchema = z.object({
 
 export const editLineSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   line: z.number().describe('Line number to edit (1-indexed)'),
   content: z.string().describe('New content for the line'),
   indentationStyle: z
@@ -1542,6 +1649,7 @@ export const editLineSchema = z.object({
 
 export const replaceLinesSchema = z.object({
   filename: z.string().describe('Filename/path of the note'),
+  space: z.string().optional().describe('Space name or ID to search in'),
   startLine: z.number().describe('First line to replace (1-indexed, inclusive)'),
   endLine: z.number().describe('Last line to replace (1-indexed, inclusive)'),
   content: z.string().describe('Replacement content for the selected line range'),
@@ -1567,13 +1675,14 @@ export const replaceLinesSchema = z.object({
 // Granular note operation implementations
 export function setProperty(params: z.infer<typeof setPropertySchema>) {
   try {
-    const note = store.getNote({ filename: params.filename });
+    const note = store.getNote({ filename: params.filename, space: params.space });
     if (!note) {
       return { success: false, error: 'Note not found' };
     }
 
     const newContent = frontmatter.setFrontmatterProperty(note.content, params.key, params.value);
-    store.updateNote(params.filename, newContent);
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    store.updateNote(writeIdentifier, newContent, { source: note.source });
 
     return {
       success: true,
@@ -1589,13 +1698,14 @@ export function setProperty(params: z.infer<typeof setPropertySchema>) {
 
 export function removeProperty(params: z.infer<typeof removePropertySchema>) {
   try {
-    const note = store.getNote({ filename: params.filename });
+    const note = store.getNote({ filename: params.filename, space: params.space });
     if (!note) {
       return { success: false, error: 'Note not found' };
     }
 
     const newContent = frontmatter.removeFrontmatterProperty(note.content, params.key);
-    store.updateNote(params.filename, newContent);
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    store.updateNote(writeIdentifier, newContent, { source: note.source });
 
     return {
       success: true,
@@ -1713,7 +1823,7 @@ export function appendContent(params: z.infer<typeof appendContentSchema>) {
 
 export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
   try {
-    const note = store.getNote({ filename: params.filename });
+    const note = store.getNote({ filename: params.filename, space: params.space });
     if (!note) {
       return { success: false, error: 'Note not found' };
     }
@@ -1776,7 +1886,8 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
     }
 
     const newContent = frontmatter.deleteLines(note.content, boundedStartLine, boundedEndLine);
-    store.updateNote(params.filename, newContent);
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    store.updateNote(writeIdentifier, newContent, { source: note.source });
 
     return {
       success: true,
@@ -1804,7 +1915,7 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
       };
     }
 
-    const note = store.getNote({ filename: params.filename });
+    const note = store.getNote({ filename: params.filename, space: params.space });
     if (!note) {
       return { success: false, error: 'Note not found' };
     }
@@ -1844,7 +1955,8 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
       warnings.push(buildAttachmentWarningMessage(removedAttachmentReferences.length));
     }
 
-    store.updateNote(params.filename, newContent);
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    store.updateNote(writeIdentifier, newContent, { source: note.source });
 
     return {
       success: true,
@@ -1871,7 +1983,7 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
 
 export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
   try {
-    const note = store.getNote({ filename: params.filename });
+    const note = store.getNote({ filename: params.filename, space: params.space });
     if (!note) {
       return { success: false, error: 'Note not found' };
     }
@@ -1955,7 +2067,8 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
     }
 
     allLines.splice(startIndex, lineCountToReplace, ...replacementLines);
-    store.updateNote(params.filename, allLines.join('\n'));
+    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
+    store.updateNote(writeIdentifier, allLines.join('\n'), { source: note.source });
 
     return {
       success: true,
