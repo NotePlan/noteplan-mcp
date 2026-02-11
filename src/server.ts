@@ -211,10 +211,6 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
   switch (toolName) {
     case 'noteplan_search':
       return SEARCH_NOTES_OUTPUT_SCHEMA;
-    case 'noteplan_list_spaces':
-      return SPACES_OUTPUT_SCHEMA;
-    case 'noteplan_list_tags':
-      return TAGS_OUTPUT_SCHEMA;
     // Consolidated tools — use GENERIC since return shape varies by action/route
     case 'noteplan_get_notes':
     case 'noteplan_manage_note':
@@ -222,14 +218,12 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_paragraphs':
     case 'noteplan_folders':
     case 'noteplan_filters':
-    case 'noteplan_calendar':
-    case 'noteplan_reminders':
+    case 'noteplan_eventkit':
     case 'noteplan_memory':
     case 'noteplan_ui':
     case 'noteplan_plugins':
     case 'noteplan_themes':
     case 'noteplan_embeddings':
-    case 'noteplan_tools_help':
       return GENERIC_TOOL_OUTPUT_SCHEMA;
     default:
       return GENERIC_TOOL_OUTPUT_SCHEMA;
@@ -395,9 +389,6 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
   const readOnlyTools = new Set([
     'noteplan_get_notes',
     'noteplan_search',
-    'noteplan_list_spaces',
-    'noteplan_list_tags',
-    'noteplan_tools_help',
   ]);
 
   // Consolidated tools with mixed read+write actions get pessimistic annotations
@@ -407,8 +398,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_paragraphs',
     'noteplan_folders',
     'noteplan_filters',
-    'noteplan_calendar',
-    'noteplan_reminders',
+    'noteplan_eventkit',
     'noteplan_memory',
     'noteplan_plugins',
     'noteplan_themes',
@@ -421,8 +411,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_paragraphs',
     'noteplan_folders',
     'noteplan_filters',
-    'noteplan_calendar',
-    'noteplan_reminders',
+    'noteplan_eventkit',
     'noteplan_memory',
     'noteplan_ui',
     'noteplan_plugins',
@@ -431,8 +420,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
   ]);
 
   const openWorldTools = new Set([
-    'noteplan_calendar',
-    'noteplan_reminders',
+    'noteplan_eventkit',
     'noteplan_embeddings',
     'noteplan_plugins',
   ]);
@@ -483,13 +471,7 @@ function getToolSearchAliases(toolName: string): string[] {
       );
       break;
     case 'noteplan_search':
-      aliases.push('search notes', 'find notes', 'full-text search');
-      break;
-    case 'noteplan_list_spaces':
-      aliases.push('spaces', 'workspaces', 'teamspaces');
-      break;
-    case 'noteplan_list_tags':
-      aliases.push('tags', 'hashtags');
+      aliases.push('search notes', 'find notes', 'full-text search', 'tags', 'hashtags');
       break;
     case 'noteplan_manage_note':
       aliases.push('create note', 'update note', 'delete note', 'move note', 'rename note', 'restore note', 'frontmatter', 'property', 'set property');
@@ -504,16 +486,13 @@ function getToolSearchAliases(toolName: string): string[] {
       );
       break;
     case 'noteplan_folders':
-      aliases.push('folders', 'directory', 'create folder', 'move folder', 'rename folder', 'delete folder', 'resolve folder', 'find folder');
+      aliases.push('folders', 'directory', 'create folder', 'move folder', 'rename folder', 'delete folder', 'resolve folder', 'find folder', 'spaces', 'workspaces', 'teamspaces');
       break;
     case 'noteplan_filters':
       aliases.push('filters', 'saved filters', 'task filters', 'filter parameters', 'run filter');
       break;
-    case 'noteplan_calendar':
-      aliases.push('calendar', 'event', 'events', 'schedule', 'meeting', 'appointment', 'create event', 'delete event');
-      break;
-    case 'noteplan_reminders':
-      aliases.push('reminder', 'reminders', 'todo', 'checklist', 'create reminder', 'complete reminder');
+    case 'noteplan_eventkit':
+      aliases.push('calendar', 'event', 'events', 'schedule', 'meeting', 'appointment', 'create event', 'delete event', 'reminder', 'reminders', 'todo', 'checklist', 'create reminder', 'complete reminder');
       break;
     case 'noteplan_memory':
       aliases.push('memory', 'memories', 'preference', 'preferences', 'remember', 'correction');
@@ -529,9 +508,6 @@ function getToolSearchAliases(toolName: string): string[] {
       break;
     case 'noteplan_embeddings':
       aliases.push('embeddings', 'semantic search', 'vector search', 'similarity');
-      break;
-    case 'noteplan_tools_help':
-      aliases.push('find tool', 'discover tools', 'tool lookup', 'tool schema', 'tool details');
       break;
   }
 
@@ -604,8 +580,7 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
   if (message.includes('unknown tool')) {
     return {
       code: 'ERR_UNKNOWN_TOOL',
-      hint: 'Use noteplan_tools_help(action=search) to find the right tool name.',
-      suggestedTool: 'noteplan_tools_help',
+      hint: 'Check tool name spelling. Available tools: noteplan_get_notes, noteplan_search, noteplan_manage_note, noteplan_edit_content, noteplan_paragraphs, noteplan_folders, noteplan_filters, noteplan_eventkit, noteplan_memory, noteplan_ui, noteplan_plugins, noteplan_themes.',
     };
   }
 
@@ -660,21 +635,6 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
     };
   }
 
-  if (message.includes('names must include at least one tool name')) {
-    return {
-      code: 'ERR_INVALID_ARGUMENT',
-      hint: 'Pass at least one valid tool name in names[].',
-      suggestedTool: 'noteplan_tools_help',
-    };
-  }
-
-  if (message.includes('too many tool names requested')) {
-    return {
-      code: 'ERR_LIMIT_EXCEEDED',
-      hint: 'Split requests into chunks of up to 10 tool names.',
-      suggestedTool: 'noteplan_tools_help',
-    };
-  }
 
   if (message.includes('empty content is blocked') || message.includes('empty line content is blocked') || message.includes('empty task content is blocked')) {
     return {
@@ -836,11 +796,8 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
     case 'noteplan_filters':
       suggestedNextTools = ['noteplan_paragraphs', 'noteplan_filters'];
       break;
-    case 'noteplan_calendar':
-      suggestedNextTools = ['noteplan_calendar'];
-      break;
-    case 'noteplan_reminders':
-      suggestedNextTools = ['noteplan_reminders'];
+    case 'noteplan_eventkit':
+      suggestedNextTools = ['noteplan_eventkit'];
       break;
     case 'noteplan_memory':
       suggestedNextTools = ['noteplan_memory'];
@@ -853,9 +810,6 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
       break;
     case 'noteplan_themes':
       suggestedNextTools = ['noteplan_themes'];
-      break;
-    case 'noteplan_tools_help':
-      suggestedNextTools = ['noteplan_tools_help'];
       break;
     default:
       suggestedNextTools = [];
@@ -1418,13 +1372,13 @@ export function createServer(): Server {
         {
           name: 'noteplan_folders',
           description:
-            'Folder operations: list, find, resolve, create, move, rename, delete.\n\nActions:\n- list: List folders with optional filtering\n- find: Find folder matches for exploration\n- resolve: Resolve to one canonical folder path\n- create: Create a folder (local: path, TeamSpace: space + name)\n- move: Move a folder (requires dryRun/confirmationToken)\n- rename: Rename a folder (requires dryRun/confirmationToken)\n- delete: Delete folder to trash (requires dryRun/confirmationToken)',
+            'Folder and space operations: list, find, resolve, create, move, rename, delete folders, or list spaces.\n\nActions:\n- list: List folders with optional filtering\n- find: Find folder matches for exploration\n- resolve: Resolve to one canonical folder path\n- create: Create a folder (local: path, TeamSpace: space + name)\n- move: Move a folder (requires dryRun/confirmationToken)\n- rename: Rename a folder (requires dryRun/confirmationToken)\n- delete: Delete folder to trash (requires dryRun/confirmationToken)\n- list_spaces: List spaces/workspaces with optional filtering',
           inputSchema: {
             type: 'object',
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'find', 'resolve', 'create', 'move', 'rename', 'delete'],
+                enum: ['list', 'find', 'resolve', 'create', 'move', 'rename', 'delete', 'list_spaces'],
                 description: 'Action to perform',
               },
               path: {
@@ -1601,132 +1555,96 @@ export function createServer(): Server {
           },
         },
         {
-          name: 'noteplan_calendar',
+          name: 'noteplan_eventkit',
           description:
-            'macOS Calendar event operations.\n\nActions:\n- get_events: Get events for a date/range\n- list_calendars: List all calendars\n- create_event: Create event (requires title + startDate)\n- update_event: Update event (requires eventId)\n- delete_event: Delete event (requires eventId + dryRun/confirmationToken)',
+            'macOS Calendar and Reminders operations.\n\nCalendar actions (source="calendar"):\n- get_events: Get events for a date/range\n- list_calendars: List all calendars\n- create_event: Create event (requires title + startDate)\n- update_event: Update event (requires eventId)\n- delete_event: Delete event (requires eventId + dryRun/confirmationToken)\n\nReminder actions (source="reminders"):\n- get: Get reminders (optional list/query filter)\n- list_lists: List reminder lists\n- create: Create reminder (requires title)\n- complete: Mark reminder done (requires reminderId)\n- update: Update reminder (requires reminderId)\n- delete: Delete reminder (requires reminderId + dryRun/confirmationToken)',
           inputSchema: {
             type: 'object',
             properties: {
+              source: {
+                type: 'string',
+                enum: ['calendar', 'reminders'],
+                description: 'EventKit source: "calendar" for Calendar.app, "reminders" for Reminders.app',
+              },
               action: {
                 type: 'string',
-                enum: ['get_events', 'list_calendars', 'create_event', 'update_event', 'delete_event'],
+                enum: ['get_events', 'list_calendars', 'create_event', 'update_event', 'delete_event', 'get', 'list_lists', 'create', 'complete', 'update', 'delete'],
                 description: 'Action to perform',
               },
+              // Calendar params
               eventId: {
                 type: 'string',
-                description: 'Event ID — used by update_event, delete_event',
-              },
-              title: {
-                type: 'string',
-                description: 'Event title — used by create_event, update_event',
+                description: 'Event ID — calendar: update_event, delete_event',
               },
               date: {
                 type: 'string',
-                description: 'Date (YYYY-MM-DD, "today", "tomorrow") — used by get_events',
+                description: 'Date (YYYY-MM-DD, "today", "tomorrow") — calendar: get_events',
               },
               days: {
                 type: 'number',
-                description: 'Days to fetch — used by get_events',
+                description: 'Days to fetch — calendar: get_events',
               },
               startDate: {
                 type: 'string',
-                description: 'Start date/time — used by create_event, update_event',
+                description: 'Start date/time — calendar: create_event, update_event',
               },
               endDate: {
                 type: 'string',
-                description: 'End date/time — used by create_event, update_event',
+                description: 'End date/time — calendar: create_event, update_event',
               },
               calendar: {
                 type: 'string',
-                description: 'Calendar name — used by get_events, create_event',
+                description: 'Calendar name — calendar: get_events, create_event',
               },
               location: {
                 type: 'string',
-                description: 'Event location — used by create_event, update_event',
-              },
-              notes: {
-                type: 'string',
-                description: 'Event notes — used by create_event, update_event',
+                description: 'Event location — calendar: create_event, update_event',
               },
               allDay: {
                 type: 'boolean',
-                description: 'All-day event — used by create_event',
+                description: 'All-day event — calendar: create_event',
               },
-              dryRun: {
-                type: 'boolean',
-                description: 'Preview impact — used by delete_event',
-              },
-              confirmationToken: {
-                type: 'string',
-                description: 'Token from dryRun — used by delete_event',
-              },
-              limit: {
-                type: 'number',
-                description: 'Max events to return — used by get_events',
-              },
-              offset: {
-                type: 'number',
-                description: 'Pagination offset — used by get_events',
-              },
-              cursor: {
-                type: 'string',
-                description: 'Cursor from previous page — used by get_events',
-              },
-            },
-            required: ['action'],
-          },
-        },
-        {
-          name: 'noteplan_reminders',
-          description:
-            'macOS Reminders operations.\n\nActions:\n- get: Get reminders (optional list/query filter)\n- list_lists: List reminder lists\n- create: Create reminder (requires title)\n- complete: Mark reminder done (requires reminderId)\n- update: Update reminder (requires reminderId)\n- delete: Delete reminder (requires reminderId + dryRun/confirmationToken)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['get', 'list_lists', 'create', 'complete', 'update', 'delete'],
-                description: 'Action to perform',
-              },
+              // Reminders params
               reminderId: {
                 type: 'string',
-                description: 'Reminder ID — used by complete, update, delete',
-              },
-              title: {
-                type: 'string',
-                description: 'Reminder title — used by create, update',
+                description: 'Reminder ID — reminders: complete, update, delete',
               },
               list: {
                 type: 'string',
-                description: 'Reminder list name — used by get, create',
+                description: 'Reminder list name — reminders: get, create',
               },
               dueDate: {
                 type: 'string',
-                description: 'Due date — used by create, update',
-              },
-              notes: {
-                type: 'string',
-                description: 'Reminder notes — used by create, update',
+                description: 'Due date — reminders: create, update',
               },
               priority: {
                 type: 'number',
-                description: 'Priority: 0 (none), 1 (high), 5 (medium), 9 (low) — used by create, update',
+                description: 'Priority: 0 (none), 1 (high), 5 (medium), 9 (low) — reminders: create, update',
               },
               includeCompleted: {
                 type: 'boolean',
-                description: 'Include completed — used by get',
+                description: 'Include completed — reminders: get',
+              },
+              // Shared params
+              title: {
+                type: 'string',
+                description: 'Title — calendar: create_event, update_event; reminders: create, update',
+              },
+              notes: {
+                type: 'string',
+                description: 'Notes — calendar: create_event, update_event; reminders: create, update',
               },
               query: {
                 type: 'string',
-                description: 'Filter by substring — used by get, list_lists',
+                description: 'Filter by substring — reminders: get, list_lists',
               },
               dryRun: {
                 type: 'boolean',
-                description: 'Preview impact — used by delete',
+                description: 'Preview impact — calendar: delete_event; reminders: delete',
               },
               confirmationToken: {
                 type: 'string',
-                description: 'Token from dryRun — used by delete',
+                description: 'Token from dryRun — calendar: delete_event; reminders: delete',
               },
               limit: {
                 type: 'number',
@@ -1741,7 +1659,7 @@ export function createServer(): Server {
                 description: 'Cursor from previous page',
               },
             },
-            required: ['action'],
+            required: ['source', 'action'],
           },
         },
         {
@@ -1986,44 +1904,24 @@ export function createServer(): Server {
           },
         },
         {
-          name: 'noteplan_tools_help',
+          name: 'noteplan_search',
           description:
-            'Search or get details about available NotePlan tools.\n\nActions:\n- search: Search tools by keyword (requires query)\n- details: Get full schemas for specific tools (requires names[])',
+            'Search across notes or list tags.\n\nActions:\n- search (default): Full-text or metadata search across notes. Use searchField, queryMode, propertyFilters, etc.\n- list_tags: List all tags/hashtags with optional filtering.\n\nSearch: discover notes by content/keywords/phrases and optional frontmatter property filters (e.g. {"category":"marketing"}). Use queryMode=smart/any/all for multi-word token matching, and query="*" for browse mode. Folder filters accept canonical paths from noteplan_folders (action: list/resolve), with or without "Notes/" prefix.',
           inputSchema: {
             type: 'object',
             properties: {
               action: {
                 type: 'string',
-                enum: ['search', 'details'],
-                description: 'Action to perform',
+                enum: ['search', 'list_tags'],
+                description: 'Action to perform (default: search)',
               },
               query: {
                 type: 'string',
-                description: 'Search keywords — used by search',
+                description: 'Search query (required for search). Supports OR patterns like "meeting|standup". For list_tags, filters tags by substring.',
               },
-              names: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Tool names to get details for (max 10) — used by details',
-              },
-              limit: {
-                type: 'number',
-                description: 'Max matches — used by search',
-              },
-            },
-            required: ['action'],
-          },
-        },
-        {
-          name: 'noteplan_search',
-          description:
-            'Search across notes by content (full-text) or metadata (title/filename) via searchField. Use this to discover notes by content/keywords/phrases and optional frontmatter property filters (e.g. {"category":"marketing"}). Use queryMode=smart/any/all for multi-word token matching (instead of strict phrase-only search), and query="*" for browse mode (metadata listing, no text match scoring). Folder filters accept canonical paths from noteplan_folders (action: list/resolve), with or without "Notes/" prefix.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
+              space: {
                 type: 'string',
-                description: 'Search query. Supports OR patterns like "meeting|standup"',
+                description: 'Space name or ID — used by search, list_tags',
               },
               searchField: {
                 type: 'string',
@@ -2051,10 +1949,6 @@ export function createServer(): Server {
                 type: 'array',
                 items: { type: 'string' },
                 description: 'Filter by folders (canonical path, e.g. "20 - Areas"; "Notes/20 - Areas" is also accepted). If multiple folders are provided, the first is used for full-text scope.',
-              },
-              space: {
-                type: 'string',
-                description: 'Space name or ID to search in',
               },
               limit: {
                 type: 'number',
@@ -2096,61 +1990,6 @@ export function createServer(): Server {
               createdBefore: {
                 type: 'string',
                 description: 'Filter notes created before date',
-              },
-            },
-            required: ['query'],
-          },
-        },
-        {
-          name: 'noteplan_list_spaces',
-          description: 'List spaces with optional filtering and pagination.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'Filter by space name/id substring',
-              },
-              limit: {
-                type: 'number',
-                description: 'Maximum spaces to return (default: 50)',
-              },
-              offset: {
-                type: 'number',
-                description: 'Pagination offset (default: 0)',
-              },
-              cursor: {
-                type: 'string',
-                description: 'Cursor token from previous page (preferred over offset)',
-              },
-            },
-          },
-        },
-        {
-          name: 'noteplan_list_tags',
-          description: 'List tags with optional filtering and pagination.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              space: {
-                type: 'string',
-                description: 'Space name or ID to list tags from',
-              },
-              query: {
-                type: 'string',
-                description: 'Filter tags by substring',
-              },
-              limit: {
-                type: 'number',
-                description: 'Maximum tags to return (default: 100)',
-              },
-              offset: {
-                type: 'number',
-                description: 'Pagination offset (default: 0)',
-              },
-              cursor: {
-                type: 'string',
-                description: 'Cursor token from previous page (preferred over offset)',
               },
             },
           },
@@ -2257,7 +2096,7 @@ export function createServer(): Server {
   const toolDefinitionByName = new Map(annotatedToolDefinitions.map((tool) => [tool.name, tool]));
   const compactToolDefinitions = annotatedToolDefinitions.map((tool) => compactToolDefinition(tool));
 
-  // Register tool listing handler — all 16 tools returned directly (no pagination needed)
+  // Register tool listing handler — all 12 tools returned directly (no pagination needed)
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools: compactToolDefinitions };
   });
@@ -2317,15 +2156,15 @@ export function createServer(): Server {
         case 'noteplan_get_notes':
           result = dispatchGetNotes((args ?? {}) as Record<string, unknown>);
           break;
-        case 'noteplan_search':
-          result = await searchTools.searchNotes(args as any);
+        case 'noteplan_search': {
+          const searchAction = (args as any)?.action;
+          if (searchAction === 'list_tags') {
+            result = spaceTools.listTags(args as any);
+          } else {
+            result = await searchTools.searchNotes(args as any);
+          }
           break;
-        case 'noteplan_list_spaces':
-          result = spaceTools.listSpaces(args as any);
-          break;
-        case 'noteplan_list_tags':
-          result = spaceTools.listTags(args as any);
-          break;
+        }
         case 'noteplan_manage_note': {
           const action = (args as any)?.action;
           switch (action) {
@@ -2384,6 +2223,7 @@ export function createServer(): Server {
             case 'move': result = spaceTools.moveFolder(args as any); break;
             case 'rename': result = spaceTools.renameFolder(args as any); break;
             case 'delete': result = spaceTools.deleteFolder(args as any); break;
+            case 'list_spaces': result = spaceTools.listSpaces(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -2401,28 +2241,29 @@ export function createServer(): Server {
           }
           break;
         }
-        case 'noteplan_calendar': {
-          const action = (args as any)?.action;
-          switch (action) {
-            case 'get_events': result = eventTools.getEvents(args as any); break;
-            case 'list_calendars': result = eventTools.listCalendars(args as any); break;
-            case 'create_event': result = eventTools.createEvent(args as any); break;
-            case 'update_event': result = eventTools.updateEvent(args as any); break;
-            case 'delete_event': result = eventTools.deleteEvent(args as any); break;
-            default: throw new Error(`Unknown action: ${action}`);
-          }
-          break;
-        }
-        case 'noteplan_reminders': {
-          const action = (args as any)?.action;
-          switch (action) {
-            case 'get': result = reminderTools.getReminders(args as any); break;
-            case 'list_lists': result = reminderTools.listReminderLists(args as any); break;
-            case 'create': result = reminderTools.createReminder(args as any); break;
-            case 'complete': result = reminderTools.completeReminder(args as any); break;
-            case 'update': result = reminderTools.updateReminder(args as any); break;
-            case 'delete': result = reminderTools.deleteReminder(args as any); break;
-            default: throw new Error(`Unknown action: ${action}`);
+        case 'noteplan_eventkit': {
+          const a = args as any;
+          const source = a?.source;
+          const action = a?.action;
+          if (source === 'reminders') {
+            switch (action) {
+              case 'get': result = reminderTools.getReminders(a); break;
+              case 'list_lists': result = reminderTools.listReminderLists(a); break;
+              case 'create': result = reminderTools.createReminder(a); break;
+              case 'complete': result = reminderTools.completeReminder(a); break;
+              case 'update': result = reminderTools.updateReminder(a); break;
+              case 'delete': result = reminderTools.deleteReminder(a); break;
+              default: throw new Error(`Unknown action: ${action}`);
+            }
+          } else {
+            switch (action) {
+              case 'get_events': result = eventTools.getEvents(a); break;
+              case 'list_calendars': result = eventTools.listCalendars(a); break;
+              case 'create_event': result = eventTools.createEvent(a); break;
+              case 'update_event': result = eventTools.updateEvent(a); break;
+              case 'delete_event': result = eventTools.deleteEvent(a); break;
+              default: throw new Error(`Unknown action: ${action}`);
+            }
           }
           break;
         }
@@ -2486,57 +2327,6 @@ export function createServer(): Server {
             case 'search': result = await embeddingsTools.embeddingsSearch(args as any); break;
             case 'sync': result = await embeddingsTools.embeddingsSync(args as any); break;
             case 'reset': result = embeddingsTools.embeddingsReset(args as any); break;
-            default: throw new Error(`Unknown action: ${action}`);
-          }
-          break;
-        }
-        case 'noteplan_tools_help': {
-          const action = (args as any)?.action;
-          switch (action) {
-            case 'search': {
-              const input = (args ?? {}) as { query?: unknown; limit?: unknown };
-              const query = typeof input.query === 'string' ? input.query.trim() : '';
-              if (!query) {
-                result = { success: false, error: 'query is required' };
-                break;
-              }
-              const limit = toBoundedInt(input.limit, 8, 1, 25);
-              const matches = searchToolDefinitions(toolDefinitions, query, limit);
-              result = {
-                success: true,
-                query,
-                count: matches.length,
-                tools: matches.map((entry) => ({
-                  name: entry.tool.name,
-                  score: Number(entry.score.toFixed(3)),
-                  description: compactDescription(entry.tool.description, 180),
-                })),
-              };
-              break;
-            }
-            case 'details': {
-              const input = (args ?? {}) as { names?: unknown };
-              const names = Array.isArray(input.names)
-                ? input.names
-                    .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
-                    .map((toolName) => normalizeToolName(toolName))
-                : [];
-              const uniqueNames = Array.from(new Set(names));
-              if (uniqueNames.length === 0) {
-                result = { success: false, error: 'names must include at least one tool name' };
-                break;
-              }
-              if (uniqueNames.length > 10) {
-                result = { success: false, error: 'Too many tool names requested. Provide up to 10 names per call.' };
-                break;
-              }
-              const tools = uniqueNames
-                .map((n) => toolDefinitionByName.get(n))
-                .filter((tool): tool is ToolDefinition => Boolean(tool));
-              const missing = uniqueNames.filter((n) => !toolDefinitionByName.has(n));
-              result = { success: missing.length === 0, count: tools.length, missing, tools };
-              break;
-            }
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
