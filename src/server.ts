@@ -1127,7 +1127,7 @@ export function createServer(): Server {
               },
               id: {
                 type: 'string',
-                description: 'Note ID — used by insert, append',
+                description: 'Note ID (preferred for space notes)',
               },
               filename: {
                 type: 'string',
@@ -1135,15 +1135,15 @@ export function createServer(): Server {
               },
               title: {
                 type: 'string',
-                description: 'Note title target — used by insert, append',
+                description: 'Note title target',
               },
               date: {
                 type: 'string',
-                description: 'Calendar note date (auto-creates if missing) — used by insert, append',
+                description: 'Calendar note date (auto-creates if missing)',
               },
               query: {
                 type: 'string',
-                description: 'Fuzzy note query — used by insert, append',
+                description: 'Fuzzy note query',
               },
               space: {
                 type: 'string',

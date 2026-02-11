@@ -1624,9 +1624,17 @@ export const appendContentSchema = z.object({
   }
 });
 
+const noteReferenceSchema = {
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note'),
+  title: z.string().optional().describe('Note title'),
+  date: z.string().optional().describe('Calendar note date (auto-creates if missing)'),
+  query: z.string().optional().describe('Fuzzy note query'),
+  space: z.string().optional().describe('Space name or ID scope'),
+};
+
 export const deleteLinesSchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
-  space: z.string().optional().describe('Space name or ID to search in'),
+  ...noteReferenceSchema,
   startLine: z.number().describe('First line to delete (1-indexed, inclusive)'),
   endLine: z.number().describe('Last line to delete (1-indexed, inclusive)'),
   dryRun: z
@@ -1640,8 +1648,7 @@ export const deleteLinesSchema = z.object({
 });
 
 export const editLineSchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
-  space: z.string().optional().describe('Space name or ID to search in'),
+  ...noteReferenceSchema,
   line: z.number().describe('Line number to edit (1-indexed)'),
   content: z.string().describe('New content for the line'),
   indentationStyle: z
@@ -1656,8 +1663,7 @@ export const editLineSchema = z.object({
 });
 
 export const replaceLinesSchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
-  space: z.string().optional().describe('Space name or ID to search in'),
+  ...noteReferenceSchema,
   startLine: z.number().describe('First line to replace (1-indexed, inclusive)'),
   endLine: z.number().describe('Last line to replace (1-indexed, inclusive)'),
   content: z.string().describe('Replacement content for the selected line range'),
@@ -1831,10 +1837,11 @@ export function appendContent(params: z.infer<typeof appendContentSchema>) {
 
 export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
   try {
-    const note = store.getNote({ filename: params.filename, space: params.space });
-    if (!note) {
-      return { success: false, error: 'Note not found' };
+    const resolved = resolveWritableNoteReference(params);
+    if (!resolved.note) {
+      return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
     }
+    const note = resolved.note;
 
     const allLines = note.content.split('\n');
     const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, allLines.length));
@@ -1861,10 +1868,11 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
         ? buildAttachmentWarningMessage(removedAttachmentReferences.length)
         : undefined;
 
+    const confirmTarget = `${note.filename}:${boundedStartLine}-${boundedEndLine}`;
     if (params.dryRun === true) {
       const token = issueConfirmationToken({
         tool: 'noteplan_delete_lines',
-        target: `${params.filename}:${boundedStartLine}-${boundedEndLine}`,
+        target: confirmTarget,
         action: 'delete_lines',
       });
       return {
@@ -1883,7 +1891,7 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
 
     const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
       tool: 'noteplan_delete_lines',
-      target: `${params.filename}:${boundedStartLine}-${boundedEndLine}`,
+      target: confirmTarget,
       action: 'delete_lines',
     });
     if (!confirmation.ok) {
@@ -1923,10 +1931,11 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
       };
     }
 
-    const note = store.getNote({ filename: params.filename, space: params.space });
-    if (!note) {
-      return { success: false, error: 'Note not found' };
+    const resolved = resolveWritableNoteReference(params);
+    if (!resolved.note) {
+      return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
     }
+    const note = resolved.note;
 
     const lines = note.content.split('\n');
     const originalLineCount = lines.length;
@@ -1991,10 +2000,11 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
 
 export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
   try {
-    const note = store.getNote({ filename: params.filename, space: params.space });
-    if (!note) {
-      return { success: false, error: 'Note not found' };
+    const resolved = resolveWritableNoteReference(params);
+    if (!resolved.note) {
+      return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
     }
+    const note = resolved.note;
 
     const allLines = note.content.split('\n');
     const originalLineCount = allLines.length;
@@ -2037,7 +2047,7 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
       );
     }
 
-    const target = `${params.filename}:${boundedStartLine}-${boundedEndLine}:${replacementLines.length}:${normalized.content.length}`;
+    const target = `${note.filename}:${boundedStartLine}-${boundedEndLine}:${replacementLines.length}:${normalized.content.length}`;
     if (params.dryRun === true) {
       const token = issueConfirmationToken({
         tool: 'noteplan_replace_lines',
