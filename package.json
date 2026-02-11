@@ -1,17 +1,49 @@
 {
   "name": "noteplan-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for NotePlan note and task management",
   "main": "dist/index.js",
   "type": "module",
+  "bin": {
+    "noteplan-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "docs/",
+    "scripts/calendar-helper",
+    "scripts/reminders-helper",
+    "README.md"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "npm run build:swift && tsc",
-    "build:swift": "swiftc -o scripts/calendar-helper scripts/calendar-helper.swift && swiftc -o scripts/reminders-helper scripts/reminders-helper.swift",
+    "build:swift": "swiftc -target arm64-apple-macosx14.0 -o scripts/calendar-helper-arm64 scripts/calendar-helper.swift && swiftc -target x86_64-apple-macosx14.0 -o scripts/calendar-helper-x86_64 scripts/calendar-helper.swift && lipo -create scripts/calendar-helper-arm64 scripts/calendar-helper-x86_64 -output scripts/calendar-helper && rm scripts/calendar-helper-arm64 scripts/calendar-helper-x86_64 && swiftc -target arm64-apple-macosx14.0 -o scripts/reminders-helper-arm64 scripts/reminders-helper.swift && swiftc -target x86_64-apple-macosx14.0 -o scripts/reminders-helper-x86_64 scripts/reminders-helper.swift && lipo -create scripts/reminders-helper-arm64 scripts/reminders-helper-x86_64 -output scripts/reminders-helper && rm scripts/reminders-helper-arm64 scripts/reminders-helper-x86_64",
     "build:ts": "tsc",
     "smoke:workflow": "node scripts/workflow-smoke.mjs",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
   },
+  "keywords": [
+    "mcp",
+    "noteplan",
+    "model-context-protocol",
+    "notes",
+    "tasks",
+    "calendar",
+    "reminders",
+    "ai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NotePlan/noteplan-mcp.git"
+  },
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^11.0.0",

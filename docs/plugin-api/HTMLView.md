@@ -303,7 +303,35 @@ try {
   console.log(error)
 }
 ```
-  
+
 </p>
-</details>  
+</details>
+
+<details>
+<summary>External API Access (fetch)</summary>
+<p>
+
+HTML WebViews include a native `fetch()` backed by URLSession — **no CORS restrictions**.
+Use the standard Fetch API to call external APIs directly:
+
+```javascript
+// fetch() works like the standard browser Fetch API
+const response = await fetch('https://api.example.com/data');
+const data = await response.json();
+
+// Supports all standard options
+const response = await fetch('https://api.example.com/post', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ key: 'value' })
+});
+```
+
+**Rules:**
+- Only **HTTPS** URLs work (HTTP blocked by App Transport Security)
+- Standard Response API: `response.ok`, `response.status`, `response.json()`, `response.text()`
+- 30-second timeout per request
+
+</p>
+</details>
 

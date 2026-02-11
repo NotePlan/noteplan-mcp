@@ -4,7 +4,7 @@ node_modules/
 # Build output
 dist/
 
-# Compiled Swift binaries
+# Compiled Swift binaries (rebuilt by `npm run build:swift`, included in npm package via prepublishOnly)
 scripts/calendar-helper
 scripts/reminders-helper
 

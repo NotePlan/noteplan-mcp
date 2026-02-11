@@ -36,79 +36,41 @@ Once installed, just talk to Claude naturally. Here are some examples:
 
 ## Installation
 
-### 1. Install Node.js
+Requires **Node.js 18+**. Check with `node -v`, or install via [Homebrew](https://brew.sh) (`brew install node`) or [nodejs.org](https://nodejs.org).
 
-The server requires **Node.js 18+** to run. Check if you already have it:
-
-```bash
-node -v
-```
-
-If not installed, the easiest way on macOS is via [Homebrew](https://brew.sh):
+### Claude Code
 
 ```bash
-brew install node
+claude mcp add noteplan -- npx noteplan-mcp
 ```
 
-Or download the installer from [nodejs.org](https://nodejs.org).
+### Claude Desktop
 
-### 2. Download the Server
-
-Download the latest release from the [Releases page](https://github.com/NotePlan/noteplan-mcp/releases) and extract it:
-
-```bash
-cd ~/Downloads
-tar -xzf noteplan-mcp-v*.tar.gz
-```
-
-The release includes everything pre-built — no compilation needed.
-
-### 3. Configure Your AI Client
-
-#### Claude Code
-
-Run this single command in your terminal:
-
-```bash
-claude mcp add noteplan node ~/Downloads/noteplan-mcp/dist/index.js
-```
-
-That's it — no file editing needed. Restart Claude Code and the NotePlan tools will appear.
-
-#### Claude Desktop
-
-1. First, get the full path to the server by running this in Terminal:
-   ```bash
-   echo ~/Downloads/noteplan-mcp/dist/index.js
-   ```
-   Copy the output (e.g. `/Users/yourname/Downloads/noteplan-mcp/dist/index.js`).
-
-2. Open Claude Desktop and go to **Settings > Developer > Edit Config**
-3. Add the `noteplan` server inside `mcpServers`, pasting your full path:
+Open **Settings > Developer > Edit Config** and add:
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
-      "command": "node",
-      "args": ["/Users/yourname/Downloads/noteplan-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["noteplan-mcp"]
     }
   }
 }
 ```
 
-4. Save the file and restart Claude Desktop
+Save and restart Claude Desktop.
 
 ### Optional: Semantic Embeddings
 
-To enable the optional semantic search tools, add embeddings environment variables to the server config above:
+To enable semantic search, add environment variables to the config:
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
-      "command": "node",
-      "args": ["~/Downloads/noteplan-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["noteplan-mcp"],
       "env": {
         "NOTEPLAN_EMBEDDINGS_ENABLED": "true",
         "NOTEPLAN_EMBEDDINGS_PROVIDER": "openai",
@@ -124,6 +86,35 @@ To enable the optional semantic search tools, add embeddings environment variabl
 - `NOTEPLAN_EMBEDDINGS_PROVIDER`: `openai` (default), `mistral`, or `custom`.
 - `NOTEPLAN_EMBEDDINGS_BASE_URL`: for `custom`, assumes OpenAI-compatible `/v1/embeddings`.
 - `NOTEPLAN_EMBEDDINGS_ENABLED`: defaults to `false`; when false, embeddings tools are not listed.
+
+<details>
+<summary><strong>Manual Install from Release</strong> (alternative to npx)</summary>
+
+Download the latest release from the [Releases page](https://github.com/NotePlan/noteplan-mcp/releases) and extract it:
+
+```bash
+cd ~/Downloads
+unzip noteplan-mcp-v*.zip
+```
+
+**Claude Code:**
+```bash
+claude mcp add noteplan node ~/Downloads/noteplan-mcp/dist/index.js
+```
+
+**Claude Desktop** — use `echo ~/Downloads/noteplan-mcp/dist/index.js` to get the full path, then add to Settings > Developer > Edit Config:
+```json
+{
+  "mcpServers": {
+    "noteplan": {
+      "command": "node",
+      "args": ["/Users/yourname/Downloads/noteplan-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+</details>
 
 <details>
 <summary><strong>Build from Source</strong> (for contributors and development)</summary>

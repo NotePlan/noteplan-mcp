@@ -415,6 +415,33 @@ async function showMyHTMLView() {
 - The bridge allows HTML views to execute NotePlan JavaScript Core API calls
 - Responses are handled via callback functions defined in your HTML
 
+### External API Access (fetch)
+
+HTML WebViews include a native `fetch()` implementation backed by URLSession — **no CORS restrictions**. You can call external APIs (weather, stocks, REST endpoints) directly using the standard Fetch API:
+
+```html
+<script>
+  async function loadWeather() {
+    try {
+      const response = await fetch('https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&current_weather=true');
+      if (response.ok) {
+        const data = await response.json();
+        document.getElementById('weather').textContent = JSON.stringify(data.current_weather);
+      } else {
+        console.log('Fetch error: ' + response.status);
+      }
+    } catch(e) {
+      console.log('Fetch error: ' + e.message);
+    }
+  }
+</script>
+```
+
+**Key rules:**
+- `fetch()` works just like the standard browser Fetch API (`response.json()`, `response.text()`, `response.ok`, `response.status`)
+- Only **HTTPS** URLs work (HTTP is blocked by App Transport Security)
+- Requests have a 30-second timeout
+
 ---
 
 ## API Documentation
