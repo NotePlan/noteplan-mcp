@@ -92,7 +92,15 @@ function resolveWritableNoteReference(input: WritableNoteReferenceInput): {
   }
 
   if (input.date && input.date.trim().length > 0) {
-    const note = store.getNote({ date: input.date.trim(), space: input.space?.trim() });
+    let note = store.getNote({ date: input.date.trim(), space: input.space?.trim() });
+    if (!note) {
+      // Auto-create calendar notes on the fly (matches NotePlan native behavior)
+      try {
+        note = store.ensureCalendarNote(input.date.trim(), input.space?.trim());
+      } catch {
+        return { note: null, error: 'Failed to create calendar note for date' };
+      }
+    }
     return { note, error: note ? undefined : 'Note not found' };
   }
 
