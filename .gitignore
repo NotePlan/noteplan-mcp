@@ -21,3 +21,6 @@ scripts/reminders-helper
 # Logs
 *.log
 npm-debug.log*
+
+# Release artifacts
+*.zip
