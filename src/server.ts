@@ -836,13 +836,13 @@ function withMemoryHints(result: unknown, toolName: string): unknown {
 
   try {
     const count = memoryTools.getMemoryCount();
-    const tip =
-      count > 0
-        ? `You have ${count} stored memory/memories. Consider checking noteplan_memory (action: list) before making formatting or style decisions.`
-        : 'No memories stored yet. If the user states a preference or corrects your formatting, save it with noteplan_memory (action: save).';
+    if (count === 0) return result; // Skip hint noise when no memories stored
     return {
       ...typed,
-      memoryHints: { storedMemories: count, tip },
+      memoryHints: {
+        storedMemories: count,
+        tip: `You have ${count} stored memory/memories. Consider checking noteplan_memory (action: list) before making formatting or style decisions.`,
+      },
     };
   } catch {
     return result;

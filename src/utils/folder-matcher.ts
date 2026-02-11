@@ -96,10 +96,20 @@ function scoreFolder(query: string, folder: Folder): number {
   const lastSegmentLower = lastSegment.toLowerCase();
   const normalizedLastSegment = normalizeForMatching(lastSegment);
 
+  // Also check the full path (with and without Notes/ prefix)
+  const pathLower = folder.path.toLowerCase();
+  const pathNormalized = pathLower.replace(/^notes\//, '');
+  const queryNormalized = queryLower.replace(/^notes\//, '');
+
   let baseScore = 0;
 
+  // Exact match on full path (case-insensitive, with or without Notes/ prefix)
+  if (pathLower === queryLower || pathNormalized === queryNormalized
+    || pathLower === queryNormalized || pathNormalized === queryLower) {
+    baseScore = 1.0;
+  }
   // Exact match on full name (case-insensitive)
-  if (nameLower === queryLower || lastSegmentLower === queryLower) {
+  else if (nameLower === queryLower || lastSegmentLower === queryLower) {
     baseScore = 1.0;
   }
   // Exact match on normalized name
@@ -146,6 +156,29 @@ export function matchFolder(query: string, folders: Folder[]): FolderMatchResult
       alternatives: [],
       ambiguous: false,
     };
+  }
+
+  // When the query looks like a path (contains "/"), try exact path match first.
+  // This avoids fuzzy ambiguity when the caller already knows the full path.
+  if (query.includes('/')) {
+    const queryLower = query.toLowerCase();
+    // Strip optional "Notes/" prefix for comparison
+    const queryNormalized = queryLower.replace(/^notes\//, '');
+    const exactMatch = folders.find((f) => {
+      const pathLower = f.path.toLowerCase();
+      const pathNormalized = pathLower.replace(/^notes\//, '');
+      return pathLower === queryLower || pathNormalized === queryNormalized
+        || pathLower === queryNormalized || pathNormalized === queryLower;
+    });
+    if (exactMatch) {
+      return {
+        matched: true,
+        folder: exactMatch,
+        score: 1.0,
+        alternatives: [],
+        ambiguous: false,
+      };
+    }
   }
 
   // Short queries (1-2 chars) need higher threshold
