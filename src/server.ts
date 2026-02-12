@@ -880,8 +880,8 @@ function withDuration(result: unknown, durationMs: number, includeTiming: boolea
 export function createServer(): Server {
   const server = new Server(
     {
-      name: 'noteplan-mcp',
-      version: '1.0.0',
+      name: 'NotePlan',
+      version: '1.1.1',
     },
     {
       capabilities: {

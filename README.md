@@ -38,29 +38,22 @@ Once installed, just talk to Claude naturally. Here are some examples:
 
 Requires **Node.js 18+**. Check with `node -v`, or install via [Homebrew](https://brew.sh) (`brew install node`) or [nodejs.org](https://nodejs.org).
 
-Download the latest release from the [Releases page](https://github.com/NotePlan/noteplan-mcp/releases) and extract it:
-
-```bash
-cd ~/Downloads
-unzip noteplan-mcp-v*.zip
-```
-
 ### Claude Code
 
 ```bash
-claude mcp add noteplan node ~/Downloads/noteplan-mcp/dist/index.js
+claude mcp add noteplan -- npx -y @noteplanco/noteplan-mcp
 ```
 
 ### Claude Desktop
 
-Use `echo ~/Downloads/noteplan-mcp/dist/index.js` to get the full path, then open **Settings > Developer > Edit Config** and add:
+Open **Settings > Developer > Edit Config** and add:
 
 ```json
 {
   "mcpServers": {
     "noteplan": {
-      "command": "node",
-      "args": ["/Users/yourname/Downloads/noteplan-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@noteplanco/noteplan-mcp"]
     }
   }
 }
@@ -76,8 +69,8 @@ To enable semantic search, add environment variables to the config:
 {
   "mcpServers": {
     "noteplan": {
-      "command": "node",
-      "args": ["/Users/yourname/Downloads/noteplan-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@noteplanco/noteplan-mcp"],
       "env": {
         "NOTEPLAN_EMBEDDINGS_ENABLED": "true",
         "NOTEPLAN_EMBEDDINGS_PROVIDER": "openai",
