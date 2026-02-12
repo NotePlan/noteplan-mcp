@@ -335,10 +335,13 @@ export function addTask(
     }
     lines.splice(insertIndex, 0, taskLine);
   } else if (position === 'after-heading' && heading) {
-    // Find the heading and insert after it
-    const headingIndex = lines.findIndex(
-      (line) => line.match(new RegExp(`^#{1,6}\\s*${escapeRegex(heading)}\\s*$`, 'i'))
-    );
+    // Find the heading and insert after it (matches ATX headings and bold section markers)
+    const headingIndex = lines.findIndex((line) => {
+      if (line.match(new RegExp(`^#{1,6}\\s*${escapeRegex(heading)}\\s*$`, 'i'))) return true;
+      const boldMatch = line.match(/^\s*\*\*(.+?)\*\*:?\s*$/);
+      if (boldMatch && boldMatch[1].trim().toLowerCase() === heading.toLowerCase()) return true;
+      return false;
+    });
     if (headingIndex !== -1) {
       lines.splice(headingIndex + 1, 0, taskLine);
     } else {

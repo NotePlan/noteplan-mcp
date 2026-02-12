@@ -13,7 +13,7 @@ export interface ParsedNote {
  * Options for inserting content
  */
 export interface InsertOptions {
-  position: 'start' | 'end' | 'after-heading' | 'at-line';
+  position: 'start' | 'end' | 'after-heading' | 'at-line' | 'in-section';
   heading?: string;
   line?: number;
 }
@@ -176,14 +176,14 @@ export function insertContentAtPosition(
       }
       const targetHeading = normalizeHeadingForMatch(heading);
       const headingIndex = lines.findIndex((lineValue) => {
-        const lineHeading = extractAtxHeadingText(lineValue);
+        const lineHeading = extractSectionBoundaryText(lineValue);
         if (!lineHeading) return false;
         return normalizeHeadingForMatch(lineHeading) === targetHeading;
       });
 
       if (headingIndex === -1) {
         const availableHeadings = lines
-          .map((lineValue) => extractAtxHeadingText(lineValue))
+          .map((lineValue) => extractSectionBoundaryText(lineValue))
           .filter((value): value is string => Boolean(value))
           .slice(0, 15);
         if (availableHeadings.length > 0) {
@@ -209,7 +209,57 @@ export function insertContentAtPosition(
       while (lines.length < line) {
         lines.push('');
       }
-      lines.splice(line, 0, ...newLines);
+      // When inserting at a blank line, consume it to avoid double gaps
+      if (line < lines.length && lines[line].trim() === '') {
+        lines.splice(line, 1, ...newLines);
+      } else {
+        lines.splice(line, 0, ...newLines);
+      }
+      break;
+    }
+
+    case 'in-section': {
+      if (!heading) {
+        throw new Error('Heading is required for in-section position');
+      }
+      const targetSectionHeading = normalizeHeadingForMatch(heading);
+      const sectionHeadingIndex = lines.findIndex((lineValue) => {
+        const lineHeading = extractSectionBoundaryText(lineValue);
+        if (!lineHeading) return false;
+        return normalizeHeadingForMatch(lineHeading) === targetSectionHeading;
+      });
+
+      if (sectionHeadingIndex === -1) {
+        const availableSectionHeadings = lines
+          .map((lineValue) => extractSectionBoundaryText(lineValue))
+          .filter((value): value is string => Boolean(value))
+          .slice(0, 15);
+        if (availableSectionHeadings.length > 0) {
+          throw new Error(
+            `Heading "${heading}" not found. Available headings include: ${availableSectionHeadings.join(
+              ' | '
+            )}`
+          );
+        }
+        throw new Error(`Heading "${heading}" not found`);
+      }
+
+      // Find end of section: next heading/section marker or end of file
+      let sectionEndIndex = lines.length;
+      for (let i = sectionHeadingIndex + 1; i < lines.length; i++) {
+        if (isSectionBoundary(lines[i])) {
+          sectionEndIndex = i;
+          break;
+        }
+      }
+
+      // Walk backward from section end to skip trailing blank lines
+      let insertIndex = sectionEndIndex;
+      while (insertIndex > sectionHeadingIndex + 1 && lines[insertIndex - 1].trim() === '') {
+        insertIndex--;
+      }
+
+      lines.splice(insertIndex, 0, ...newLines);
       break;
     }
 
@@ -252,10 +302,25 @@ function extractAtxHeadingText(line: string): string | null {
   return text;
 }
 
+function extractBoldSectionMarker(line: string): string | null {
+  const match = line.match(/^\s*\*\*(.+?)\*\*:?\s*$/);
+  if (!match) return null;
+  return match[1].trim() || null;
+}
+
+function extractSectionBoundaryText(line: string): string | null {
+  return extractAtxHeadingText(line) ?? extractBoldSectionMarker(line);
+}
+
+function isSectionBoundary(line: string): boolean {
+  return extractSectionBoundaryText(line) !== null;
+}
+
 function normalizeHeadingForMatch(value: string): string {
   let normalized = value.trim();
   normalized = normalized.replace(/^\s{0,3}#{1,6}\s*/, '');
   normalized = normalized.replace(/\s+#+\s*$/, '');
+  normalized = normalized.replace(/^\*\*(.+?)\*\*:?\s*$/, '$1');
   normalized = normalized.replace(/\s+/g, ' ').trim();
   return normalized.toLowerCase();
 }

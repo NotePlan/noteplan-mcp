@@ -8,7 +8,9 @@ import {
   updateTaskStatus,
   updateTaskContent,
   addTask,
+  buildParagraphLine,
 } from '../noteplan/markdown-parser.js';
+import { insertContentAtPosition } from '../noteplan/frontmatter-parser.js';
 import { TaskStatus, NoteType } from '../noteplan/types.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
@@ -207,14 +209,14 @@ export const addTaskSchema = z.object({
     .describe('Target: a date (today, tomorrow, yesterday, YYYY-MM-DD, YYYYMMDD) for daily notes (creates note if needed), or a filename for project notes'),
   content: z.string().describe('Task content (without the checkbox marker)'),
   position: z
-    .enum(['start', 'end', 'after-heading'])
+    .enum(['start', 'end', 'after-heading', 'in-section'])
     .optional()
     .default('end')
     .describe('Where to add the task'),
   heading: z
     .string()
     .optional()
-    .describe('Heading to add task under (when position is after-heading)'),
+    .describe('Heading or section marker text to add task under (when position is after-heading or in-section; matches both ## headings and **bold:** section markers)'),
   space: z.string().optional().describe('Space name or ID when targeting daily notes'),
   status: z
     .enum(['open', 'done', 'cancelled', 'scheduled'])
@@ -598,20 +600,34 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
       };
     }
 
-    const taskOptions = (params.status !== undefined || params.priority !== undefined || params.indentLevel !== undefined)
-      ? {
-          status: params.status as TaskStatus | undefined,
-          priority: params.priority,
-          indentLevel: params.indentLevel,
-        }
-      : undefined;
-    const newContent = addTask(
-      note.content,
-      params.content,
-      params.position as 'start' | 'end' | 'after-heading',
-      params.heading,
-      taskOptions
-    );
+    let newContent: string;
+    if (params.position === 'in-section') {
+      // in-section is handled by frontmatter-parser's insertContentAtPosition
+      const taskLine = buildParagraphLine(params.content, 'task', {
+        taskStatus: (params.status as TaskStatus) ?? 'open',
+        priority: params.priority,
+        indentLevel: params.indentLevel,
+      });
+      newContent = insertContentAtPosition(note.content, taskLine, {
+        position: 'in-section',
+        heading: params.heading,
+      });
+    } else {
+      const taskOptions = (params.status !== undefined || params.priority !== undefined || params.indentLevel !== undefined)
+        ? {
+            status: params.status as TaskStatus | undefined,
+            priority: params.priority,
+            indentLevel: params.indentLevel,
+          }
+        : undefined;
+      newContent = addTask(
+        note.content,
+        params.content,
+        params.position as 'start' | 'end' | 'after-heading',
+        params.heading,
+        taskOptions
+      );
+    }
 
     const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
     store.updateNote(writeIdentifier, newContent, {

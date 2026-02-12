@@ -1553,12 +1553,12 @@ export const insertContentSchema = z.object({
   space: z.string().optional().describe('Space name or ID scope for title/date/query resolution'),
   content: z.string().describe('Content to insert'),
   position: z
-    .enum(['start', 'end', 'after-heading', 'at-line'])
-    .describe('Where to insert: start (after frontmatter), end, after-heading, or at-line'),
+    .enum(['start', 'end', 'after-heading', 'at-line', 'in-section'])
+    .describe('Where to insert: start (after frontmatter), end, after-heading (right after heading/marker line), in-section (at end of section, before next heading/marker), or at-line'),
   heading: z
     .string()
     .optional()
-    .describe('Heading text (required for after-heading; pass with or without leading # marks)'),
+    .describe('Heading or section marker text (required for after-heading and in-section; matches both ## headings and **bold:** section markers)'),
   line: z.number().optional().describe('Line number (1-indexed, required for at-line position)'),
   indentationStyle: z
     .enum(['tabs', 'preserve'])

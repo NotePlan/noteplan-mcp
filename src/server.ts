@@ -1131,7 +1131,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_edit_content',
           description:
-            'Edit note content: insert, append, delete lines, edit a line, or replace a range of lines.\n\nActions:\n- insert: Insert at position (start/end/after-heading/at-line)\n- append: Append to end (shorthand for insert at end). Use date="today" to append to today\'s daily note (replaces noteplan_add_to_today).\n- delete_lines: Delete line range (requires startLine, endLine + dryRun/confirmationToken)\n- edit_line: Edit one line (requires line + content)\n- replace_lines: Replace line range (requires startLine, endLine, content + dryRun/confirmationToken)\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet — no need to create them first. Always use tab characters for indentation.\n\nNotePlan syntax: Tasks use "- [ ] text" (open), "- [x]" (done), "- [-]" (cancelled), "- [>]" (scheduled). The task marker (*/- with or without checkbox) follows user settings — prefer noteplan_paragraphs(action=add) for auto-formatted tasks. Schedule tasks to dates with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id) — only the NotePlan app creates these.\n\nUse scheduleDate to auto-append >YYYY-MM-DD scheduling to content.',
+            'Edit note content: insert, append, delete lines, edit a line, or replace a range of lines.\n\nActions:\n- insert: Insert at position (start/end/after-heading/in-section/at-line)\n- append: Append to end (shorthand for insert at end). Use date="today" to append to today\'s daily note (replaces noteplan_add_to_today).\n- delete_lines: Delete line range (requires startLine, endLine + dryRun/confirmationToken)\n- edit_line: Edit one line (requires line + content)\n- replace_lines: Replace line range (requires startLine, endLine, content + dryRun/confirmationToken)\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet — no need to create them first. Always use tab characters for indentation.\n\nNotePlan syntax: Tasks use "- [ ] text" (open), "- [x]" (done), "- [-]" (cancelled), "- [>]" (scheduled). The task marker (*/- with or without checkbox) follows user settings — prefer noteplan_paragraphs(action=add) for auto-formatted tasks. Schedule tasks to dates with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id) — only the NotePlan app creates these.\n\nUse scheduleDate to auto-append >YYYY-MM-DD scheduling to content.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1170,12 +1170,12 @@ export function createServer(): Server {
               },
               position: {
                 type: 'string',
-                enum: ['start', 'end', 'after-heading', 'at-line'],
-                description: 'Insertion position — used by insert',
+                enum: ['start', 'end', 'after-heading', 'at-line', 'in-section'],
+                description: 'Where to insert: start (after frontmatter), end, after-heading (right after heading/marker line), in-section (at end of section, before next heading/marker), or at-line — used by insert',
               },
               heading: {
                 type: 'string',
-                description: 'Heading text for after-heading position — used by insert',
+                description: 'Heading or section marker text (required for after-heading and in-section; matches both ## headings and **bold:** section markers) — used by insert',
               },
               line: {
                 type: 'number',
@@ -1312,12 +1312,12 @@ export function createServer(): Server {
               },
               position: {
                 type: 'string',
-                enum: ['start', 'end', 'after-heading'],
+                enum: ['start', 'end', 'after-heading', 'in-section'],
                 description: 'Where to add task (default: end) — used by add',
               },
               heading: {
                 type: 'string',
-                description: 'Heading for after-heading position — used by add',
+                description: 'Heading or section marker text (matches both ## headings and **bold:** section markers) — used by add',
               },
               lineIndex: {
                 type: 'number',
