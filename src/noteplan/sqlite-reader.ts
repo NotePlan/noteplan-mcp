@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { Note, Space, Folder, SQLiteNoteRow, SQLITE_NOTE_TYPES } from './types.js';
-import { extractTitle } from './markdown-parser.js';
+import { extractTitle, extractTagsFromContent } from './markdown-parser.js';
 
 // Possible NotePlan storage paths (same as file-reader.ts)
 const POSSIBLE_PATHS = [
@@ -636,9 +636,8 @@ export function extractSpaceTags(spaceId?: string): string[] {
   const tags = new Set<string>();
 
   for (const note of notes) {
-    const matches = note.content.match(/#[\w-/]+/g);
-    if (matches) {
-      matches.forEach((tag) => tags.add(tag));
+    for (const tag of extractTagsFromContent(note.content)) {
+      tags.add(tag);
     }
   }
 

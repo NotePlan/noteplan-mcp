@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Note, NoteType, Folder } from './types.js';
-import { extractTitle } from './markdown-parser.js';
+import { extractTitle, extractTagsFromContent } from './markdown-parser.js';
 import { extractDateFromFilename } from '../utils/date-utils.js';
 
 // Possible NotePlan storage paths (in order of preference)
@@ -519,9 +519,8 @@ export function extractAllTags(): string[] {
   const notes = [...listProjectNotes(), ...listCalendarNotes()];
 
   for (const note of notes) {
-    const matches = note.content.match(/#[\w-/]+/g);
-    if (matches) {
-      matches.forEach((tag) => tags.add(tag));
+    for (const tag of extractTagsFromContent(note.content)) {
+      tags.add(tag);
     }
   }
 

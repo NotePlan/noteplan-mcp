@@ -80,20 +80,127 @@ export function parseTaskLine(line: string, lineIndex: number): Task | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Tag / mention extraction — aligned with Swift DataStore.parseTags behaviour
+// ---------------------------------------------------------------------------
+
 /**
- * Extract hashtags from content
+ * Strip code fences (``` … ```) from full note content so that tags
+ * inside fenced code blocks are not extracted.
  */
-export function extractTags(content: string): string[] {
-  const matches = content.match(/#[\w-/]+/g);
-  return matches || [];
+function stripCodeFences(content: string): string {
+  return content.replace(/```[\s\S]*?```/g, '');
 }
 
 /**
- * Extract @mentions from content
+ * Strip inline regions that must be ignored during tag extraction:
+ *  - Inline code (`…`)
+ *  - Markdown link URLs  [text](url) → keeps the link text
+ */
+function stripInlineExclusions(text: string): string {
+  let result = text.replace(/`[^`\n]+`/g, '');
+  result = result.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  return result;
+}
+
+/**
+ * Remove parenthesised attributes from a tag.
+ * e.g. #tag(value) → #tag,  @repeat(1/1/2025) → @repeat
+ */
+function cleanTagAttributes(tag: string): string {
+  const idx = tag.indexOf('(');
+  return idx > 0 ? tag.substring(0, idx) : tag;
+}
+
+/**
+ * Expand hierarchical (nested) tags into every intermediate level.
+ * Matches Swift DataStore.parseTags which produces:
+ *   #parent/child/grandchild → [#parent, #parent/child, #parent/child/grandchild]
+ */
+function expandHierarchicalTags(tags: string[]): string[] {
+  const expanded = new Set<string>();
+  for (const tag of tags) {
+    const prefix = tag.charAt(0); // # or @
+    const parts = tag.substring(1).split('/');
+    let current = prefix;
+    for (let i = 0; i < parts.length; i++) {
+      current += (i > 0 ? '/' : '') + parts[i];
+      expanded.add(current);
+    }
+  }
+  return Array.from(expanded);
+}
+
+/** Special @-tags excluded from global tag listings (mirrors Swift NoteCache). */
+const EXCLUDED_AT_TAGS = ['@done', '@repeat', '@final-repeat'];
+
+function isExcludedTag(tag: string): boolean {
+  const lower = tag.toLowerCase();
+  // Note: attributes are already stripped by cleanTagAttributes before this is called,
+  // so we only need exact match and hierarchy-child match.
+  return EXCLUDED_AT_TAGS.some((ex) => lower === ex || lower.startsWith(ex + '/'));
+}
+
+// Core regex — mirrors Swift DataStore.tag:
+//  Boundary:          start-of-line | whitespace | one of ' ( [ { * _
+//  Negative lookahead: reject purely-numeric / purely-punctuation tags (#123, #---)
+//  Tag body:          Unicode letters, digits, symbols (incl. emoji) via [^\p{P}\s`],
+//                     plus explicitly allowed punctuation: - _ /
+//  Optional attribute: (...) at the end
+const TAG_PATTERN =
+  /(^|[\s'(\[{*_])(?![@#][\d\p{P}]+(?:\s|$))([@#](?:[^\p{P}\s`]|[-_/])+(?:\([^)]*\))?)/gmu;
+
+/**
+ * Low-level: extract raw tag strings (# and @) from a text fragment.
+ * Handles inline-code and markdown-link exclusion but NOT code fences
+ * (the caller must strip those when processing full note content).
+ */
+function extractRawTags(text: string): string[] {
+  const cleaned = stripInlineExclusions(text);
+  const tags: string[] = [];
+  TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TAG_PATTERN.exec(cleaned)) !== null) {
+    // Trim trailing separators to avoid ghost hierarchy levels from typos like #tag/
+    const tag = match[2].replace(/\/+$/, '');
+    if (tag.length > 1) tags.push(tag); // must have at least one body char after # or @
+  }
+  return tags;
+}
+
+/**
+ * Extract hashtags from a single line / content fragment.
+ * Attributes are stripped, hierarchies are expanded.
+ */
+export function extractTags(content: string): string[] {
+  const raw = extractRawTags(content)
+    .filter((t) => t.startsWith('#'))
+    .map(cleanTagAttributes);
+  return expandHierarchicalTags(raw);
+}
+
+/**
+ * Extract @mentions from a single line / content fragment.
+ * Attributes are stripped, hierarchies are expanded.
  */
 export function extractMentions(content: string): string[] {
-  const matches = content.match(/@[\w-]+/g);
-  return matches || [];
+  const raw = extractRawTags(content)
+    .filter((t) => t.startsWith('@'))
+    .map(cleanTagAttributes);
+  return expandHierarchicalTags(raw);
+}
+
+/**
+ * Extract all unique tags (both # and @) from full note content.
+ * Handles code fences, inline code, markdown links, boundary checks,
+ * Unicode / emoji support, hierarchy expansion, and special-tag filtering.
+ * Used by file-reader and sqlite-reader for global tag listing.
+ */
+export function extractTagsFromContent(content: string): string[] {
+  const withoutFences = stripCodeFences(content);
+  const raw = extractRawTags(withoutFences).map(cleanTagAttributes);
+  const expanded = expandHierarchicalTags(raw);
+  return expanded.filter((tag) => !isExcludedTag(tag));
 }
 
 /**
