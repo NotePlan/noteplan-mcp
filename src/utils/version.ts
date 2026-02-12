@@ -98,3 +98,17 @@ export function isAdvancedFeaturesAvailable(forceRefresh = false): boolean {
 export function upgradeMessage(feature: string): string {
   return `"${feature}" requires a newer version of NotePlan (build ${MIN_BUILD_ADVANCED_FEATURES}+). Please update NotePlan to use this feature.`;
 }
+
+let cachedMcpVersion: string | null = null;
+
+export function getMcpServerVersion(): string {
+  if (cachedMcpVersion) return cachedMcpVersion;
+  try {
+    const pkgPath = new URL('../../package.json', import.meta.url);
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    cachedMcpVersion = pkg.version ?? 'unknown';
+  } catch {
+    cachedMcpVersion = 'unknown';
+  }
+  return cachedMcpVersion!;
+}

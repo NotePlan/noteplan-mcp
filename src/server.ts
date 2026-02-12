@@ -27,7 +27,7 @@ import * as uiTools from './tools/ui.js';
 import * as pluginTools from './tools/plugins.js';
 import * as themeTools from './tools/themes.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
-import { upgradeMessage, getNotePlanVersion, MIN_BUILD_ADVANCED_FEATURES } from './utils/version.js';
+import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES } from './utils/version.js';
 
 type ToolDefinition = {
   name: string;
@@ -262,6 +262,18 @@ function dispatchGetNotes(args: Record<string, unknown>): unknown {
     // range params
     maxDays,
   } = args as any;
+
+  // 0. version info
+  if ((args as any).version) {
+    const npVersion = getNotePlanVersion(true);
+    return {
+      success: true,
+      mcpServerVersion: getMcpServerVersion(),
+      notePlanVersion: npVersion.version,
+      notePlanBuild: npVersion.build,
+      notePlanSource: npVersion.source,
+    };
+  }
 
   // 1. resolve mode
   if (resolve) {
@@ -881,7 +893,7 @@ export function createServer(): Server {
   const server = new Server(
     {
       name: 'NotePlan',
-      version: '1.1.1',
+      version: '1.1.2',
     },
     {
       capabilities: {
@@ -900,7 +912,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_get_notes',
           description:
-            'Unified note retrieval: get a single note, list notes, resolve references, fetch today/calendar/periodic notes, date ranges, or folder contents.\n\nRouting:\n- resolve=true + resolveQuery → resolve a note reference to canonical target\n- id/title/filename → get single note (metadata + optional content)\n- period + count → recent periodic notes (e.g., last 6 weekly notes)\n- period (no count) → single periodic note (week/month/quarter/year)\n- rangePeriod or startDate+endDate → daily notes in date range\n- folder (no id/title/filename/date) → notes in folder\n- date → calendar note for that date (use "today" for today\'s note)\n- fallback (no params) → list notes with optional filters',
+            'Unified note retrieval: get a single note, list notes, resolve references, fetch today/calendar/periodic notes, date ranges, or folder contents.\n\nRouting:\n- version=true → MCP server version + NotePlan app version\n- resolve=true + resolveQuery → resolve a note reference to canonical target\n- id/title/filename → get single note (metadata + optional content)\n- period + count → recent periodic notes (e.g., last 6 weekly notes)\n- period (no count) → single periodic note (week/month/quarter/year)\n- rangePeriod or startDate+endDate → daily notes in date range\n- folder (no id/title/filename/date) → notes in folder\n- date → calendar note for that date (use "today" for today\'s note)\n- fallback (no params) → list notes with optional filters',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1040,6 +1052,11 @@ export function createServer(): Server {
               cursor: {
                 type: 'string',
                 description: 'Cursor token from previous page (preferred over offset)',
+              },
+              // Version info
+              version: {
+                type: 'boolean',
+                description: 'Set to true to get MCP server version and NotePlan app version',
               },
             },
           },
