@@ -27,6 +27,7 @@ import * as uiTools from './tools/ui.js';
 import * as pluginTools from './tools/plugins.js';
 import * as themeTools from './tools/themes.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
+import { upgradeMessage, getNotePlanVersion, MIN_BUILD_ADVANCED_FEATURES } from './utils/version.js';
 
 type ToolDefinition = {
   name: string;
@@ -574,13 +575,14 @@ type ToolErrorMeta = {
   retryable?: boolean;
 };
 
-function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMeta {
+function inferToolErrorMeta(toolName: string, errorMessage: string, registeredToolNames?: string[]): ToolErrorMeta {
   const message = errorMessage.toLowerCase();
 
   if (message.includes('unknown tool')) {
+    const toolList = registeredToolNames?.join(', ') ?? 'noteplan_get_notes, noteplan_search, noteplan_manage_note, noteplan_edit_content, noteplan_paragraphs, noteplan_folders, noteplan_filters, noteplan_eventkit, noteplan_memory';
     return {
       code: 'ERR_UNKNOWN_TOOL',
-      hint: 'Check tool name spelling. Available tools: noteplan_get_notes, noteplan_search, noteplan_manage_note, noteplan_edit_content, noteplan_paragraphs, noteplan_folders, noteplan_filters, noteplan_eventkit, noteplan_memory, noteplan_ui, noteplan_plugins, noteplan_themes.',
+      hint: `Check tool name spelling. Available tools: ${toolList}.`,
     };
   }
 
@@ -588,6 +590,13 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
     return {
       code: 'ERR_QUERY_REQUIRED',
       hint: 'Provide a non-empty query string to run this operation.',
+    };
+  }
+
+  if (message.includes('requires a newer version of noteplan')) {
+    return {
+      code: 'ERR_VERSION_GATE',
+      hint: 'Update NotePlan to the latest version, then retry.',
     };
   }
 
@@ -751,13 +760,13 @@ function inferToolErrorMeta(toolName: string, errorMessage: string): ToolErrorMe
   };
 }
 
-function enrichErrorResult(result: unknown, toolName: string): unknown {
+function enrichErrorResult(result: unknown, toolName: string, registeredToolNames?: string[]): unknown {
   if (!result || typeof result !== 'object') return result;
   const typed = result as Record<string, unknown>;
   if (typed.success !== false) return result;
   if (typeof typed.error !== 'string') return result;
 
-  const meta = inferToolErrorMeta(toolName, typed.error);
+  const meta = inferToolErrorMeta(toolName, typed.error, registeredToolNames);
   return {
     ...typed,
     code: typeof typed.code === 'string' ? typed.code : meta.code,
@@ -767,7 +776,7 @@ function enrichErrorResult(result: unknown, toolName: string): unknown {
   };
 }
 
-function withSuggestedNextTools(result: unknown, toolName: string): unknown {
+function withSuggestedNextTools(result: unknown, toolName: string, availableToolNames?: Set<string>): unknown {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
   const typed = result as Record<string, unknown>;
   if (typed.success !== true) return result;
@@ -815,10 +824,13 @@ function withSuggestedNextTools(result: unknown, toolName: string): unknown {
       suggestedNextTools = [];
   }
 
-  if (suggestedNextTools.length === 0) return result;
+  const filtered = availableToolNames
+    ? suggestedNextTools.filter((t) => availableToolNames.has(t))
+    : suggestedNextTools;
+  if (filtered.length === 0) return result;
   return {
     ...typed,
-    suggestedNextTools: suggestedNextTools.slice(0, 3),
+    suggestedNextTools: filtered.slice(0, 3),
   };
 }
 
@@ -879,6 +891,9 @@ export function createServer(): Server {
     }
   );
   const embeddingsToolsEnabled = embeddingsTools.areEmbeddingsToolsEnabled();
+  const versionInfo = getNotePlanVersion();
+  const advancedFeaturesEnabled = versionInfo.build >= MIN_BUILD_ADVANCED_FEATURES;
+  console.error(`[noteplan-mcp] Detected NotePlan ${versionInfo.version} (build ${versionInfo.build}, source: ${versionInfo.source}). Advanced features: ${advancedFeaturesEnabled ? 'enabled' : 'disabled'}.`);
 
   const toolDefinitions: ToolDefinition[] = [
         // ── Consolidated tools (16 — action/param-based dispatch) ──
@@ -1711,199 +1726,6 @@ export function createServer(): Server {
           },
         },
         {
-          name: 'noteplan_ui',
-          description:
-            'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows'],
-                description: 'Action to perform',
-              },
-              title: {
-                type: 'string',
-                description: 'Note title — used by open_note; window title — used by close_plugin_window',
-              },
-              filename: {
-                type: 'string',
-                description: 'Filename — used by open_note',
-              },
-              inNewWindow: {
-                type: 'boolean',
-                description: 'Open in new window — used by open_note',
-              },
-              inSplitView: {
-                type: 'boolean',
-                description: 'Open in split view — used by open_note',
-              },
-              query: {
-                type: 'string',
-                description: 'Search text — used by search',
-              },
-              pluginId: {
-                type: 'string',
-                description: 'Plugin ID — used by run_plugin',
-              },
-              command: {
-                type: 'string',
-                description: 'Command name — used by run_plugin',
-              },
-              arguments: {
-                type: 'string',
-                description: 'JSON arguments string — used by run_plugin',
-              },
-              name: {
-                type: 'string',
-                description: 'View name — used by open_view',
-              },
-              windowID: {
-                type: 'string',
-                description: 'Window ID — used by close_plugin_window',
-              },
-            },
-            required: ['action'],
-          },
-        },
-        {
-          name: 'noteplan_plugins',
-          description:
-            'Plugin management: list, create, delete, install, read source/log, update HTML, screenshot.\n\nActions:\n- list: List installed plugins\n- list_available: List plugins from online repository\n- create: Create plugin with HTML view (requires pluginId, pluginName, commandName, html)\n- delete: Delete plugin (requires pluginId + confirmationToken)\n- install: Install from repository (requires pluginId)\n- log: Read plugin console log (requires pluginId)\n- source: Read plugin source (requires pluginId)\n- update_html: Apply find/replace patches (requires pluginId + patches)\n- screenshot: Capture plugin WebView screenshot (requires pluginId)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['list', 'list_available', 'create', 'delete', 'install', 'log', 'source', 'update_html', 'screenshot'],
-                description: 'Action to perform',
-              },
-              pluginId: {
-                type: 'string',
-                description: 'Plugin ID — used by create, delete, install, log, source, update_html, screenshot',
-              },
-              pluginName: {
-                type: 'string',
-                description: 'Display name — used by create',
-              },
-              commandName: {
-                type: 'string',
-                description: 'Command name — used by create',
-              },
-              html: {
-                type: 'string',
-                description: 'HTML content — used by create',
-              },
-              icon: {
-                type: 'string',
-                description: 'Font Awesome icon name — used by create',
-              },
-              iconColor: {
-                type: 'string',
-                description: 'Tailwind color — used by create',
-              },
-              displayMode: {
-                type: 'string',
-                enum: ['main', 'split', 'window'],
-                description: 'Display mode (default: main) — used by create',
-              },
-              autoLaunch: {
-                type: 'boolean',
-                description: 'Auto-reload and run — used by create, update_html',
-              },
-              patches: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    find: { type: 'string' },
-                    replace: { type: 'string' },
-                  },
-                  required: ['find', 'replace'],
-                },
-                description: 'Find/replace patches — used by update_html',
-              },
-              query: {
-                type: 'string',
-                description: 'Filter/search — used by list, list_available, source',
-              },
-              includeBeta: {
-                type: 'boolean',
-                description: 'Include beta plugins — used by list_available',
-              },
-              tail: {
-                type: 'integer',
-                description: 'Return last N lines — used by log',
-              },
-              clear: {
-                type: 'boolean',
-                description: 'Clear log after reading — used by log',
-              },
-              startLine: {
-                type: 'integer',
-                description: 'Start line (1-based) — used by source',
-              },
-              endLine: {
-                type: 'integer',
-                description: 'End line (1-based) — used by source',
-              },
-              contextLines: {
-                type: 'integer',
-                description: 'Context lines around matches — used by source',
-              },
-              confirmationToken: {
-                type: 'string',
-                description: 'Token for confirmation — used by delete',
-              },
-            },
-            required: ['action'],
-          },
-        },
-        {
-          name: 'noteplan_themes',
-          description:
-            'Theme management: list, get, save, set active.\n\nActions:\n- list: List all themes and active theme names\n- get: Read a custom theme JSON (requires filename)\n- save: Create/update a custom theme (requires filename + theme)\n- set_active: Activate a theme (requires name)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['list', 'get', 'save', 'set_active'],
-                description: 'Action to perform',
-              },
-              filename: {
-                type: 'string',
-                description: 'Theme filename — used by get, save',
-              },
-              name: {
-                type: 'string',
-                description: 'Theme name — used by set_active',
-              },
-              theme: {
-                type: 'object',
-                description: 'Theme object — used by save',
-                properties: {
-                  name: { type: 'string' },
-                  style: { type: 'string', enum: ['Light', 'Dark'] },
-                  author: { type: 'object', properties: { name: { type: 'string' }, email: { type: 'string' } } },
-                  editor: { type: 'object' },
-                  styles: { type: 'object' },
-                },
-              },
-              setActive: {
-                type: 'boolean',
-                description: 'Apply theme immediately — used by save (default: true)',
-              },
-              mode: {
-                type: 'string',
-                enum: ['light', 'dark', 'auto'],
-                description: 'Mode to apply for — used by save, set_active',
-              },
-            },
-            required: ['action'],
-          },
-        },
-        {
           name: 'noteplan_search',
           description:
             'Search across notes or list tags.\n\nActions:\n- search (default): Full-text or metadata search across notes. Use searchField, queryMode, propertyFilters, etc.\n- list_tags: List all tags/hashtags with optional filtering.\n\nSearch: discover notes by content/keywords/phrases and optional frontmatter property filters (e.g. {"category":"marketing"}). Use queryMode=smart/any/all for multi-word token matching, and query="*" for browse mode. Folder filters accept canonical paths from noteplan_folders (action: list/resolve), with or without "Notes/" prefix.',
@@ -2087,6 +1909,204 @@ export function createServer(): Server {
     );
   }
 
+  if (advancedFeaturesEnabled) {
+    toolDefinitions.push(
+      {
+        name: 'noteplan_ui',
+        description:
+          'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows'],
+              description: 'Action to perform',
+            },
+            title: {
+              type: 'string',
+              description: 'Note title — used by open_note; window title — used by close_plugin_window',
+            },
+            filename: {
+              type: 'string',
+              description: 'Filename — used by open_note',
+            },
+            inNewWindow: {
+              type: 'boolean',
+              description: 'Open in new window — used by open_note',
+            },
+            inSplitView: {
+              type: 'boolean',
+              description: 'Open in split view — used by open_note',
+            },
+            query: {
+              type: 'string',
+              description: 'Search text — used by search',
+            },
+            pluginId: {
+              type: 'string',
+              description: 'Plugin ID — used by run_plugin',
+            },
+            command: {
+              type: 'string',
+              description: 'Command name — used by run_plugin',
+            },
+            arguments: {
+              type: 'string',
+              description: 'JSON arguments string — used by run_plugin',
+            },
+            name: {
+              type: 'string',
+              description: 'View name — used by open_view',
+            },
+            windowID: {
+              type: 'string',
+              description: 'Window ID — used by close_plugin_window',
+            },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'noteplan_plugins',
+        description:
+          'Plugin management: list, create, delete, install, read source/log, update HTML, screenshot.\n\nActions:\n- list: List installed plugins\n- list_available: List plugins from online repository\n- create: Create plugin with HTML view (requires pluginId, pluginName, commandName, html)\n- delete: Delete plugin (requires pluginId + confirmationToken)\n- install: Install from repository (requires pluginId)\n- log: Read plugin console log (requires pluginId)\n- source: Read plugin source (requires pluginId)\n- update_html: Apply find/replace patches (requires pluginId + patches)\n- screenshot: Capture plugin WebView screenshot (requires pluginId)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['list', 'list_available', 'create', 'delete', 'install', 'log', 'source', 'update_html', 'screenshot'],
+              description: 'Action to perform',
+            },
+            pluginId: {
+              type: 'string',
+              description: 'Plugin ID — used by create, delete, install, log, source, update_html, screenshot',
+            },
+            pluginName: {
+              type: 'string',
+              description: 'Display name — used by create',
+            },
+            commandName: {
+              type: 'string',
+              description: 'Command name — used by create',
+            },
+            html: {
+              type: 'string',
+              description: 'HTML content — used by create',
+            },
+            icon: {
+              type: 'string',
+              description: 'Font Awesome icon name — used by create',
+            },
+            iconColor: {
+              type: 'string',
+              description: 'Tailwind color — used by create',
+            },
+            displayMode: {
+              type: 'string',
+              enum: ['main', 'split', 'window'],
+              description: 'Display mode (default: main) — used by create',
+            },
+            autoLaunch: {
+              type: 'boolean',
+              description: 'Auto-reload and run — used by create, update_html',
+            },
+            patches: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  find: { type: 'string' },
+                  replace: { type: 'string' },
+                },
+                required: ['find', 'replace'],
+              },
+              description: 'Find/replace patches — used by update_html',
+            },
+            query: {
+              type: 'string',
+              description: 'Filter/search — used by list, list_available, source',
+            },
+            includeBeta: {
+              type: 'boolean',
+              description: 'Include beta plugins — used by list_available',
+            },
+            tail: {
+              type: 'integer',
+              description: 'Return last N lines — used by log',
+            },
+            clear: {
+              type: 'boolean',
+              description: 'Clear log after reading — used by log',
+            },
+            startLine: {
+              type: 'integer',
+              description: 'Start line (1-based) — used by source',
+            },
+            endLine: {
+              type: 'integer',
+              description: 'End line (1-based) — used by source',
+            },
+            contextLines: {
+              type: 'integer',
+              description: 'Context lines around matches — used by source',
+            },
+            confirmationToken: {
+              type: 'string',
+              description: 'Token for confirmation — used by delete',
+            },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'noteplan_themes',
+        description:
+          'Theme management: list, get, save, set active.\n\nActions:\n- list: List all themes and active theme names\n- get: Read a custom theme JSON (requires filename)\n- save: Create/update a custom theme (requires filename + theme)\n- set_active: Activate a theme (requires name)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['list', 'get', 'save', 'set_active'],
+              description: 'Action to perform',
+            },
+            filename: {
+              type: 'string',
+              description: 'Theme filename — used by get, save',
+            },
+            name: {
+              type: 'string',
+              description: 'Theme name — used by set_active',
+            },
+            theme: {
+              type: 'object',
+              description: 'Theme object — used by save',
+              properties: {
+                name: { type: 'string' },
+                style: { type: 'string', enum: ['Light', 'Dark'] },
+                author: { type: 'object', properties: { name: { type: 'string' }, email: { type: 'string' } } },
+                editor: { type: 'object' },
+                styles: { type: 'object' },
+              },
+            },
+            setActive: {
+              type: 'boolean',
+              description: 'Apply theme immediately — used by save (default: true)',
+            },
+            mode: {
+              type: 'string',
+              enum: ['light', 'dark', 'auto'],
+              description: 'Mode to apply for — used by save, set_active',
+            },
+          },
+          required: ['action'],
+        },
+      },
+    );
+  }
+
   const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
     ...tool,
     inputSchema: withDebugTimingsInputSchema(tool.inputSchema),
@@ -2094,6 +2114,8 @@ export function createServer(): Server {
     outputSchema: getToolOutputSchema(tool.name),
   }));
   const toolDefinitionByName = new Map(annotatedToolDefinitions.map((tool) => [tool.name, tool]));
+  const registeredToolNames = annotatedToolDefinitions.map((tool) => tool.name);
+  const registeredToolNameSet = new Set(registeredToolNames);
   const compactToolDefinitions = annotatedToolDefinitions.map((tool) => compactToolDefinition(tool));
 
   // Register tool listing handler — all 12 tools returned directly (no pagination needed)
@@ -2167,6 +2189,11 @@ export function createServer(): Server {
         }
         case 'noteplan_manage_note': {
           const action = (args as any)?.action;
+          const spaceWriteActions = new Set(['create', 'update', 'delete', 'move']);
+          if ((args as any)?.space && spaceWriteActions.has(action) && !advancedFeaturesEnabled) {
+            result = { success: false, error: upgradeMessage(`space write (${action})`), code: 'ERR_VERSION_GATE' };
+            break;
+          }
           switch (action) {
             case 'create': result = noteTools.createNote(args as any); break;
             case 'update': result = noteTools.updateNote(args as any); break;
@@ -2182,6 +2209,11 @@ export function createServer(): Server {
         }
         case 'noteplan_edit_content': {
           const a = args as any;
+          if (a.space && !advancedFeaturesEnabled) {
+            const editAction = a?.action ?? 'edit';
+            result = { success: false, error: upgradeMessage(`space write (${editAction})`), code: 'ERR_VERSION_GATE' };
+            break;
+          }
           if (a.scheduleDate && a.content) {
             a.content = appendScheduleDate(a.content, a.scheduleDate);
           }
@@ -2198,6 +2230,11 @@ export function createServer(): Server {
         }
         case 'noteplan_paragraphs': {
           const a = args as any;
+          const paragraphWriteActions = new Set(['add', 'complete', 'update']);
+          if (a.space && paragraphWriteActions.has(a.action) && !advancedFeaturesEnabled) {
+            result = { success: false, error: upgradeMessage(`space write (${a.action})`), code: 'ERR_VERSION_GATE' };
+            break;
+          }
           if (a.scheduleDate && a.content) {
             a.content = appendScheduleDate(a.content, a.scheduleDate);
           }
@@ -2215,6 +2252,11 @@ export function createServer(): Server {
         }
         case 'noteplan_folders': {
           const action = (args as any)?.action;
+          const folderWriteActions = new Set(['create', 'move', 'rename', 'delete']);
+          if ((args as any)?.space && folderWriteActions.has(action) && !advancedFeaturesEnabled) {
+            result = { success: false, error: upgradeMessage(`space folder (${action})`), code: 'ERR_VERSION_GATE' };
+            break;
+          }
           switch (action) {
             case 'list': result = spaceTools.listFolders(args as any); break;
             case 'find': result = spaceTools.findFolders(args as any); break;
@@ -2336,8 +2378,8 @@ export function createServer(): Server {
           throw new Error(`Unknown tool: ${name} (normalized: ${normalizedName})`);
       }
 
-      const enrichedResult = enrichErrorResult(result, normalizedName);
-      const resultWithSuggestions = withSuggestedNextTools(enrichedResult, normalizedName);
+      const enrichedResult = enrichErrorResult(result, normalizedName, registeredToolNames);
+      const resultWithSuggestions = withSuggestedNextTools(enrichedResult, normalizedName, registeredToolNameSet);
       const resultWithMemory = withMemoryHints(resultWithSuggestions, normalizedName);
       const resultWithDuration = withDuration(resultWithMemory, Date.now() - startTime, includeTiming);
       const hasOutputSchema = Boolean(toolDefinitionByName.get(normalizedName)?.outputSchema);
@@ -2375,7 +2417,7 @@ export function createServer(): Server {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const meta = inferToolErrorMeta(normalizedName, errorMessage);
+      const meta = inferToolErrorMeta(normalizedName, errorMessage, registeredToolNames);
       const errorResult: Record<string, unknown> = {
         success: false,
         error: errorMessage,
