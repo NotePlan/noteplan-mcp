@@ -553,16 +553,86 @@ describe('addTask', () => {
     expect(result).toBe('# Title\n## Tasks\n* [ ] New task\nExisting text');
   });
 
-  it('heading not found -> adds at end', () => {
+  it('heading not found -> throws with available headings', () => {
     const content = '# Title\nSome text';
-    const result = addTask(content, 'New task', 'after-heading', 'NonExistent');
-    expect(result).toBe('# Title\nSome text\n* [ ] New task');
+    expect(() =>
+      addTask(content, 'New task', 'after-heading', 'NonExistent')
+    ).toThrow(/not found/);
+    expect(() =>
+      addTask(content, 'New task', 'after-heading', 'NonExistent')
+    ).toThrow(/Available headings/);
   });
 
   it('with status and priority options', () => {
     const content = '# Title';
     const result = addTask(content, 'Important', 'end', undefined, { status: 'open', priority: 3 });
     expect(result).toBe('# Title\n* [ ] Important !!!');
+  });
+
+  it('inserts after heading when position=start + heading are both provided', () => {
+    const content = [
+      '---',
+      'title: note',
+      '---',
+      '# Daily Note',
+      '',
+      '## Tasks',
+      '* [ ] Existing task',
+      '',
+      '## NotePlan',
+      '* [ ] Existing item',
+    ].join('\n');
+
+    const result = addTask(content, 'New item', 'start', 'NotePlan');
+    const resultLines = result.split('\n');
+    const headingIdx = resultLines.indexOf('## NotePlan');
+    expect(headingIdx).toBeGreaterThan(-1);
+    expect(resultLines[headingIdx + 1]).toBe('* [ ] New item');
+  });
+
+  it('inserts at end of section when position=end + heading are both provided', () => {
+    const content = [
+      '# Daily Note',
+      '',
+      '## Tasks',
+      '* [ ] Existing task',
+      '',
+      '## NotePlan',
+      '* [ ] Existing item',
+      '',
+      '## Other',
+      '* [ ] Other item',
+    ].join('\n');
+
+    const result = addTask(content, 'New item', 'end', 'NotePlan');
+    const resultLines = result.split('\n');
+    const notePlanIdx = resultLines.indexOf('## NotePlan');
+    const otherIdx = resultLines.indexOf('## Other');
+    const newItemIdx = resultLines.indexOf('* [ ] New item');
+    expect(newItemIdx).toBeGreaterThan(notePlanIdx);
+    expect(newItemIdx).toBeLessThan(otherIdx);
+  });
+
+  it('does not treat a thematic break as a frontmatter closer', () => {
+    const content = [
+      '---',
+      'bg-color: amber-50',
+      // Missing closing ---
+      '',
+      '## Goals',
+      '* [ ] Goal 1',
+      '',
+      '---', // thematic break, NOT frontmatter
+      '',
+      '## Other',
+    ].join('\n');
+
+    // position=start should insert at top (frontmatter is broken/unclosed)
+    const result = addTask(content, 'Top task', 'start');
+    const resultLines = result.split('\n');
+    const insertedIdx = resultLines.indexOf('* [ ] Top task');
+    const thematicIdx = resultLines.indexOf('---', 1);
+    expect(insertedIdx).toBeLessThan(thematicIdx);
   });
 });
 

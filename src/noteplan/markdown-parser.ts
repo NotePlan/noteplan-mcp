@@ -2,6 +2,7 @@
 
 import { Task, TaskStatus, TASK_STATUS_MAP, STATUS_TO_MARKER, ParagraphType, ParagraphMetadata } from './types.js';
 import { getTaskPrefix, getTaskMarkerConfigCached } from './preferences.js';
+import { insertContentAtPosition } from './frontmatter-parser.js';
 
 /**
  * Parse a note's content to extract tasks
@@ -301,7 +302,7 @@ export function updateTaskContent(content: string, lineIndex: number, newTaskCon
 export function addTask(
   content: string,
   taskContent: string,
-  position: 'start' | 'end' | 'after-heading' = 'end',
+  position: 'start' | 'end' | 'after-heading' | 'in-section' = 'end',
   heading?: string,
   options?: {
     status?: TaskStatus;
@@ -320,40 +321,8 @@ export function addTask(
     const taskPrefix = getTaskPrefix();
     taskLine = `${taskPrefix}${taskContent}`;
   }
-  const lines = content.split('\n');
 
-  if (position === 'start') {
-    // Add after frontmatter if present
-    let insertIndex = 0;
-    if (lines[0]?.trim() === '---') {
-      for (let i = 1; i < lines.length; i++) {
-        if (lines[i]?.trim() === '---') {
-          insertIndex = i + 1;
-          break;
-        }
-      }
-    }
-    lines.splice(insertIndex, 0, taskLine);
-  } else if (position === 'after-heading' && heading) {
-    // Find the heading and insert after it (matches ATX headings and bold section markers)
-    const headingIndex = lines.findIndex((line) => {
-      if (line.match(new RegExp(`^#{1,6}\\s*${escapeRegex(heading)}\\s*$`, 'i'))) return true;
-      const boldMatch = line.match(/^\s*\*\*(.+?)\*\*:?\s*$/);
-      if (boldMatch && boldMatch[1].trim().toLowerCase() === heading.toLowerCase()) return true;
-      return false;
-    });
-    if (headingIndex !== -1) {
-      lines.splice(headingIndex + 1, 0, taskLine);
-    } else {
-      // Heading not found, add at end
-      lines.push(taskLine);
-    }
-  } else {
-    // Add at end
-    lines.push(taskLine);
-  }
-
-  return lines.join('\n');
+  return insertContentAtPosition(content, taskLine, { position, heading });
 }
 
 /**

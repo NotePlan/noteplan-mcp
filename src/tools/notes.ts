@@ -1618,6 +1618,7 @@ export const appendContentSchema = z.object({
   query: z.string().optional().describe('Resolvable note query (fuzzy note lookup before append)'),
   space: z.string().optional().describe('Space name or ID scope for title/date/query resolution'),
   content: z.string().describe('Content to append'),
+  heading: z.string().optional().describe('Heading or section marker text — when provided, appends at end of that section instead of end of note'),
   indentationStyle: z
     .enum(['tabs', 'preserve'])
     .optional()
@@ -1819,6 +1820,7 @@ export function appendContent(params: z.infer<typeof appendContentSchema>) {
     const normalized = normalizeContentIndentation(params.content, indentationStyle);
     const newContent = frontmatter.insertContentAtPosition(note.content, normalized.content, {
       position: 'end',
+      heading: params.heading,
     });
     const writeTarget = getWritableIdentifier(note);
     store.updateNote(writeTarget.identifier, newContent, {
