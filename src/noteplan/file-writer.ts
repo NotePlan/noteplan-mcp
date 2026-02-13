@@ -12,6 +12,24 @@ import {
   getCalendarNote,
 } from './file-reader.js';
 
+/**
+ * Rename/move a file, with fallback for sandboxed/mounted filesystems.
+ * EPERM/EXDEV: copy + delete instead of atomic rename.
+ */
+function moveFile(source: string, destination: string): void {
+  try {
+    fs.renameSync(source, destination);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'EXDEV') {
+      fs.copyFileSync(source, destination);
+      fs.unlinkSync(source);
+    } else {
+      throw error;
+    }
+  }
+}
+
 function ensurePathInsideRoot(candidatePath: string, rootPath: string, label: string): void {
   const resolvedCandidate = path.resolve(candidatePath);
   const resolvedRoot = path.resolve(rootPath);
@@ -233,7 +251,10 @@ export function writeNoteFile(filePath: string, content: string): void {
     fs.writeFileSync(fullPath, normalizedContent, { encoding: 'utf-8', flag: 'wx' });
   } catch (error) {
     const maybeErrno = error as NodeJS.ErrnoException;
-    if (maybeErrno.code === 'EEXIST') {
+    if (maybeErrno.code === 'EEXIST' || maybeErrno.code === 'EPERM') {
+      // EEXIST: file appeared between existsSync and writeFileSync — safe to overwrite.
+      // EPERM: sandboxed/mounted filesystems (e.g. Claude Co-Work, iCloud FUSE) may not
+      //   support O_EXCL (wx flag). Fall back to plain write.
       fs.writeFileSync(fullPath, normalizedContent, { encoding: 'utf-8' });
       return;
     }
@@ -373,7 +394,7 @@ export function deleteNote(filePath: string): string {
     counter++;
   }
 
-  fs.renameSync(fullPath, finalTrashPath);
+  moveFile(fullPath, finalTrashPath);
   return path.relative(getNotePlanPath(), finalTrashPath);
 }
 
@@ -427,7 +448,7 @@ export function moveLocalNote(filePath: string, destinationFolder: string): stri
     fs.mkdirSync(targetDir, { recursive: true });
   }
 
-  fs.renameSync(sourcePath, targetPath);
+  moveFile(sourcePath, targetPath);
   return preview.toFilename;
 }
 
@@ -476,7 +497,7 @@ export function restoreLocalNoteFromTrash(filePath: string, destinationFolder: s
   if (!fs.existsSync(targetDir)) {
     fs.mkdirSync(targetDir, { recursive: true });
   }
-  fs.renameSync(sourcePath, targetPath);
+  moveFile(sourcePath, targetPath);
   return preview.toFilename;
 }
 
@@ -525,7 +546,7 @@ export function renameLocalNoteFile(
   const preview = previewRenameLocalNoteFile(filePath, newFilename, keepExtension);
   const sourcePath = path.join(getNotePlanPath(), preview.fromFilename);
   const targetPath = path.join(getNotePlanPath(), preview.toFilename);
-  fs.renameSync(sourcePath, targetPath);
+  moveFile(sourcePath, targetPath);
   return preview.toFilename;
 }
 
@@ -603,7 +624,7 @@ export function deleteLocalFolder(folderPath: string): string {
     counter++;
   }
 
-  fs.renameSync(fullPath, targetPath);
+  moveFile(fullPath, targetPath);
   return path.relative(getNotePlanPath(), targetPath);
 }
 
@@ -671,7 +692,7 @@ export function moveLocalFolder(sourceFolder: string, destinationFolder: string)
   const preview = previewMoveLocalFolder(sourceFolder, destinationFolder);
   const sourcePath = path.join(getNotesPath(), preview.fromFolder);
   const targetPath = path.join(getNotesPath(), preview.toFolder);
-  fs.renameSync(sourcePath, targetPath);
+  moveFile(sourcePath, targetPath);
   return preview;
 }
 
@@ -753,7 +774,7 @@ export function renameLocalFolder(sourceFolder: string, newName: string): Folder
   const preview = previewRenameLocalFolder(sourceFolder, newName);
   const sourcePath = path.join(getNotesPath(), preview.fromFolder);
   const targetPath = path.join(getNotesPath(), preview.toFolder);
-  fs.renameSync(sourcePath, targetPath);
+  moveFile(sourcePath, targetPath);
   return preview;
 }
 

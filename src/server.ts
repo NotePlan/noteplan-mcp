@@ -1190,7 +1190,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_edit_content',
           description:
-            'Edit note content: insert, append, delete lines, edit a line, or replace a range of lines.\n\nActions:\n- insert: Insert at position (start/end/after-heading/in-section/at-line)\n- append: Append to end (shorthand for insert at end). Use date="today" to append to today\'s daily note (replaces noteplan_add_to_today).\n- delete_lines: Delete line range (requires startLine, endLine + dryRun/confirmationToken)\n- edit_line: Edit one line (requires line + content)\n- replace_lines: Replace line range (requires startLine, endLine, content + dryRun/confirmationToken)\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet — no need to create them first. Always use tab characters for indentation.\n\nNotePlan syntax: Tasks use "- [ ] text" (open), "- [x]" (done), "- [-]" (cancelled), "- [>]" (scheduled). The task marker (*/- with or without checkbox) follows user settings — prefer noteplan_paragraphs(action=add) for auto-formatted tasks. Schedule tasks to dates with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id) — only the NotePlan app creates these.\n\nUse scheduleDate to auto-append >YYYY-MM-DD scheduling to content.',
+            'Edit note content. IMPORTANT: action values use snake_case.\n\nValid actions (exactly these strings):\n- "insert": Insert at position. Use position="after-heading" + heading="Section Name" to insert under a heading. position="in-section" appends at end of a heading\'s section. position="start" inserts after frontmatter (ignores heading). position="at-line" inserts at a specific line number. position="end" appends to note.\n- "append": Shorthand for insert at end. Use date="today" to append to today\'s daily note.\n- "delete_lines": Delete a line range. Requires startLine + endLine (1-indexed). Use dryRun=true first, then confirmationToken to execute.\n- "edit_line": Edit a single line. Requires line (1-indexed) + content. Set content="" to clear a line.\n- "replace_lines": Replace a line range. Requires startLine + endLine + content. Use dryRun=true first, then confirmationToken to execute.\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet. Always use tab characters for indentation.\n\nNotePlan syntax: Tasks use "- [ ] text" (open), "- [x]" (done), "- [-]" (cancelled), "- [>]" (scheduled). Prefer noteplan_paragraphs(action=add) for auto-formatted tasks. Schedule tasks with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id).\n\nUse scheduleDate to auto-append >YYYY-MM-DD to content.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2206,34 +2206,31 @@ export function createServer(): Server {
       {
         name: 'noteplan_attachments',
         description:
-          'Attachment operations: add files/images to notes, list existing attachments, or get attachment metadata.\n\nActions:\n- add: Add a file attachment to a note. Provide base64-encoded data and a filename. Creates the note\'s _attachments folder and writes the file. Optionally inserts a markdown link (![image](path) or ![file](path)) into the note.\n- list: List all attachments for a note. Returns filenames, sizes, markdown links.\n- get: Get a specific attachment\'s metadata. Use includeData=true to get base64-encoded content.\n\nAttachments are stored in a sibling folder named {notename}_attachments/ next to the note file. Images use ![image](path) and non-image files use ![file](path).\n\nUse this when transferring files from external sources (Help Scout, email, etc.) into NotePlan notes.',
+          'Attachment operations: add files/images to notes, list attachments, get attachment data, or move between notes.\n\nActions:\n- add: Write a file to the note\'s _attachments folder. Requires data (base64) + attachmentFilename. Returns markdownLink — use noteplan_edit_content to place it in the note (insertLink defaults to false).\n- list: List all attachments for a note with filenames, sizes, and markdown links.\n- get: Get attachment metadata. Set includeData=true for base64 content. Use maxDataSize to cap large images.\n- move: Move an attachment between notes. Source note via id/filename/title/date, destination via destinationId/destinationFilename/destinationTitle/destinationDate. Moves file, removes old link from source, returns new markdownLink.\n\nAttachments are stored in {notename}_attachments/ sibling folder. Images: ![image](path), files: ![file](path). Use attachmentFilename for both add, get, and move.',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['add', 'list', 'get'],
+              enum: ['add', 'list', 'get', 'move'],
               description: 'Action to perform',
             },
-            id: { type: 'string', description: 'Note ID' },
-            filename: { type: 'string', description: 'Note filename/path' },
-            title: { type: 'string', description: 'Note title (fuzzy matched)' },
-            date: { type: 'string', description: 'Calendar note date (YYYYMMDD or YYYY-MM-DD)' },
-            query: { type: 'string', description: 'Search query to find the note' },
+            id: { type: 'string', description: 'Source note ID — used by all actions' },
+            filename: { type: 'string', description: 'Source note filename/path — used by all actions' },
+            title: { type: 'string', description: 'Source note title — used by all actions' },
+            date: { type: 'string', description: 'Source calendar note date (YYYYMMDD or YYYY-MM-DD) — used by all actions' },
+            query: { type: 'string', description: 'Search query to find the source note' },
             space: { type: 'string', description: 'Space name or ID' },
             data: { type: 'string', description: 'Base64-encoded file data — required for add' },
-            attachmentFilename: { type: 'string', description: 'Filename for the attachment (e.g. "photo.png") — required for add' },
+            attachmentFilename: { type: 'string', description: 'Attachment filename (e.g. "photo.png") — required for add, get, and move' },
             mimeType: { type: 'string', description: 'MIME type hint (e.g. "image/png") — used by add' },
-            insertLink: { type: 'boolean', description: 'Append markdown link to note — used by add (default: true)' },
-            position: {
-              type: 'string',
-              enum: ['end', 'start', 'after-heading', 'at-line'],
-              description: 'Where to insert the markdown link — used by add (default: end)',
-            },
-            heading: { type: 'string', description: 'Heading to insert after — used by add with position="after-heading"' },
-            line: { type: 'number', description: 'Line number — used by add with position="at-line"' },
-            attachmentName: { type: 'string', description: 'Attachment filename — required for get' },
+            insertLink: { type: 'boolean', description: 'Auto-insert markdown link into note — used by add (default: false). Prefer placing links yourself via noteplan_edit_content.' },
+            destinationId: { type: 'string', description: 'Destination note ID — used by move' },
+            destinationFilename: { type: 'string', description: 'Destination note filename — used by move' },
+            destinationTitle: { type: 'string', description: 'Destination note title — used by move' },
+            destinationDate: { type: 'string', description: 'Destination calendar note date — used by move' },
             includeData: { type: 'boolean', description: 'Include base64 data in response — used by get (default: false)' },
+            maxDataSize: { type: 'number', description: 'Max file size in bytes for data inclusion — used by get. Files exceeding this are skipped.' },
           },
           required: ['action'],
         },
@@ -2337,7 +2334,7 @@ export function createServer(): Server {
             case 'rename': result = noteTools.renameNoteFile(args as any); break;
             case 'set_property': result = noteTools.setProperty(args as any); break;
             case 'remove_property': result = noteTools.removeProperty(args as any); break;
-            default: throw new Error(`Unknown action: ${action}`);
+            default: throw new Error(`Unknown action: "${action}". Valid actions: create, update, delete, move, restore, rename, set_property, remove_property`);
           }
           break;
         }
@@ -2358,7 +2355,7 @@ export function createServer(): Server {
             case 'delete_lines': result = noteTools.deleteLines(a); break;
             case 'edit_line': result = noteTools.editLine(a); break;
             case 'replace_lines': result = noteTools.replaceLines(a); break;
-            default: throw new Error(`Unknown action: ${action}`);
+            default: throw new Error(`Unknown action: "${action}". Valid actions: insert, append, delete_lines, edit_line, replace_lines (snake_case required)`);
           }
           break;
         }
@@ -2531,7 +2528,8 @@ export function createServer(): Server {
             case 'add': result = attachmentTools.addAttachment(args as any); break;
             case 'list': result = attachmentTools.listAttachments(args as any); break;
             case 'get': result = attachmentTools.getAttachment(args as any); break;
-            default: throw new Error(`Unknown action: ${action}`);
+            case 'move': result = attachmentTools.moveAttachment(args as any); break;
+            default: throw new Error(`Unknown action: ${action}. Valid actions: add, list, get, move`);
           }
           break;
         }

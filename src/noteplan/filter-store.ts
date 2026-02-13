@@ -212,7 +212,17 @@ export function renameFilter(oldName: string, newName: string, overwrite = false
     throw new Error(`Filter already exists: ${targetName}`);
   }
 
-  fs.renameSync(sourcePath, targetPath);
+  try {
+    fs.renameSync(sourcePath, targetPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'EXDEV') {
+      fs.copyFileSync(sourcePath, targetPath);
+      fs.unlinkSync(sourcePath);
+    } else {
+      throw error;
+    }
+  }
 
   const stored = getFilter(targetName);
   if (!stored) {
