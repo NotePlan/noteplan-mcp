@@ -1,6 +1,6 @@
 {
   "name": "@noteplanco/noteplan-mcp",
-  "version": "1.1.2",
+  "version": "1.1.4",
   "description": "MCP server for NotePlan note and task management",
   "main": "dist/index.js",
   "type": "module",

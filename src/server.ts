@@ -893,7 +893,7 @@ export function createServer(): Server {
   const server = new Server(
     {
       name: 'NotePlan',
-      version: '1.1.2',
+      version: '1.1.4',
     },
     {
       capabilities: {
@@ -902,9 +902,20 @@ export function createServer(): Server {
       },
     }
   );
-  const embeddingsToolsEnabled = embeddingsTools.areEmbeddingsToolsEnabled();
-  const versionInfo = getNotePlanVersion();
-  const advancedFeaturesEnabled = versionInfo.build >= MIN_BUILD_ADVANCED_FEATURES;
+  let embeddingsToolsEnabled = false;
+  try {
+    embeddingsToolsEnabled = embeddingsTools.areEmbeddingsToolsEnabled();
+  } catch (err) {
+    console.error('[noteplan-mcp] Failed to check embeddings config:', err);
+  }
+  let versionInfo: { version: string; build: number; source: string } = { version: '0.0.0', build: 0, source: 'unknown' };
+  let advancedFeaturesEnabled = false;
+  try {
+    versionInfo = getNotePlanVersion();
+    advancedFeaturesEnabled = versionInfo.build >= MIN_BUILD_ADVANCED_FEATURES;
+  } catch (err) {
+    console.error('[noteplan-mcp] Failed to detect NotePlan version:', err);
+  }
   console.error(`[noteplan-mcp] Detected NotePlan ${versionInfo.version} (build ${versionInfo.build}, source: ${versionInfo.source}). Advanced features: ${advancedFeaturesEnabled ? 'enabled' : 'disabled'}.`);
 
   const toolDefinitions: ToolDefinition[] = [
@@ -2463,8 +2474,9 @@ export function createServer(): Server {
 
 // Start the server with stdio transport
 export async function startServer(): Promise<void> {
+  console.error(`[noteplan-mcp] Starting v${getMcpServerVersion()} (Node ${process.version}, ${process.platform} ${process.arch})`);
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('NotePlan MCP server running on stdio');
+  console.error('[noteplan-mcp] Server running on stdio');
 }
