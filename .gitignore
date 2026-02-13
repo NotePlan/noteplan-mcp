@@ -22,5 +22,8 @@ scripts/reminders-helper
 *.log
 npm-debug.log*
 
+# SQLite artifacts
+:memory:
+
 # Release artifacts
 *.zip
