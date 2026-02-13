@@ -202,19 +202,15 @@ export function insertContentAtPosition(
     }
 
     case 'at-line': {
-      if (line === undefined || line < 0) {
+      if (line === undefined || line < 1) {
         throw new Error('Valid line number is required for at-line position');
       }
+      const lineIndex = line - 1; // Convert 1-indexed to 0-indexed
       // Ensure we have enough lines
-      while (lines.length < line) {
+      while (lines.length <= lineIndex) {
         lines.push('');
       }
-      // When inserting at a blank line, consume it to avoid double gaps
-      if (line < lines.length && lines[line].trim() === '') {
-        lines.splice(line, 1, ...newLines);
-      } else {
-        lines.splice(line, 0, ...newLines);
-      }
+      lines.splice(lineIndex, 0, ...newLines);
       break;
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "@noteplanco/noteplan-mcp",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "MCP server for NotePlan note and task management",
   "main": "dist/index.js",
   "type": "module",
@@ -27,6 +27,7 @@
     "smoke:workflow": "node scripts/workflow-smoke.mjs",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
+    "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -46,15 +47,15 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "better-sqlite3": "^11.0.0",
     "fuse.js": "^7.1.0",
+    "sql.js": "^1.11.0",
     "uuid": "^9.0.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.0.0",
     "@types/uuid": "^9.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.18"
   }
 }
