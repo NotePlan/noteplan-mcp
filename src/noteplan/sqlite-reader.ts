@@ -1,11 +1,11 @@
 // SQLite reader for space notes
 
-import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { Note, Space, Folder, SQLiteNoteRow, SQLITE_NOTE_TYPES } from './types.js';
 import { extractTitle, extractTagsFromContent } from './markdown-parser.js';
+import { isSqliteAvailable, SqliteDatabase } from './sqlite-loader.js';
 
 // Possible NotePlan storage paths (same as file-reader.ts)
 const POSSIBLE_PATHS = [
@@ -23,7 +23,7 @@ const POSSIBLE_PATHS = [
   path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan-setapp/Documents'),
 ];
 
-let db: Database.Database | null = null;
+let db: SqliteDatabase | null = null;
 let dbChecked = false;
 let cachedDbPath: string | null = null;
 const SPACE_TRASH_FOLDER_TITLE = '@Trash';
@@ -44,11 +44,15 @@ function findDatabasePath(): string | null {
 /**
  * Get or create the database connection
  */
-export function getDatabase(): Database.Database | null {
+export function getDatabase(): SqliteDatabase | null {
   if (db) return db;
   if (dbChecked) return null; // Already checked, no DB available
 
   dbChecked = true;
+
+  if (!isSqliteAvailable()) {
+    return null; // sql.js not initialized
+  }
 
   cachedDbPath = findDatabasePath();
   if (!cachedDbPath) {
@@ -59,13 +63,13 @@ export function getDatabase(): Database.Database | null {
 
   try {
     // Try read-write first (needed for sqlite-writer operations)
-    db = new Database(cachedDbPath, { readonly: false });
+    db = new SqliteDatabase(cachedDbPath, { readonly: false });
     return db;
   } catch (error) {
     // If read-write fails (e.g., database locked), try read-only
     try {
       console.error('Note: Opening spaces database in read-only mode');
-      db = new Database(cachedDbPath, { readonly: true });
+      db = new SqliteDatabase(cachedDbPath, { readonly: true });
       return db;
     } catch (readOnlyError) {
       console.error('Failed to open spaces database:', readOnlyError);
@@ -131,7 +135,7 @@ export function listSpaces(): Space[] {
  * Get all descendant IDs of a space (folders and notes)
  * Uses recursive CTE to traverse parent hierarchy
  */
-function getSpaceDescendantIds(database: Database.Database, spaceId: string): string[] {
+function getSpaceDescendantIds(database: SqliteDatabase, spaceId: string): string[] {
   try {
     const rows = database.prepare(`
       WITH RECURSIVE space_tree AS (
@@ -177,7 +181,7 @@ export function countSpaceFolderContents(folderId: string): { noteCount: number;
   }
 }
 
-function getDescendantIdsForRoots(database: Database.Database, rootIds: string[]): string[] {
+function getDescendantIdsForRoots(database: SqliteDatabase, rootIds: string[]): string[] {
   if (rootIds.length === 0) return [];
   try {
     const placeholders = rootIds.map(() => '?').join(',');
@@ -201,7 +205,7 @@ function getDescendantIdsForRoots(database: Database.Database, rootIds: string[]
   }
 }
 
-function getTrashDescendantIds(database: Database.Database, spaceId?: string): Set<string> {
+function getTrashDescendantIds(database: SqliteDatabase, spaceId?: string): Set<string> {
   try {
     let trashFolderRows = database
       .prepare(
@@ -229,7 +233,7 @@ function getTrashDescendantIds(database: Database.Database, spaceId?: string): S
 }
 
 function filterRowsByTrash(
-  database: Database.Database,
+  database: SqliteDatabase,
   rows: SQLiteNoteRow[],
   spaceId?: string,
   includeTrash = false
@@ -255,7 +259,7 @@ function normalizeListSpaceOptions(
 /**
  * Find the root space ID by traversing parent chain
  */
-function findRootSpaceId(database: Database.Database, noteId: string): string | undefined {
+function findRootSpaceId(database: SqliteDatabase, noteId: string): string | undefined {
   try {
     const row = database.prepare(`
       WITH RECURSIVE parent_chain AS (
@@ -276,7 +280,7 @@ function findRootSpaceId(database: Database.Database, noteId: string): string | 
 /**
  * Convert SQLite row to Note object
  */
-function rowToNote(row: SQLiteNoteRow, database?: Database.Database): Note {
+function rowToNote(row: SQLiteNoteRow, database?: SqliteDatabase): Note {
   const spaceId = database ? findRootSpaceId(database, row.id) : undefined;
   const isCalendar = row.note_type === SQLITE_NOTE_TYPES.TEAMSPACE_CALENDAR;
 
@@ -325,7 +329,7 @@ export function listSpaceNotes(
       params.push(...descendantIds);
     }
 
-    const rows = database.prepare(query).all(...params) as SQLiteNoteRow[];
+    const rows = database.prepare(query).all(...params) as unknown as SQLiteNoteRow[];
     const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
     return filteredRows.map(row => rowToNote(row, database));
   } catch (error) {
@@ -394,7 +398,7 @@ export function getSpaceNoteByTitle(
       params.push(...descendantIds);
     }
 
-    const rows = database.prepare(query).all(...params) as SQLiteNoteRow[];
+    const rows = database.prepare(query).all(...params) as unknown as SQLiteNoteRow[];
     const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
     const row = filteredRows[0];
     return row ? rowToNote(row, database) : null;
@@ -448,7 +452,7 @@ export function searchSpaceNotes(
     sql += ` LIMIT ?`;
     params.push(limit);
 
-    const rows = database.prepare(sql).all(...params) as SQLiteNoteRow[];
+    const rows = database.prepare(sql).all(...params) as unknown as SQLiteNoteRow[];
     const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
     return filteredRows.map(row => rowToNote(row, database));
   } catch (error) {
@@ -517,7 +521,7 @@ export function searchSpaceNotesFTS(
     sql += ` ORDER BY modified_at DESC LIMIT ?`;
     params.push(limit);
 
-    const rows = database.prepare(sql).all(...params) as SQLiteNoteRow[];
+    const rows = database.prepare(sql).all(...params) as unknown as SQLiteNoteRow[];
     const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
     return filteredRows.map((row) => rowToNote(row, database));
   } catch (error) {

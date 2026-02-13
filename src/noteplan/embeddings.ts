@@ -1,10 +1,10 @@
-import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import * as store from './unified-store.js';
 import { Note, NoteType } from './types.js';
+import { isSqliteAvailable, SqliteDatabase } from './sqlite-loader.js';
 
 export type EmbeddingsProvider = 'openai' | 'mistral' | 'custom';
 export type EmbeddingsSource = 'local' | 'space';
@@ -96,7 +96,7 @@ function parseBoundedInt(value: string | undefined, defaultValue: number, min: n
 }
 
 let cachedConfig: EmbeddingsConfig | null = null;
-let db: Database.Database | null = null;
+let db: SqliteDatabase | null = null;
 let dbPathForConnection: string | null = null;
 
 function getDefaultModel(provider: EmbeddingsProvider): string {
@@ -192,7 +192,7 @@ function ensureEmbeddingsApiConfigured(): { ok: true } | { ok: false; error: str
   return { ok: true };
 }
 
-function openEmbeddingsDb(): Database.Database {
+function openEmbeddingsDb(): SqliteDatabase {
   const config = getEmbeddingsConfig();
   if (db && dbPathForConnection === config.dbPath) {
     return db;
@@ -204,8 +204,12 @@ function openEmbeddingsDb(): Database.Database {
     dbPathForConnection = null;
   }
 
+  if (!isSqliteAvailable()) {
+    throw new Error('sql.js is not initialized — cannot open embeddings database');
+  }
+
   fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
-  db = new Database(config.dbPath);
+  db = new SqliteDatabase(config.dbPath);
   dbPathForConnection = config.dbPath;
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');

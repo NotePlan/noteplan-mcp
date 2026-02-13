@@ -8,6 +8,7 @@ import {
   syncEmbeddings,
 } from '../noteplan/embeddings.js';
 import { resolveSpaceId } from '../noteplan/unified-store.js';
+import { isSqliteAvailable } from '../noteplan/sqlite-loader.js';
 import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
@@ -137,7 +138,7 @@ export const embeddingsResetSchema = z.object({
 });
 
 export function areEmbeddingsToolsEnabled(): boolean {
-  return areEmbeddingsEnabled();
+  return isSqliteAvailable() && areEmbeddingsEnabled();
 }
 
 export function embeddingsStatus(params?: z.infer<typeof embeddingsStatusSchema>) {

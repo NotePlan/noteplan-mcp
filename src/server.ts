@@ -28,6 +28,7 @@ import * as pluginTools from './tools/plugins.js';
 import * as themeTools from './tools/themes.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
 import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES } from './utils/version.js';
+import { initSqlite } from './noteplan/sqlite-loader.js';
 
 type ToolDefinition = {
   name: string;
@@ -2475,6 +2476,7 @@ export function createServer(): Server {
 // Start the server with stdio transport
 export async function startServer(): Promise<void> {
   console.error(`[noteplan-mcp] Starting v${getMcpServerVersion()} (Node ${process.version}, ${process.platform} ${process.arch})`);
+  await initSqlite();
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
