@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { insertContentAtPosition } from './frontmatter-parser.js';
+import {
+  insertContentAtPosition,
+  parseNoteContent,
+  serializeFrontmatter,
+  reconstructNote,
+  setFrontmatterProperty,
+  removeFrontmatterProperty,
+  deleteLines,
+} from './frontmatter-parser.js';
 
 /**
  * Helper: split result into lines for easier assertions.
@@ -128,5 +136,398 @@ describe('insertContentAtPosition – in-section', () => {
     expect(resultLines[5]).toBe('- Space Item 3');    // new item
     expect(resultLines[6]).toBe('');                   // separator preserved
     expect(resultLines[7]).toBe('**General**');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseNoteContent
+// ---------------------------------------------------------------------------
+describe('parseNoteContent', () => {
+  it('parses standard frontmatter with multiple properties', () => {
+    const content = '---\ntitle: My Note\ntags: work\n---\nBody text here';
+    const result = parseNoteContent(content);
+    expect(result.frontmatter).toEqual({ title: 'My Note', tags: 'work' });
+    expect(result.body).toBe('Body text here');
+    expect(result.hasFrontmatter).toBe(true);
+  });
+
+  it('returns null frontmatter when no --- markers', () => {
+    const content = 'Just a plain note\nwith two lines';
+    const result = parseNoteContent(content);
+    expect(result.frontmatter).toBeNull();
+    expect(result.body).toBe(content);
+    expect(result.hasFrontmatter).toBe(false);
+  });
+
+  it('returns null when only opening --- with no close', () => {
+    const content = '---\ntitle: Oops\nNo closing delimiter';
+    const result = parseNoteContent(content);
+    expect(result.frontmatter).toBeNull();
+    expect(result.body).toBe(content);
+    expect(result.hasFrontmatter).toBe(false);
+  });
+
+  it('handles empty frontmatter block (just ---\\n---)', () => {
+    const content = '---\n---\nBody after empty frontmatter';
+    const result = parseNoteContent(content);
+    expect(result.frontmatter).toEqual({});
+    expect(result.body).toBe('Body after empty frontmatter');
+    expect(result.hasFrontmatter).toBe(true);
+  });
+
+  it('trims whitespace from values', () => {
+    const content = '---\ntitle:   spaced out   \n---\nBody';
+    const result = parseNoteContent(content);
+    expect(result.frontmatter!.title).toBe('spaced out');
+  });
+
+  it('body does not include frontmatter', () => {
+    const content = '---\nkey: val\n---\nLine 1\nLine 2';
+    const result = parseNoteContent(content);
+    expect(result.body).toBe('Line 1\nLine 2');
+    expect(result.body).not.toContain('---');
+    expect(result.body).not.toContain('key: val');
+  });
+
+  it('hasFrontmatter is true when frontmatter exists', () => {
+    const withFm = '---\na: b\n---\nbody';
+    const withoutFm = 'no frontmatter';
+    expect(parseNoteContent(withFm).hasFrontmatter).toBe(true);
+    expect(parseNoteContent(withoutFm).hasFrontmatter).toBe(false);
+  });
+
+  it('handles content with no body after frontmatter', () => {
+    const content = '---\ntitle: Only FM\n---';
+    const result = parseNoteContent(content);
+    expect(result.frontmatter).toEqual({ title: 'Only FM' });
+    expect(result.body).toBe('');
+    expect(result.hasFrontmatter).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// serializeFrontmatter
+// ---------------------------------------------------------------------------
+describe('serializeFrontmatter', () => {
+  it('serializes key-value pairs with --- delimiters', () => {
+    const result = serializeFrontmatter({ title: 'Test' });
+    expect(result).toBe('---\ntitle: Test\n---');
+  });
+
+  it('handles multiple properties', () => {
+    const result = serializeFrontmatter({ title: 'Test', tags: 'work' });
+    const resultLines = result.split('\n');
+    expect(resultLines[0]).toBe('---');
+    expect(resultLines).toContain('title: Test');
+    expect(resultLines).toContain('tags: work');
+    expect(resultLines[resultLines.length - 1]).toBe('---');
+  });
+
+  it('handles empty object', () => {
+    const result = serializeFrontmatter({});
+    expect(result).toBe('---\n---');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reconstructNote
+// ---------------------------------------------------------------------------
+describe('reconstructNote', () => {
+  it('reconstructs note with frontmatter', () => {
+    const result = reconstructNote({
+      frontmatter: { title: 'Hello' },
+      body: 'Some body text',
+      hasFrontmatter: true,
+    });
+    expect(result).toBe('---\ntitle: Hello\n---\nSome body text');
+  });
+
+  it('returns body only when frontmatter is null', () => {
+    const result = reconstructNote({
+      frontmatter: null,
+      body: 'Just the body',
+      hasFrontmatter: false,
+    });
+    expect(result).toBe('Just the body');
+  });
+
+  it('returns body only when frontmatter is empty object', () => {
+    const result = reconstructNote({
+      frontmatter: {},
+      body: 'Body with empty fm',
+      hasFrontmatter: true,
+    });
+    expect(result).toBe('Body with empty fm');
+  });
+
+  it('round-trips: parse then reconstruct preserves content', () => {
+    const original = '---\ntitle: Round Trip\ntags: test\n---\n# Heading\n\nBody paragraph.';
+    const parsed = parseNoteContent(original);
+    const reconstructed = reconstructNote(parsed);
+    expect(reconstructed).toBe(original);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setFrontmatterProperty
+// ---------------------------------------------------------------------------
+describe('setFrontmatterProperty', () => {
+  it('sets property on note with existing frontmatter', () => {
+    const content = '---\ntitle: Existing\n---\nBody';
+    const result = setFrontmatterProperty(content, 'tags', 'work');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.tags).toBe('work');
+    expect(parsed.frontmatter!.title).toBe('Existing');
+  });
+
+  it('creates frontmatter when none exists', () => {
+    const content = 'Plain body text';
+    const result = setFrontmatterProperty(content, 'title', 'New Title');
+    const parsed = parseNoteContent(result);
+    expect(parsed.hasFrontmatter).toBe(true);
+    expect(parsed.frontmatter!.title).toBe('New Title');
+    expect(parsed.body).toBe('Plain body text');
+  });
+
+  it('overwrites existing property value', () => {
+    const content = '---\ntitle: Old\n---\nBody';
+    const result = setFrontmatterProperty(content, 'title', 'New');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBe('New');
+  });
+
+  it('preserves other properties when setting a new one', () => {
+    const content = '---\ntitle: Keep\nauthor: Alice\n---\nBody';
+    const result = setFrontmatterProperty(content, 'tags', 'added');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBe('Keep');
+    expect(parsed.frontmatter!.author).toBe('Alice');
+    expect(parsed.frontmatter!.tags).toBe('added');
+  });
+
+  it('preserves the note body', () => {
+    const content = '---\ntitle: T\n---\nLine 1\nLine 2';
+    const result = setFrontmatterProperty(content, 'key', 'val');
+    const parsed = parseNoteContent(result);
+    expect(parsed.body).toBe('Line 1\nLine 2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// removeFrontmatterProperty
+// ---------------------------------------------------------------------------
+describe('removeFrontmatterProperty', () => {
+  it('removes existing property', () => {
+    const content = '---\ntitle: Remove Me\ntags: keep\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'title');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBeUndefined();
+    expect(parsed.frontmatter!.tags).toBe('keep');
+  });
+
+  it('returns unchanged content when no frontmatter', () => {
+    const content = 'No frontmatter here';
+    const result = removeFrontmatterProperty(content, 'title');
+    expect(result).toBe(content);
+  });
+
+  it('returns unchanged structure when property does not exist', () => {
+    const content = '---\ntitle: Keep\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'nonexistent');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBe('Keep');
+  });
+
+  it('preserves other properties after removal', () => {
+    const content = '---\na: 1\nb: 2\nc: 3\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'b');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.a).toBe('1');
+    expect(parsed.frontmatter!.b).toBeUndefined();
+    expect(parsed.frontmatter!.c).toBe('3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// insertContentAtPosition – start
+// ---------------------------------------------------------------------------
+describe('insertContentAtPosition – start', () => {
+  it('inserts at beginning when no frontmatter', () => {
+    const content = 'Line 1\nLine 2';
+    const result = insertContentAtPosition(content, 'Inserted', {
+      position: 'start',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('Inserted');
+    expect(resultLines[1]).toBe('Line 1');
+    expect(resultLines[2]).toBe('Line 2');
+  });
+
+  it('inserts after frontmatter when present', () => {
+    const content = '---\ntitle: Test\n---\nBody line';
+    const result = insertContentAtPosition(content, 'After FM', {
+      position: 'start',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('---');
+    expect(resultLines[1]).toBe('title: Test');
+    expect(resultLines[2]).toBe('---');
+    expect(resultLines[3]).toBe('After FM');
+    expect(resultLines[4]).toBe('Body line');
+  });
+
+  it('works with empty content', () => {
+    const result = insertContentAtPosition('', 'First line', {
+      position: 'start',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('First line');
+  });
+
+  it('handles multi-line insertion at start', () => {
+    const content = 'Existing';
+    const result = insertContentAtPosition(content, 'A\nB\nC', {
+      position: 'start',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('A');
+    expect(resultLines[1]).toBe('B');
+    expect(resultLines[2]).toBe('C');
+    expect(resultLines[3]).toBe('Existing');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// insertContentAtPosition – end
+// ---------------------------------------------------------------------------
+describe('insertContentAtPosition – end', () => {
+  it('appends to end of content', () => {
+    const content = 'Line 1\nLine 2';
+    const result = insertContentAtPosition(content, 'Line 3', {
+      position: 'end',
+    });
+    expect(result).toBe('Line 1\nLine 2\nLine 3');
+  });
+
+  it('handles content with trailing newline', () => {
+    const content = 'Line 1\n';
+    const result = insertContentAtPosition(content, 'Appended', {
+      position: 'end',
+    });
+    expect(result).toBe('Line 1\nAppended');
+  });
+
+  it('appends multi-line content', () => {
+    const content = 'Start';
+    const result = insertContentAtPosition(content, 'A\nB', {
+      position: 'end',
+    });
+    expect(result).toBe('Start\nA\nB');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// insertContentAtPosition – after-heading
+// ---------------------------------------------------------------------------
+describe('insertContentAtPosition – after-heading', () => {
+  it('inserts after ATX heading (# Heading)', () => {
+    const content = '# Title\n\nSome text';
+    const result = insertContentAtPosition(content, 'Inserted', {
+      position: 'after-heading',
+      heading: 'Title',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('# Title');
+    expect(resultLines[1]).toBe('Inserted');
+    expect(resultLines[2]).toBe('');
+    expect(resultLines[3]).toBe('Some text');
+  });
+
+  it('inserts after bold heading (**Heading**:)', () => {
+    const content = '**Tasks**:\n- Task 1';
+    const result = insertContentAtPosition(content, '- Task 0', {
+      position: 'after-heading',
+      heading: 'Tasks',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('**Tasks**:');
+    expect(resultLines[1]).toBe('- Task 0');
+    expect(resultLines[2]).toBe('- Task 1');
+  });
+
+  it('matches headings case-insensitively', () => {
+    const content = '# My Title\nBody';
+    const result = insertContentAtPosition(content, 'Inserted', {
+      position: 'after-heading',
+      heading: 'my title',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('# My Title');
+    expect(resultLines[1]).toBe('Inserted');
+  });
+
+  it('throws with suggestions when heading not found', () => {
+    const content = '# Alpha\n## Beta\nText';
+    expect(() =>
+      insertContentAtPosition(content, 'X', {
+        position: 'after-heading',
+        heading: 'Gamma',
+      })
+    ).toThrow(/not found/);
+    expect(() =>
+      insertContentAtPosition(content, 'X', {
+        position: 'after-heading',
+        heading: 'Gamma',
+      })
+    ).toThrow(/Available headings/);
+  });
+
+  it('inserts after correct heading when multiple headings exist', () => {
+    const content = '# First\nFirst body\n## Second\nSecond body';
+    const result = insertContentAtPosition(content, 'After Second', {
+      position: 'after-heading',
+      heading: 'Second',
+    });
+    const resultLines = lines(result);
+    expect(resultLines[2]).toBe('## Second');
+    expect(resultLines[3]).toBe('After Second');
+    expect(resultLines[4]).toBe('Second body');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteLines
+// ---------------------------------------------------------------------------
+describe('deleteLines', () => {
+  const fiveLines = 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5';
+
+  it('deletes a single line', () => {
+    const result = deleteLines(fiveLines, 3, 3);
+    const resultLines = lines(result);
+    expect(resultLines).toEqual(['Line 1', 'Line 2', 'Line 4', 'Line 5']);
+  });
+
+  it('deletes a range of lines', () => {
+    const result = deleteLines(fiveLines, 2, 4);
+    const resultLines = lines(result);
+    expect(resultLines).toEqual(['Line 1', 'Line 5']);
+  });
+
+  it('throws when startLine < 1', () => {
+    expect(() => deleteLines(fiveLines, 0, 2)).toThrow(/Invalid line range/);
+  });
+
+  it('throws when startLine > endLine', () => {
+    expect(() => deleteLines(fiveLines, 3, 1)).toThrow(/Invalid line range/);
+  });
+
+  it('throws when startLine exceeds content length', () => {
+    expect(() => deleteLines(fiveLines, 10, 12)).toThrow(/exceeds content length/);
+  });
+
+  it('clamps endLine to content length', () => {
+    const result = deleteLines(fiveLines, 4, 100);
+    const resultLines = lines(result);
+    expect(resultLines).toEqual(['Line 1', 'Line 2', 'Line 3']);
   });
 });
