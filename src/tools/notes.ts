@@ -4,6 +4,7 @@ import { z } from 'zod';
 import path from 'path';
 import * as store from '../noteplan/unified-store.js';
 import * as frontmatter from '../noteplan/frontmatter-parser.js';
+import { ensureTemplateFrontmatter } from './templates.js';
 import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
@@ -383,6 +384,8 @@ export const createNoteSchema = z.object({
   folder: z.string().optional().describe('Folder to create the note in. Supports smart matching (e.g., "projects" matches "10 - Projects")'),
   create_new_folder: z.boolean().optional().describe('Set to true to create a new folder instead of matching existing ones'),
   space: z.string().optional().describe('Space name or ID to create in (e.g., "My Team" or a UUID)'),
+  noteType: z.enum(['note', 'template']).optional().default('note').describe('Type of note to create. Use "template" to create in @Templates with proper frontmatter'),
+  templateTypes: z.array(z.enum(['empty-note', 'meeting-note', 'project-note', 'calendar-note'])).optional().describe('Template type tags — used when noteType="template"'),
 });
 
 export const updateNoteSchema = z.object({
@@ -795,8 +798,14 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
 
 export function createNote(params: z.infer<typeof createNoteSchema>) {
   try {
-    const result = store.createNote(params.title, params.content, {
-      folder: params.folder,
+    const isTemplate = params.noteType === 'template';
+    const folder = isTemplate && !params.folder ? '@Templates' : params.folder;
+    const content = isTemplate
+      ? ensureTemplateFrontmatter(params.title, params.content, params.templateTypes)
+      : params.content;
+
+    const result = store.createNote(params.title, content, {
+      folder,
       space: params.space,
       createNewFolder: params.create_new_folder,
     });

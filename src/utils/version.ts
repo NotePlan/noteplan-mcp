@@ -13,6 +13,9 @@ export interface NotePlanVersion {
 // Placeholder — set to the first build that ships themes/plugins/ui/space-writes
 export const MIN_BUILD_ADVANCED_FEATURES = 1300;
 
+// Build that ships the renderTemplate AppleScript command
+export const MIN_BUILD_RENDER_TEMPLATE = 1400;
+
 const CACHE_TTL_MS = 60_000;
 let cachedVersion: NotePlanVersion | null = null;
 let cachedAt = 0;

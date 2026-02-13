@@ -26,6 +26,7 @@ import * as memoryTools from './tools/memory.js';
 import * as uiTools from './tools/ui.js';
 import * as pluginTools from './tools/plugins.js';
 import * as themeTools from './tools/themes.js';
+import * as templateTools from './tools/templates.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
 import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES } from './utils/version.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
@@ -226,6 +227,7 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_plugins':
     case 'noteplan_themes':
     case 'noteplan_embeddings':
+    case 'noteplan_templates':
       return GENERIC_TOOL_OUTPUT_SCHEMA;
     default:
       return GENERIC_TOOL_OUTPUT_SCHEMA;
@@ -431,12 +433,14 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_plugins',
     'noteplan_themes',
     'noteplan_embeddings',
+    'noteplan_templates',
   ]);
 
   const openWorldTools = new Set([
     'noteplan_eventkit',
     'noteplan_embeddings',
     'noteplan_plugins',
+    'noteplan_templates',
   ]);
 
   return {
@@ -523,6 +527,9 @@ function getToolSearchAliases(toolName: string): string[] {
     case 'noteplan_embeddings':
       aliases.push('embeddings', 'semantic search', 'vector search', 'similarity');
       break;
+    case 'noteplan_templates':
+      aliases.push('template', 'templates', 'render template', 'list templates', 'template types', 'meeting template', 'project template', 'debug template', 'test template');
+      break;
   }
 
   return aliases;
@@ -592,7 +599,7 @@ function inferToolErrorMeta(toolName: string, errorMessage: string, registeredTo
   const message = errorMessage.toLowerCase();
 
   if (message.includes('unknown tool')) {
-    const toolList = registeredToolNames?.join(', ') ?? 'noteplan_get_notes, noteplan_search, noteplan_manage_note, noteplan_edit_content, noteplan_paragraphs, noteplan_folders, noteplan_filters, noteplan_eventkit, noteplan_memory';
+    const toolList = registeredToolNames?.join(', ') ?? 'noteplan_get_notes, noteplan_search, noteplan_manage_note, noteplan_edit_content, noteplan_paragraphs, noteplan_folders, noteplan_filters, noteplan_eventkit, noteplan_memory, noteplan_templates';
     return {
       code: 'ERR_UNKNOWN_TOOL',
       hint: `Check tool name spelling. Available tools: ${toolList}.`,
@@ -832,6 +839,9 @@ function withSuggestedNextTools(result: unknown, toolName: string, availableTool
       break;
     case 'noteplan_themes':
       suggestedNextTools = ['noteplan_themes'];
+      break;
+    case 'noteplan_templates':
+      suggestedNextTools = ['noteplan_templates', 'noteplan_manage_note', 'noteplan_edit_content'];
       break;
     default:
       suggestedNextTools = [];
@@ -1076,7 +1086,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_manage_note',
           description:
-            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title)\n- update: Replace note content (requires filename, content, fullReplace + confirmationToken)\n- delete/move/restore/rename: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires filename + key)',
+            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title). Set noteType="template" to create in @Templates with proper frontmatter. After creating a template, verify it with noteplan_templates(action: "render").\n- update: Replace note content (requires filename, content, fullReplace + confirmationToken)\n- delete/move/restore/rename: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires filename + key)',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1108,6 +1118,16 @@ export function createServer(): Server {
               create_new_folder: {
                 type: 'boolean',
                 description: 'Bypass smart matching and create exact folder name — used by create',
+              },
+              noteType: {
+                type: 'string',
+                enum: ['note', 'template'],
+                description: 'Type of note to create. Use "template" to create in @Templates with proper frontmatter — used by create',
+              },
+              templateTypes: {
+                type: 'array',
+                items: { type: 'string', enum: ['empty-note', 'meeting-note', 'project-note', 'calendar-note'] },
+                description: 'Template type tags — used by create with noteType="template"',
               },
               space: {
                 type: 'string',
@@ -2133,6 +2153,46 @@ export function createServer(): Server {
           required: ['action'],
         },
       },
+      {
+        name: 'noteplan_templates',
+        description:
+          'Template operations: list available templates or render a template.\n\nActions:\n- list: List templates from @Templates folder with their types and preview\n- render: Render a template by title (saved template) or raw content string (for debugging). Rendering requires a recent NotePlan build.\n\nDebugging workflow: After creating or editing a template, use render with its title or raw content to verify the output. Check variables, date formatting, and logic. If rendering fails or produces unexpected output, read the plugin log via noteplan_plugins(action: "log", pluginId: "np.Templating") for error details.\n\nTemplate syntax: <%- expr %> (output), <% code %> (logic), <%= expr %> (escaped output). Common helpers: date.now("YYYY-MM-DD"), web.weather(), date.tomorrow("format").',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['list', 'render'],
+              description: 'Action to perform',
+            },
+            templateTitle: {
+              type: 'string',
+              description: 'Template title — used by render (loads a saved template by title)',
+            },
+            content: {
+              type: 'string',
+              description: 'Raw template content string — used by render (renders arbitrary template code for debugging)',
+            },
+            folder: {
+              type: 'string',
+              description: 'Template subfolder — used by list (default: @Templates)',
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum results — used by list',
+            },
+            offset: {
+              type: 'number',
+              description: 'Pagination offset — used by list',
+            },
+            cursor: {
+              type: 'string',
+              description: 'Cursor from previous page — used by list',
+            },
+          },
+          required: ['action'],
+        },
+      },
     );
   }
 
@@ -2398,6 +2458,15 @@ export function createServer(): Server {
             case 'search': result = await embeddingsTools.embeddingsSearch(args as any); break;
             case 'sync': result = await embeddingsTools.embeddingsSync(args as any); break;
             case 'reset': result = embeddingsTools.embeddingsReset(args as any); break;
+            default: throw new Error(`Unknown action: ${action}`);
+          }
+          break;
+        }
+        case 'noteplan_templates': {
+          const action = (args as any)?.action;
+          switch (action) {
+            case 'list': result = templateTools.listTemplates(args as any); break;
+            case 'render': result = templateTools.renderTemplate(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
