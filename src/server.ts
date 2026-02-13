@@ -27,8 +27,9 @@ import * as uiTools from './tools/ui.js';
 import * as pluginTools from './tools/plugins.js';
 import * as themeTools from './tools/themes.js';
 import * as templateTools from './tools/templates.js';
+import * as attachmentTools from './tools/attachments.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
-import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES } from './utils/version.js';
+import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES, MIN_BUILD_CREATE_BACKUP } from './utils/version.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
 
 type ToolDefinition = {
@@ -228,6 +229,7 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_themes':
     case 'noteplan_embeddings':
     case 'noteplan_templates':
+    case 'noteplan_attachments':
       return GENERIC_TOOL_OUTPUT_SCHEMA;
     default:
       return GENERIC_TOOL_OUTPUT_SCHEMA;
@@ -419,6 +421,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_plugins',
     'noteplan_themes',
     'noteplan_embeddings',
+    'noteplan_attachments',
   ]);
 
   const nonIdempotentTools = new Set([
@@ -434,6 +437,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_themes',
     'noteplan_embeddings',
     'noteplan_templates',
+    'noteplan_attachments',
   ]);
 
   const openWorldTools = new Set([
@@ -530,6 +534,9 @@ function getToolSearchAliases(toolName: string): string[] {
     case 'noteplan_templates':
       aliases.push('template', 'templates', 'render template', 'list templates', 'template types', 'meeting template', 'project template', 'debug template', 'test template');
       break;
+    case 'noteplan_attachments':
+      aliases.push('attachment', 'attachments', 'image', 'file', 'upload', 'add image', 'add file', 'add attachment', 'list attachments', 'get attachment', 'base64', 'photo', 'screenshot');
+      break;
   }
 
   return aliases;
@@ -599,7 +606,7 @@ function inferToolErrorMeta(toolName: string, errorMessage: string, registeredTo
   const message = errorMessage.toLowerCase();
 
   if (message.includes('unknown tool')) {
-    const toolList = registeredToolNames?.join(', ') ?? 'noteplan_get_notes, noteplan_search, noteplan_manage_note, noteplan_edit_content, noteplan_paragraphs, noteplan_folders, noteplan_filters, noteplan_eventkit, noteplan_memory, noteplan_templates';
+    const toolList = registeredToolNames?.join(', ') ?? 'noteplan_get_notes, noteplan_search, noteplan_manage_note, noteplan_edit_content, noteplan_paragraphs, noteplan_folders, noteplan_filters, noteplan_eventkit, noteplan_memory, noteplan_templates, noteplan_attachments';
     return {
       code: 'ERR_UNKNOWN_TOOL',
       hint: `Check tool name spelling. Available tools: ${toolList}.`,
@@ -842,6 +849,9 @@ function withSuggestedNextTools(result: unknown, toolName: string, availableTool
       break;
     case 'noteplan_templates':
       suggestedNextTools = ['noteplan_templates', 'noteplan_manage_note', 'noteplan_edit_content'];
+      break;
+    case 'noteplan_attachments':
+      suggestedNextTools = ['noteplan_attachments', 'noteplan_edit_content', 'noteplan_get_notes'];
       break;
     default:
       suggestedNextTools = [];
@@ -1963,13 +1973,13 @@ export function createServer(): Server {
       {
         name: 'noteplan_ui',
         description:
-          'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows',
+          'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows\n- backup: Create a full backup of all notes, calendars, themes, filters, and plugin data. Old backups are pruned automatically.',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows'],
+              enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows', 'backup'],
               description: 'Action to perform',
             },
             title: {
@@ -2189,6 +2199,41 @@ export function createServer(): Server {
               type: 'string',
               description: 'Cursor from previous page — used by list',
             },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'noteplan_attachments',
+        description:
+          'Attachment operations: add files/images to notes, list existing attachments, or get attachment metadata.\n\nActions:\n- add: Add a file attachment to a note. Provide base64-encoded data and a filename. Creates the note\'s _attachments folder and writes the file. Optionally inserts a markdown link (![image](path) or ![file](path)) into the note.\n- list: List all attachments for a note. Returns filenames, sizes, markdown links.\n- get: Get a specific attachment\'s metadata. Use includeData=true to get base64-encoded content.\n\nAttachments are stored in a sibling folder named {notename}_attachments/ next to the note file. Images use ![image](path) and non-image files use ![file](path).\n\nUse this when transferring files from external sources (Help Scout, email, etc.) into NotePlan notes.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['add', 'list', 'get'],
+              description: 'Action to perform',
+            },
+            id: { type: 'string', description: 'Note ID' },
+            filename: { type: 'string', description: 'Note filename/path' },
+            title: { type: 'string', description: 'Note title (fuzzy matched)' },
+            date: { type: 'string', description: 'Calendar note date (YYYYMMDD or YYYY-MM-DD)' },
+            query: { type: 'string', description: 'Search query to find the note' },
+            space: { type: 'string', description: 'Space name or ID' },
+            data: { type: 'string', description: 'Base64-encoded file data — required for add' },
+            attachmentFilename: { type: 'string', description: 'Filename for the attachment (e.g. "photo.png") — required for add' },
+            mimeType: { type: 'string', description: 'MIME type hint (e.g. "image/png") — used by add' },
+            insertLink: { type: 'boolean', description: 'Append markdown link to note — used by add (default: true)' },
+            position: {
+              type: 'string',
+              enum: ['end', 'start', 'after-heading', 'at-line'],
+              description: 'Where to insert the markdown link — used by add (default: end)',
+            },
+            heading: { type: 'string', description: 'Heading to insert after — used by add with position="after-heading"' },
+            line: { type: 'number', description: 'Line number — used by add with position="at-line"' },
+            attachmentName: { type: 'string', description: 'Attachment filename — required for get' },
+            includeData: { type: 'boolean', description: 'Include base64 data in response — used by get (default: false)' },
           },
           required: ['action'],
         },
@@ -2420,6 +2465,14 @@ export function createServer(): Server {
             case 'toggle_sidebar': result = uiTools.toggleSidebar(args as any); break;
             case 'close_plugin_window': result = uiTools.closePluginWindow(args as any); break;
             case 'list_plugin_windows': result = uiTools.listPluginWindows(args as any); break;
+            case 'backup': {
+              if (versionInfo.build < MIN_BUILD_CREATE_BACKUP) {
+                result = { success: false, error: `Backup requires NotePlan build ${MIN_BUILD_CREATE_BACKUP}+. Current: ${versionInfo.build}.`, code: 'ERR_VERSION_GATE' };
+              } else {
+                result = uiTools.createBackup(args as any);
+              }
+              break;
+            }
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -2467,6 +2520,17 @@ export function createServer(): Server {
           switch (action) {
             case 'list': result = templateTools.listTemplates(args as any); break;
             case 'render': result = templateTools.renderTemplate(args as any); break;
+            default: throw new Error(`Unknown action: ${action}`);
+          }
+          break;
+        }
+
+        case 'noteplan_attachments': {
+          const action = (args as any)?.action;
+          switch (action) {
+            case 'add': result = attachmentTools.addAttachment(args as any); break;
+            case 'list': result = attachmentTools.listAttachments(args as any); break;
+            case 'get': result = attachmentTools.getAttachment(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;

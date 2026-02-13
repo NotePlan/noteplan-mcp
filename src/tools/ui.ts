@@ -142,6 +142,33 @@ export function closePluginWindow(args: z.infer<typeof closePluginWindowSchema>)
   return { success: closed, message: closed ? 'Closed all plugin windows' : 'No plugin windows were open' };
 }
 
+export const createBackupSchema = z.object({});
+
+export function createBackup(_args: z.infer<typeof createBackupSchema>): Record<string, unknown> {
+  let raw: string;
+  try {
+    raw = runAppleScript(`tell application "${APP_NAME}" to createBackup`, 120_000);
+  } catch (e: any) {
+    return { success: false, error: `Failed to create backup: ${e.message}` };
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { success: false, error: 'Failed to parse backup result from NotePlan' };
+  }
+
+  if (parsed.timedOut) {
+    return { success: false, error: 'Backup timed out' };
+  }
+
+  return {
+    success: parsed.success === true,
+    message: parsed.success ? 'Full backup created successfully. Old backups were pruned automatically.' : 'Backup failed',
+  };
+}
+
 export function listPluginWindows(_args: z.infer<typeof listPluginWindowsSchema>): Record<string, unknown> {
   let raw: string;
   try {

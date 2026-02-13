@@ -16,6 +16,9 @@ export const MIN_BUILD_ADVANCED_FEATURES = 1300;
 // Build that ships the renderTemplate AppleScript command
 export const MIN_BUILD_RENDER_TEMPLATE = 1400;
 
+// Build that ships the createBackup AppleScript command
+export const MIN_BUILD_CREATE_BACKUP = 1492;
+
 const CACHE_TTL_MS = 60_000;
 let cachedVersion: NotePlanVersion | null = null;
 let cachedAt = 0;
