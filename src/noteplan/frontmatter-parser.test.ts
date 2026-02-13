@@ -531,3 +531,124 @@ describe('deleteLines', () => {
     expect(resultLines).toEqual(['Line 1', 'Line 2', 'Line 3']);
   });
 });
+
+// ── Issue A: position "start" + heading should insert after the heading ──
+
+describe('insertContentAtPosition – start + heading (Issue A)', () => {
+  const noteWithFM = [
+    '---',
+    'bg-color: amber-50',
+    '---',
+    '# Daily Note',
+    '',
+    '## Tasks',
+    '* Existing task',
+    '',
+    '## NotePlan',
+    '* Existing item',
+  ].join('\n');
+
+  it('inserts after the heading when position=start + heading are both provided', () => {
+    // The AI agent expected position="start" + heading="NotePlan" to insert
+    // under ## NotePlan. Instead it went to start-of-note (after frontmatter).
+    const result = insertContentAtPosition(noteWithFM, '* New item', {
+      position: 'start',
+      heading: 'NotePlan',
+    });
+
+    const resultLines = lines(result);
+    // Should be right after ## NotePlan, NOT after frontmatter
+    const headingIdx = resultLines.indexOf('## NotePlan');
+    expect(headingIdx).toBeGreaterThan(-1);
+    expect(resultLines[headingIdx + 1]).toBe('* New item');
+  });
+
+  it('still inserts after frontmatter when position=start with no heading', () => {
+    // Existing behavior should be preserved when no heading is given
+    const result = insertContentAtPosition(noteWithFM, '* Top item', {
+      position: 'start',
+    });
+
+    const resultLines = lines(result);
+    // Should go right after the frontmatter closing ---
+    expect(resultLines[3]).toBe('* Top item');
+    expect(resultLines[4]).toBe('# Daily Note');
+  });
+});
+
+// ── Issue B: Fragile frontmatter parsing with thematic breaks ──
+
+describe('insertContentAtPosition – broken frontmatter with thematic break (Issue B)', () => {
+  // Scenario: the closing --- of frontmatter was accidentally deleted,
+  // but a thematic break --- exists later in the note body.
+  const brokenFM = [
+    '---',
+    'bg-color: amber-50',
+    'bg-pattern: dotted',
+    // Missing closing ---
+    '',
+    '## Today\'s Goals',
+    '* Goal 1',
+    '',
+    '---',              // This is a thematic break, NOT frontmatter
+    '',
+    '## Other Section',
+    '* Item A',
+  ].join('\n');
+
+  it('does not treat a thematic break as a frontmatter closer', () => {
+    // position=start should insert at the top of the note (since frontmatter is broken/unclosed)
+    // NOT after the thematic break on line 9
+    const result = insertContentAtPosition(brokenFM, '* Inserted', {
+      position: 'start',
+    });
+
+    const resultLines = lines(result);
+    // The inserted content should be near the top, not after the thematic break
+    const insertedIdx = resultLines.indexOf('* Inserted');
+    const thematicBreakIdx = resultLines.indexOf('---', 1); // skip first ---
+    expect(insertedIdx).toBeLessThan(thematicBreakIdx);
+  });
+
+  it('correctly inserts at start when frontmatter has no closing delimiter', () => {
+    const unclosedFM = [
+      '---',
+      'title: My Note',
+      '',
+      '# Content',
+      'Some text',
+    ].join('\n');
+
+    // No closing --- at all. Should treat as no valid frontmatter,
+    // insert at the very top.
+    const result = insertContentAtPosition(unclosedFM, '* Top', {
+      position: 'start',
+    });
+
+    const resultLines = lines(result);
+    expect(resultLines[0]).toBe('* Top');
+  });
+
+  it('only treats --- as frontmatter closer when it has valid YAML content between delimiters', () => {
+    // Frontmatter with valid YAML, then a thematic break later
+    const validFMWithBreak = [
+      '---',
+      'title: Note',
+      '---',
+      '# Content',
+      '',
+      '---',  // thematic break
+      '',
+      '## Section 2',
+    ].join('\n');
+
+    const result = insertContentAtPosition(validFMWithBreak, '* Inserted', {
+      position: 'start',
+    });
+
+    const resultLines = lines(result);
+    // Should insert after the real frontmatter (line 3), not after thematic break
+    expect(resultLines[3]).toBe('* Inserted');
+    expect(resultLines[4]).toBe('# Content');
+  });
+});

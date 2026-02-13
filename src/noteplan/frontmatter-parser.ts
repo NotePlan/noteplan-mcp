@@ -33,11 +33,21 @@ export function parseNoteContent(content: string): ParsedNote {
     };
   }
 
-  // Find closing delimiter
+  // Find closing delimiter.
+  // Each line between the opening and closing --- must be a valid YAML
+  // key-value pair (matching `key: value`).  If we hit a blank line or
+  // any non-YAML content before finding the closing ---, the frontmatter
+  // is considered unclosed/invalid.  This prevents a thematic break ---
+  // later in the note body from being mistaken for a frontmatter closer.
   let closingIndex = -1;
   for (let i = 1; i < lines.length; i++) {
     if (lines[i]?.trim() === '---') {
       closingIndex = i;
+      break;
+    }
+    const line = lines[i] ?? '';
+    if (line.trim() === '' || !/^\S+:\s*(.*)$/.test(line)) {
+      // Not a YAML key-value line — stop scanning
       break;
     }
   }
@@ -147,9 +157,23 @@ export function insertContentAtPosition(
 
   switch (position) {
     case 'start': {
-      // Insert after frontmatter if present
+      // When heading is provided, delegate to after-heading so that
+      // position="start" + heading="X" inserts right after the heading.
+      if (heading) {
+        return insertContentAtPosition(content, newContent, {
+          position: 'after-heading',
+          heading,
+        });
+      }
+
+      // Insert after frontmatter if present.
+      // Use parseNoteContent to validate that frontmatter actually exists
+      // (has both opening and closing ---) before scanning for the closer.
+      // This prevents a thematic break (---) in the note body from being
+      // mistaken for the frontmatter closing delimiter.
+      const parsed = parseNoteContent(content);
       let insertIndex = 0;
-      if (lines[0]?.trim() === '---') {
+      if (parsed.hasFrontmatter && lines[0]?.trim() === '---') {
         for (let i = 1; i < lines.length; i++) {
           if (lines[i]?.trim() === '---') {
             insertIndex = i + 1;
