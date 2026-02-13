@@ -186,6 +186,15 @@ export function insertContentAtPosition(
     }
 
     case 'end': {
+      // When heading is provided, delegate to in-section so that
+      // position="end" + heading="X" appends at the end of that section.
+      if (heading) {
+        return insertContentAtPosition(content, newContent, {
+          position: 'in-section',
+          heading,
+        });
+      }
+
       // Append at end — use original newContent (no trailing-\n strip)
       // because appending doesn't go through splice+join.
       if (content.endsWith('\n')) {

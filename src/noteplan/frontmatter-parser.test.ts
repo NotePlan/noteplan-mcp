@@ -424,6 +424,42 @@ describe('insertContentAtPosition – end', () => {
     });
     expect(result).toBe('Start\nA\nB');
   });
+
+  it('inserts at end of section when position=end + heading are both provided', () => {
+    const content = [
+      '# Daily Note',
+      '',
+      '## Tasks',
+      '* Existing task',
+      '',
+      '## NotePlan',
+      '* Existing item',
+      '',
+      '## Other',
+      '* Other item',
+    ].join('\n');
+
+    const result = insertContentAtPosition(content, '* New item', {
+      position: 'end',
+      heading: 'NotePlan',
+    });
+
+    const resultLines = lines(result);
+    // Should be at the end of the NotePlan section, NOT at the end of the note
+    const notePlanIdx = resultLines.indexOf('## NotePlan');
+    const otherIdx = resultLines.indexOf('## Other');
+    const newItemIdx = resultLines.indexOf('* New item');
+    expect(newItemIdx).toBeGreaterThan(notePlanIdx);
+    expect(newItemIdx).toBeLessThan(otherIdx);
+  });
+
+  it('still appends to end of note when position=end with no heading', () => {
+    const content = '# Title\n\nSome text';
+    const result = insertContentAtPosition(content, '* Bottom', {
+      position: 'end',
+    });
+    expect(result).toBe('# Title\n\nSome text\n* Bottom');
+  });
 });
 
 // ---------------------------------------------------------------------------
