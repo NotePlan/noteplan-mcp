@@ -1103,7 +1103,7 @@ export function createServer(): Server {
               action: {
                 type: 'string',
                 enum: ['create', 'update', 'delete', 'move', 'restore', 'rename', 'set_property', 'remove_property'],
-                description: 'Action to perform',
+                description: 'Action: create | update | delete | move | restore | rename | set_property | remove_property',
               },
               id: {
                 type: 'string',
@@ -1197,7 +1197,7 @@ export function createServer(): Server {
               action: {
                 type: 'string',
                 enum: ['insert', 'append', 'delete_lines', 'edit_line', 'replace_lines'],
-                description: 'Action to perform',
+                description: 'Action: insert | append | delete_lines | edit_line | replace_lines',
               },
               id: {
                 type: 'string',
@@ -1305,7 +1305,7 @@ export function createServer(): Server {
               action: {
                 type: 'string',
                 enum: ['get', 'search', 'search_global', 'add', 'complete', 'update'],
-                description: 'Action to perform',
+                description: 'Action: get | search | search_global | add | complete | update',
               },
               id: {
                 type: 'string',
@@ -1453,7 +1453,7 @@ export function createServer(): Server {
               action: {
                 type: 'string',
                 enum: ['list', 'find', 'resolve', 'create', 'move', 'rename', 'delete', 'list_spaces'],
-                description: 'Action to perform',
+                description: 'Action: list | find | resolve | create | move | rename | delete | list_spaces',
               },
               path: {
                 type: 'string',
@@ -1557,7 +1557,7 @@ export function createServer(): Server {
               action: {
                 type: 'string',
                 enum: ['list', 'get', 'get_tasks', 'list_parameters', 'save', 'rename'],
-                description: 'Action to perform',
+                description: 'Action: list | get | get_tasks | list_parameters | save | rename',
               },
               name: {
                 type: 'string',
@@ -1643,7 +1643,7 @@ export function createServer(): Server {
               action: {
                 type: 'string',
                 enum: ['get_events', 'list_calendars', 'create_event', 'update_event', 'delete_event', 'get', 'list_lists', 'create', 'complete', 'update', 'delete'],
-                description: 'Action to perform',
+                description: 'Action: get_events | list_calendars | create_event | update_event | delete_event | get | list_lists | create | complete | update | delete',
               },
               // Calendar params
               eventId: {
@@ -1746,7 +1746,7 @@ export function createServer(): Server {
               action: {
                 type: 'string',
                 enum: ['list', 'save', 'update', 'delete'],
-                description: 'Action to perform',
+                description: 'Action: list | save | update | delete',
               },
               id: {
                 type: 'string',
@@ -1889,7 +1889,7 @@ export function createServer(): Server {
             action: {
               type: 'string',
               enum: ['status', 'search', 'sync', 'reset'],
-              description: 'Action to perform',
+              description: 'Action: status | search | sync | reset',
             },
             query: {
               type: 'string',
@@ -1980,7 +1980,7 @@ export function createServer(): Server {
             action: {
               type: 'string',
               enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows', 'backup'],
-              description: 'Action to perform',
+              description: 'Action: open_note | open_today | search | run_plugin | open_view | toggle_sidebar | close_plugin_window | list_plugin_windows | backup',
             },
             title: {
               type: 'string',
@@ -2036,7 +2036,7 @@ export function createServer(): Server {
             action: {
               type: 'string',
               enum: ['list', 'list_available', 'create', 'delete', 'install', 'log', 'source', 'update_html', 'screenshot'],
-              description: 'Action to perform',
+              description: 'Action: list | list_available | create | delete | install | log | source | update_html | screenshot',
             },
             pluginId: {
               type: 'string',
@@ -2129,7 +2129,7 @@ export function createServer(): Server {
             action: {
               type: 'string',
               enum: ['list', 'get', 'save', 'set_active'],
-              description: 'Action to perform',
+              description: 'Action: list | get | save | set_active',
             },
             filename: {
               type: 'string',
@@ -2173,7 +2173,7 @@ export function createServer(): Server {
             action: {
               type: 'string',
               enum: ['list', 'render'],
-              description: 'Action to perform',
+              description: 'Action: list | render',
             },
             templateTitle: {
               type: 'string',
@@ -2213,7 +2213,7 @@ export function createServer(): Server {
             action: {
               type: 'string',
               enum: ['add', 'list', 'get', 'move'],
-              description: 'Action to perform',
+              description: 'Action: add | list | get | move',
             },
             id: { type: 'string', description: 'Source note ID — used by all actions' },
             filename: { type: 'string', description: 'Source note filename/path — used by all actions' },
