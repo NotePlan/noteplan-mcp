@@ -1230,7 +1230,7 @@ export function createServer(): Server {
               position: {
                 type: 'string',
                 enum: ['start', 'end', 'after-heading', 'at-line', 'in-section'],
-                description: 'Where to insert: start (after frontmatter), end, after-heading (right after heading/marker line), in-section (at end of section, before next heading/marker), or at-line — used by insert',
+                description: 'Where to insert. With heading: start=right after heading, end/in-section=end of section. Without heading: start=after frontmatter, end=bottom of note. at-line=specific line number — used by insert',
               },
               heading: {
                 type: 'string',
@@ -1298,7 +1298,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_paragraphs',
           description:
-            'Paragraph and task operations on notes.\n\nParagraph actions:\n- get: Get note lines with metadata (requires filename). Returns line, lineIndex, content, type, etc.\n- search: Search for matching lines in a note (requires query + note ref via id/filename/title/date)\n\nTask actions:\n- search_global: Search tasks across all notes (requires query, supports "*" wildcard)\n- add: Add a task (requires target + content). Task marker format auto-matches user settings. Use scheduleDate to auto-append >YYYY-MM-DD scheduling to content, [[Note Name]] to link, #tag for tags, @person for mentions.\n- complete: Mark task done (requires filename + lineIndex or line)\n- update: Update task content/status (requires filename + lineIndex or line)',
+            'Paragraph and task operations on notes.\n\nParagraph actions:\n- get: Get note lines with metadata (requires filename). Returns line, lineIndex, content, type, etc.\n- search: Search for matching lines in a note (requires query + note ref via id/filename/title/date)\n\nTask actions:\n- search_global: Search tasks across all notes (requires query, supports "*" wildcard)\n- add: Add a task (requires target + content). Target is a date ("today", "tomorrow", "YYYY-MM-DD") for daily notes or a filename for project notes. Task marker format auto-matches user settings — never write raw markers like "* [ ]". Position+heading combos: position="start"+heading inserts right after the heading, position="end"+heading appends at end of that section, position="after-heading" inserts right after heading, position="in-section" appends at end of section. Default position is "end" (bottom of note). Use scheduleDate for >YYYY-MM-DD, [[Note Name]] to link, #tag for tags, @person for mentions.\n- complete: Mark task done (requires filename + lineIndex or line)\n- update: Update task content/status (requires filename + lineIndex or line)',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1367,16 +1367,16 @@ export function createServer(): Server {
               },
               target: {
                 type: 'string',
-                description: 'Target for add: date (today/tomorrow/YYYY-MM-DD) for daily notes or filename for project notes',
+                description: 'Target note for add: use a date string (today, tomorrow, yesterday, YYYY-MM-DD, YYYYMMDD) for daily/calendar notes, or a filename path for project notes. Daily notes are auto-created if they don\'t exist.',
               },
               position: {
                 type: 'string',
                 enum: ['start', 'end', 'after-heading', 'in-section'],
-                description: 'Where to add task (default: end) — used by add',
+                description: 'Where to add task (default: end). With heading: start=right after heading, end/in-section=end of section. Without heading: start=top of note, end=bottom of note — used by add',
               },
               heading: {
                 type: 'string',
-                description: 'Heading or section marker text (matches both ## headings and **bold:** section markers) — used by add',
+                description: 'Heading or section marker text to scope insertion (matches both ## headings and **bold:** section markers). Combine with position to control placement — used by add',
               },
               lineIndex: {
                 type: 'number',
