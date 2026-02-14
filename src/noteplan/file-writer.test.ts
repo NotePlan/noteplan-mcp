@@ -317,12 +317,12 @@ describe('deleteNote', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
-      if (s === '/np/@Trash') return true;
+      if (s === '/np/Notes/@Trash') return true;
       return false; // trash target does not exist yet
     });
     const result = deleteNote('Notes/test.md');
-    expect(result).toBe(path.join('@Trash', 'test.md'));
-    expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/test.md', '/np/@Trash/test.md');
+    expect(result).toBe(path.join('Notes', '@Trash', 'test.md'));
+    expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/test.md', '/np/Notes/@Trash/test.md');
   });
 
   it('creates @Trash if it does not exist', () => {
@@ -332,7 +332,7 @@ describe('deleteNote', () => {
       return false;
     });
     deleteNote('Notes/test.md');
-    expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/@Trash', { recursive: true });
+    expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/Notes/@Trash', { recursive: true });
   });
 
   it('handles duplicate names in trash (appends -1, -2, etc.)', () => {
@@ -340,14 +340,14 @@ describe('deleteNote', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
-      if (s === '/np/@Trash') return true;
-      if (s === '/np/@Trash/test.md') return true; // already taken
-      if (s === '/np/@Trash/test-1.md') return true; // also taken
-      if (s === '/np/@Trash/test-2.md') return false; // free
+      if (s === '/np/Notes/@Trash') return true;
+      if (s === '/np/Notes/@Trash/test.md') return true; // already taken
+      if (s === '/np/Notes/@Trash/test-1.md') return true; // also taken
+      if (s === '/np/Notes/@Trash/test-2.md') return false; // free
       return false;
     });
     const result = deleteNote('Notes/test.md');
-    expect(result).toBe(path.join('@Trash', 'test-2.md'));
+    expect(result).toBe(path.join('Notes', '@Trash', 'test-2.md'));
   });
 
   it('throws if file does not exist', () => {
@@ -359,7 +359,7 @@ describe('deleteNote', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
-      if (s === '/np/@Trash') return true;
+      if (s === '/np/Notes/@Trash') return true;
       return false;
     });
     const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
@@ -367,7 +367,7 @@ describe('deleteNote', () => {
       throw eperm;
     });
     deleteNote('Notes/test.md');
-    expect(mockFs.copyFileSync).toHaveBeenCalledWith('/np/Notes/test.md', '/np/@Trash/test.md');
+    expect(mockFs.copyFileSync).toHaveBeenCalledWith('/np/Notes/test.md', '/np/Notes/@Trash/test.md');
     expect(mockFs.unlinkSync).toHaveBeenCalledWith('/np/Notes/test.md');
   });
 
@@ -375,7 +375,7 @@ describe('deleteNote', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
-      if (s === '/np/@Trash') return true;
+      if (s === '/np/Notes/@Trash') return true;
       return false;
     });
     const exdev = Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
@@ -518,19 +518,19 @@ describe('previewRestoreLocalNoteFromTrash', () => {
   it('returns preview for restoring from trash', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
-      if (s === '/np/@Trash/test.md') return true;
+      if (s === '/np/Notes/@Trash/test.md') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
 
-    const result = previewRestoreLocalNoteFromTrash('@Trash/test.md', 'Notes');
-    expect(result.fromFilename).toBe(path.join('@Trash', 'test.md'));
+    const result = previewRestoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes');
+    expect(result.fromFilename).toBe(path.join('Notes', '@Trash', 'test.md'));
     expect(result.toFilename).toBe(path.join('Notes', 'test.md'));
   });
 
   it('throws if source not found', () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => previewRestoreLocalNoteFromTrash('@Trash/nope.md', 'Notes')).toThrow(
+    expect(() => previewRestoreLocalNoteFromTrash('Notes/@Trash/nope.md', 'Notes')).toThrow(
       'Note not found',
     );
   });
@@ -546,12 +546,12 @@ describe('previewRestoreLocalNoteFromTrash', () => {
   it('throws if conflict at destination', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
-      if (s === '/np/@Trash/test.md') return true;
+      if (s === '/np/Notes/@Trash/test.md') return true;
       if (s === '/np/Notes/test.md') return true; // conflict
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewRestoreLocalNoteFromTrash('@Trash/test.md', 'Notes')).toThrow(
+    expect(() => previewRestoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes')).toThrow(
       'already exists at destination',
     );
   });
@@ -564,13 +564,13 @@ describe('restoreLocalNoteFromTrash', () => {
   it('restores note from trash to destination', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
-      if (s === '/np/@Trash/test.md') return true;
+      if (s === '/np/Notes/@Trash/test.md') return true;
       if (s === '/np/Notes') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
 
-    const result = restoreLocalNoteFromTrash('@Trash/test.md', 'Notes');
+    const result = restoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes');
     expect(result).toBe(path.join('Notes', 'test.md'));
     expect(mockFs.renameSync).toHaveBeenCalled();
   });
@@ -765,13 +765,13 @@ describe('deleteLocalFolder', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
-      if (s === '/np/@Trash') return true;
-      if (s === '/np/@Trash/Old') return false;
+      if (s === '/np/Notes/@Trash') return true;
+      if (s === '/np/Notes/@Trash/Old') return false;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
     const result = deleteLocalFolder('Old');
-    expect(result).toBe(path.join('@Trash', 'Old'));
+    expect(result).toBe(path.join('Notes', '@Trash', 'Old'));
     expect(mockFs.renameSync).toHaveBeenCalled();
   });
 
@@ -779,26 +779,26 @@ describe('deleteLocalFolder', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
-      if (s === '/np/@Trash') return true;
-      if (s === '/np/@Trash/Old') return true; // taken
-      if (s === '/np/@Trash/Old-1') return false; // free
+      if (s === '/np/Notes/@Trash') return true;
+      if (s === '/np/Notes/@Trash/Old') return true; // taken
+      if (s === '/np/Notes/@Trash/Old-1') return false; // free
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
     const result = deleteLocalFolder('Old');
-    expect(result).toBe(path.join('@Trash', 'Old-1'));
+    expect(result).toBe(path.join('Notes', '@Trash', 'Old-1'));
   });
 
   it('creates @Trash if it does not exist', () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
-      if (s === '/np/@Trash') return false; // needs creation
+      if (s === '/np/Notes/@Trash') return false; // needs creation
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
     deleteLocalFolder('Old');
-    expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/@Trash', { recursive: true });
+    expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/Notes/@Trash', { recursive: true });
   });
 });
 

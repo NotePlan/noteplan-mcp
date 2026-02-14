@@ -19,6 +19,25 @@ export interface InsertOptions {
 }
 
 /**
+ * Return the number of lines occupied by frontmatter (including both `---`
+ * delimiters).  Returns 0 when the note has no valid frontmatter.
+ * This is used to offset user-facing line numbers so that line 1 always
+ * refers to the first content line after frontmatter.
+ */
+export function getFrontmatterLineCount(content: string): number {
+  const parsed = parseNoteContent(content);
+  if (!parsed.hasFrontmatter) return 0;
+  const lines = content.split('\n');
+  // Find closing --- index
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i]?.trim() === '---') {
+      return i + 1; // include the closing ---
+    }
+  }
+  return 0;
+}
+
+/**
  * Parse a note's content into frontmatter and body
  */
 export function parseNoteContent(content: string): ParsedNote {
@@ -238,7 +257,9 @@ export function insertContentAtPosition(
       if (line === undefined || line < 1) {
         throw new Error('Valid line number is required for at-line position');
       }
-      const lineIndex = line - 1; // Convert 1-indexed to 0-indexed
+      // Offset past frontmatter so line 1 = first content line
+      const fmOffset = getFrontmatterLineCount(content);
+      const lineIndex = fmOffset + line - 1; // Convert 1-indexed to 0-indexed, offset past FM
       // Ensure we have enough lines
       while (lines.length <= lineIndex) {
         lines.push('');
@@ -300,7 +321,9 @@ export function insertContentAtPosition(
 }
 
 /**
- * Delete lines from content (1-indexed, inclusive)
+ * Delete lines from content (1-indexed, inclusive).
+ * Line numbers are relative to content after frontmatter — line 1 is the
+ * first content line, frontmatter cannot be deleted via this function.
  */
 export function deleteLines(content: string, startLine: number, endLine: number): string {
   if (startLine < 1 || endLine < startLine) {
@@ -308,14 +331,16 @@ export function deleteLines(content: string, startLine: number, endLine: number)
   }
 
   const lines = content.split('\n');
+  const fmOffset = getFrontmatterLineCount(content);
+  const contentLineCount = lines.length - fmOffset;
 
-  if (startLine > lines.length) {
-    throw new Error(`Start line ${startLine} exceeds content length (${lines.length} lines)`);
+  if (startLine > contentLineCount) {
+    throw new Error(`Start line ${startLine} exceeds content length (${contentLineCount} lines)`);
   }
 
-  // Convert to 0-indexed
-  const startIndex = startLine - 1;
-  const endIndex = Math.min(endLine, lines.length);
+  // Convert to 0-indexed, offset past frontmatter
+  const startIndex = fmOffset + startLine - 1;
+  const endIndex = Math.min(fmOffset + endLine, lines.length);
 
   // Remove the lines
   lines.splice(startIndex, endIndex - startIndex);

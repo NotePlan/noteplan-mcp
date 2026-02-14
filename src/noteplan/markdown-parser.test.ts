@@ -25,6 +25,7 @@ import {
   extractHeadings,
   parseParagraphLine,
   buildParagraphLine,
+  stripRawMarkers,
   filterTasksByStatus,
 } from './markdown-parser.js';
 
@@ -405,6 +406,82 @@ describe('parseParagraphLine', () => {
   it('correct indentLevel for space-indented items (2 spaces = 1 level)', () => {
     const result = parseParagraphLine('    * [ ] nested', 1, false);
     expect(result.indentLevel).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stripRawMarkers
+// ---------------------------------------------------------------------------
+describe('stripRawMarkers', () => {
+  it('strips "- [ ] " prefix', () => {
+    expect(stripRawMarkers('- [ ] Buy groceries')).toBe('Buy groceries');
+  });
+
+  it('strips "* [ ] " prefix', () => {
+    expect(stripRawMarkers('* [ ] Buy groceries')).toBe('Buy groceries');
+  });
+
+  it('strips "* [x] " prefix', () => {
+    expect(stripRawMarkers('* [x] Done thing')).toBe('Done thing');
+  });
+
+  it('strips "- [>] " prefix (scheduled)', () => {
+    expect(stripRawMarkers('- [>] Scheduled task')).toBe('Scheduled task');
+  });
+
+  it('strips "- [-] " prefix (cancelled)', () => {
+    expect(stripRawMarkers('- [-] Cancelled task')).toBe('Cancelled task');
+  });
+
+  it('strips plain "* " marker without checkbox', () => {
+    expect(stripRawMarkers('* Plain task')).toBe('Plain task');
+  });
+
+  it('strips plain "- " marker without checkbox', () => {
+    expect(stripRawMarkers('- Bullet item')).toBe('Bullet item');
+  });
+
+  it('strips "+ [ ] " checklist prefix', () => {
+    expect(stripRawMarkers('+ [ ] Checklist item')).toBe('Checklist item');
+  });
+
+  it('leaves plain text unchanged', () => {
+    expect(stripRawMarkers('Buy groceries')).toBe('Buy groceries');
+  });
+
+  it('leaves text with dashes in the middle unchanged', () => {
+    expect(stripRawMarkers('Buy - groceries')).toBe('Buy - groceries');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildParagraphLine — strips raw markers from LLM content
+// ---------------------------------------------------------------------------
+describe('buildParagraphLine strips raw markers', () => {
+  beforeEach(() => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: false,
+      defaultTodoCharacter: '*',
+      useCheckbox: true,
+      taskPrefix: '* [ ] ',
+    });
+  });
+
+  it('strips "- [ ] " when type=task', () => {
+    expect(buildParagraphLine('- [ ] Buy groceries', 'task', { taskStatus: 'open' })).toBe('* [ ] Buy groceries');
+  });
+
+  it('strips "* [x] " when type=task done', () => {
+    expect(buildParagraphLine('* [x] Done thing', 'task', { taskStatus: 'done' })).toBe('* [x] Done thing');
+  });
+
+  it('strips "- [ ] " when type=bullet', () => {
+    expect(buildParagraphLine('- [ ] Some item', 'bullet')).toBe('- Some item');
+  });
+
+  it('strips "* " when type=checklist', () => {
+    expect(buildParagraphLine('* Already marked', 'checklist', { taskStatus: 'open' })).toBe('+ [ ] Already marked');
   });
 });
 

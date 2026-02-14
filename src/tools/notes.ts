@@ -9,7 +9,7 @@ import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
 } from '../utils/confirmation-tokens.js';
-import { parseParagraphLine, buildParagraphLine } from '../noteplan/markdown-parser.js';
+import { parseParagraphLine, buildParagraphLine, stripRawMarkers } from '../noteplan/markdown-parser.js';
 import { ParagraphType, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
@@ -462,6 +462,8 @@ export const moveNoteSchema = z.object({
 export const renameNoteFileSchema = z.object({
   id: z.string().optional().describe('Note ID (preferred for TeamSpace notes)'),
   filename: z.string().optional().describe('Filename/path of the note to rename'),
+  title: z.string().optional().describe('Note title to find and rename (fuzzy matched)'),
+  query: z.string().optional().describe('Fuzzy search query to find the note'),
   space: z.string().optional().describe('Space name or ID to search in'),
   newFilename: z
     .string()
@@ -485,11 +487,11 @@ export const renameNoteFileSchema = z.object({
     .optional()
     .describe('Confirmation token issued by dryRun for rename execution'),
 }).superRefine((input, ctx) => {
-  if (!input.id && !input.filename) {
+  if (!input.id && !input.filename && !input.title && !input.query) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Provide one note reference: id or filename',
-      path: ['filename'],
+      message: 'Provide one note reference: id, filename, title, or query',
+      path: ['title'],
     });
   }
 });
@@ -1149,13 +1151,17 @@ export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
 
 export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
   try {
-    // Resolve the note to determine if it's local or space
-    const target = resolveNoteTarget(params.id, params.filename, params.space);
-    if (!target.note) {
-      return { success: false, error: 'Note not found' };
+    // Resolve the note — supports id, filename, title, or query
+    const resolved = resolveWritableNoteReference(params);
+    if (!resolved.note) {
+      return {
+        success: false,
+        error: resolved.error || 'Note not found',
+        candidates: resolved.candidates,
+      };
     }
 
-    const note = target.note;
+    const note = resolved.note;
 
     // Space note: rename title
     if (note.source === 'space') {
@@ -1224,15 +1230,17 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
     }
 
     // Local note: rename file
-    if (!params.newFilename) {
+    // Accept newTitle as an alias for newFilename — "rename the note" typically means changing the title
+    const effectiveNewFilename = params.newFilename || params.newTitle;
+    if (!effectiveNewFilename) {
       return {
         success: false,
-        error: 'newFilename is required for local notes (use newTitle for TeamSpace notes)',
+        error: 'newFilename or newTitle is required for local notes',
       };
     }
 
     const keepExtension = params.keepExtension ?? true;
-    const preview = store.previewRenameNoteFile(note.filename, params.newFilename, keepExtension);
+    const preview = store.previewRenameNoteFile(note.filename, effectiveNewFilename, keepExtension);
     const confirmationTarget = `${preview.fromFilename}=>${preview.toFilename}`;
 
     if (params.dryRun === true) {
@@ -1272,7 +1280,28 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
       };
     }
 
-    const renamed = store.renameNoteFile(note.filename, params.newFilename, keepExtension);
+    const renamed = store.renameNoteFile(note.filename, effectiveNewFilename, keepExtension);
+
+    // Also update the # Title heading in the note content if it matches the old title
+    const newTitle = params.newTitle || params.newFilename;
+    if (newTitle && renamed.note.content) {
+      const lines = renamed.note.content.split('\n');
+      const titleLineIndex = lines.findIndex((l) => /^#\s+/.test(l));
+      if (titleLineIndex !== -1) {
+        const oldHeadingTitle = lines[titleLineIndex].replace(/^#\s+/, '');
+        // Update heading if it matches the old note title (or old filename without extension)
+        const oldTitle = note.title || '';
+        const oldFilenameBase = note.filename.replace(/^.*\//, '').replace(/\.\w+$/, '');
+        if (oldHeadingTitle === oldTitle || oldHeadingTitle === oldFilenameBase) {
+          lines[titleLineIndex] = `# ${newTitle}`;
+          const writeTarget = getWritableIdentifier(renamed.note);
+          store.updateNote(writeTarget.identifier, lines.join('\n'), {
+            source: writeTarget.source,
+          });
+        }
+      }
+    }
+
     return {
       success: true,
       message: `Note renamed to ${renamed.toFilename}`,
@@ -1759,6 +1788,38 @@ export function insertContent(params: z.infer<typeof insertContentSchema>) {
       (params as { indentationStyle?: unknown }).indentationStyle
     );
     let contentToInsert = params.content;
+    // Auto-correct position when line number is provided but position is wrong
+    // Catches LLMs sending { position: "start", line: 5 } instead of { position: "at-line", line: 5 }
+    if (params.line !== undefined && params.position !== 'at-line') {
+      params.position = 'at-line';
+    }
+    // Auto-detect raw task/checklist markdown when type is not explicitly set
+    // Catches LLMs sending "- [ ] Buy groceries", "* [x] Done", "* Buy groceries", "+ Item" without proper type
+    if (!params.type && /^[\t ]*[*+\-]\s+/.test(contentToInsert)) {
+      // Determine type from the marker character
+      const markerMatch = contentToInsert.match(/^[\t ]*([*+\-])\s+/);
+      const markerChar = markerMatch?.[1];
+
+      if (markerChar === '+') {
+        params.type = 'checklist';
+      } else if (markerChar === '*') {
+        params.type = 'task';
+      } else if (markerChar === '-' && /^[\t ]*-\s+\[[ x\->]\]\s+/.test(contentToInsert)) {
+        // Dash with checkbox is clearly a task (plain "- text" could be a bullet, so only match with checkbox)
+        params.type = 'task';
+      }
+
+      // Detect status from the checkbox marker if present
+      if (params.type) {
+        const statusMatch = contentToInsert.match(/\[(.)\]/);
+        if (statusMatch) {
+          const marker = statusMatch[1];
+          if (marker === 'x') params.taskStatus = 'done';
+          else if (marker === '-') params.taskStatus = 'cancelled';
+          else if (marker === '>') params.taskStatus = 'scheduled';
+        }
+      }
+    }
     if (params.type) {
       contentToInsert = contentToInsert
         .split('\n')
@@ -1855,16 +1916,19 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
     const note = resolved.note;
 
     const allLines = note.content.split('\n');
-    const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, allLines.length));
+    // Line numbers are relative to content after frontmatter
+    const fmOffset = frontmatter.getFrontmatterLineCount(note.content);
+    const contentLineCount = allLines.length - fmOffset;
+    const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, contentLineCount));
     const boundedEndLine = toBoundedInt(
       params.endLine,
       boundedStartLine,
       boundedStartLine,
-      Math.max(boundedStartLine, allLines.length)
+      Math.max(boundedStartLine, contentLineCount)
     );
     const lineCountToDelete = boundedEndLine - boundedStartLine + 1;
-    const previewStartIndex = boundedStartLine - 1;
-    const previewEndIndexExclusive = boundedEndLine;
+    const previewStartIndex = fmOffset + boundedStartLine - 1;
+    const previewEndIndexExclusive = fmOffset + boundedEndLine;
     const deletedLinesPreview = allLines
       .slice(previewStartIndex, previewEndIndexExclusive)
       .slice(0, 20)
@@ -1950,12 +2014,14 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
 
     const lines = note.content.split('\n');
     const originalLineCount = lines.length;
-    const lineIndex = params.line - 1; // Convert to 0-indexed
+    // Offset past frontmatter so line 1 = first content line
+    const fmOffset = frontmatter.getFrontmatterLineCount(note.content);
+    const lineIndex = fmOffset + params.line - 1; // Convert to 0-indexed, skip FM
 
-    if (lineIndex < 0 || lineIndex >= lines.length) {
+    if (lineIndex < fmOffset || lineIndex >= lines.length) {
       return {
         success: false,
-        error: `Line ${params.line} does not exist (note has ${lines.length} lines)`,
+        error: `Line ${params.line} does not exist (note has ${lines.length - fmOffset} content lines)`,
       };
     }
 
@@ -2019,16 +2085,19 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
 
     const allLines = note.content.split('\n');
     const originalLineCount = allLines.length;
-    const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, originalLineCount));
+    // Line numbers are relative to content after frontmatter
+    const fmOffset = frontmatter.getFrontmatterLineCount(note.content);
+    const contentLineCount = originalLineCount - fmOffset;
+    const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, contentLineCount));
     const boundedEndLine = toBoundedInt(
       params.endLine,
       boundedStartLine,
       boundedStartLine,
-      Math.max(boundedStartLine, originalLineCount)
+      Math.max(boundedStartLine, contentLineCount)
     );
-    const startIndex = boundedStartLine - 1;
+    const startIndex = fmOffset + boundedStartLine - 1;
     const lineCountToReplace = boundedEndLine - boundedStartLine + 1;
-    const replacedText = allLines.slice(startIndex, boundedEndLine).join('\n');
+    const replacedText = allLines.slice(startIndex, fmOffset + boundedEndLine).join('\n');
     const indentationStyle = normalizeIndentationStyle(
       (params as { indentationStyle?: unknown }).indentationStyle
     );

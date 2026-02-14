@@ -81,16 +81,52 @@ function normalizeLocalFolderPath(folderPath: string, label = 'Folder path'): st
   return normalized;
 }
 
+/**
+ * Map common folder aliases to their actual NotePlan @ folder names.
+ * Only applies when the literal folder doesn't exist but the @ variant does.
+ * E.g. "Archive" → "@Archive" (if Notes/Archive doesn't exist but Notes/@Archive does)
+ */
+const FOLDER_ALIASES: Record<string, string> = {
+  archive: '@Archive',
+  trash: '@Trash',
+  templates: '@Templates',
+};
+
+function resolveAlias(segment: string, parentDir: string): string {
+  const alias = FOLDER_ALIASES[segment.toLowerCase()];
+  if (!alias) return segment;
+
+  const literalPath = path.join(parentDir, segment);
+  if (fs.existsSync(literalPath)) return segment; // user has a literal folder, use it
+
+  const aliasPath = path.join(parentDir, alias);
+  if (fs.existsSync(aliasPath)) return alias; // @ folder exists, use it
+
+  return segment; // neither exists, keep as-is
+}
+
 function normalizeFolderInput(folderPath: string): string {
   let normalized = folderPath.trim().replace(/\\/g, '/');
   normalized = normalized.replace(/^\/+|\/+$/g, '');
   if (!normalized) {
     throw new Error('Destination folder is required');
   }
-  if (!normalized.startsWith('Notes/')) {
-    normalized = normalized === 'Notes' ? normalized : `Notes/${normalized}`;
+  // Strip leading "Notes/" prefix before resolving aliases
+  let withoutPrefix = normalized;
+  if (withoutPrefix.startsWith('Notes/')) {
+    withoutPrefix = withoutPrefix.slice('Notes/'.length);
+  } else if (withoutPrefix === 'Notes') {
+    return 'Notes';
   }
-  return normalized;
+  // Resolve aliases segment by segment, checking filesystem at each level
+  const rootDir = getNotesPath();
+  const segments = withoutPrefix.split('/');
+  let currentDir = rootDir;
+  for (let i = 0; i < segments.length; i++) {
+    segments[i] = resolveAlias(segments[i], currentDir);
+    currentDir = path.join(currentDir, segments[i]);
+  }
+  return `Notes/${segments.join('/')}`;
 }
 
 function normalizeMoveDestinationFolderInput(
@@ -375,8 +411,8 @@ export function deleteNote(filePath: string): string {
     throw new Error(`Note not found: ${filePath}`);
   }
 
-  // Move to @Trash folder
-  const trashPath = path.join(getNotePlanPath(), '@Trash');
+  // Move to Notes/@Trash (matching NotePlan's own moveToTrash behavior)
+  const trashPath = path.join(getNotesPath(), '@Trash');
   if (!fs.existsSync(trashPath)) {
     fs.mkdirSync(trashPath, { recursive: true });
   }
@@ -467,7 +503,7 @@ export function previewRestoreLocalNoteFromTrash(
     throw new Error(`Not a note file: ${filePath}`);
   }
 
-  const trashRoot = path.join(getNotePlanPath(), '@Trash');
+  const trashRoot = path.join(getNotesPath(), '@Trash');
   ensurePathInsideRoot(fullPath, trashRoot, 'Source note');
 
   const normalizedDestinationFolder = normalizeFolderInput(destinationFolder);
@@ -611,8 +647,8 @@ export function deleteLocalFolder(folderPath: string): string {
   const fullPath = path.join(getNotesPath(), normalized);
   const folderName = path.basename(fullPath);
 
-  // Move to @Trash folder
-  const trashPath = path.join(getNotePlanPath(), '@Trash');
+  // Move to Notes/@Trash (matching NotePlan's own moveToTrash behavior)
+  const trashPath = path.join(getNotesPath(), '@Trash');
   if (!fs.existsSync(trashPath)) {
     fs.mkdirSync(trashPath, { recursive: true });
   }

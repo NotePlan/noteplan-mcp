@@ -310,16 +310,18 @@ export function addTask(
     indentLevel?: number;
   }
 ): string {
+  // Strip any raw task markers the LLM may have included (e.g. "- [ ] Buy groceries" → "Buy groceries")
+  const cleanedContent = stripRawMarkers(taskContent);
   let taskLine: string;
   if (options && (options.status !== undefined || options.priority !== undefined || options.indentLevel !== undefined)) {
-    taskLine = buildParagraphLine(taskContent, 'task', {
+    taskLine = buildParagraphLine(cleanedContent, 'task', {
       taskStatus: options.status ?? 'open',
       priority: options.priority,
       indentLevel: options.indentLevel,
     });
   } else {
     const taskPrefix = getTaskPrefix();
-    taskLine = `${taskPrefix}${taskContent}`;
+    taskLine = `${taskPrefix}${cleanedContent}`;
   }
 
   return insertContentAtPosition(content, taskLine, { position, heading });
@@ -495,6 +497,15 @@ export function parseParagraphLine(line: string, lineIndex: number, isFirstLine:
  * Build a properly formatted markdown line from structured input.
  * Uses user preferences for task marker style.
  */
+/**
+ * Strip raw task/checklist/bullet markers that an LLM may have included in content.
+ * E.g. "- [ ] Buy groceries" → "Buy groceries", "* [x] Done thing" → "Done thing"
+ */
+export function stripRawMarkers(content: string): string {
+  // Strip: optional leading whitespace/tabs, then marker (* - +), optional checkbox ([ ] [x] [-] [>]), then the actual content
+  return content.replace(/^[\t ]*[*\-+]\s+(?:\[[ x\->]\]\s+)?/, '');
+}
+
 export function buildParagraphLine(
   content: string,
   type: ParagraphType,
@@ -517,24 +528,26 @@ export function buildParagraphLine(
       return `${'#'.repeat(level)} ${content}`;
     }
     case 'task': {
+      const cleaned = stripRawMarkers(content);
       const marker = config.defaultTodoCharacter;
       const status = options?.taskStatus ?? 'open';
       const wantCheckbox = options?.hasCheckbox ?? config.useCheckbox;
       if (wantCheckbox || status !== 'open') {
-        return `${indent}${marker} ${STATUS_TO_MARKER[status]} ${content}${prioritySuffix}`;
+        return `${indent}${marker} ${STATUS_TO_MARKER[status]} ${cleaned}${prioritySuffix}`;
       }
-      return `${indent}${marker} ${content}${prioritySuffix}`;
+      return `${indent}${marker} ${cleaned}${prioritySuffix}`;
     }
     case 'checklist': {
+      const cleaned = stripRawMarkers(content);
       const status = options?.taskStatus ?? 'open';
       const wantCheckbox = options?.hasCheckbox ?? true;
       if (wantCheckbox || status !== 'open') {
-        return `${indent}+ ${STATUS_TO_MARKER[status]} ${content}${prioritySuffix}`;
+        return `${indent}+ ${STATUS_TO_MARKER[status]} ${cleaned}${prioritySuffix}`;
       }
-      return `${indent}+ ${content}${prioritySuffix}`;
+      return `${indent}+ ${cleaned}${prioritySuffix}`;
     }
     case 'bullet':
-      return `${indent}- ${content}`;
+      return `${indent}- ${stripRawMarkers(content)}`;
     case 'quote':
       return `> ${content}`;
     case 'separator':

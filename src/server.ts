@@ -1096,7 +1096,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_manage_note',
           description:
-            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title). Set noteType="template" to create in @Templates with proper frontmatter. After creating a template, verify it with noteplan_templates(action: "render").\n- update: Replace note content (requires filename, content, fullReplace + confirmationToken)\n- delete/move/restore/rename: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires filename + key)',
+            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title). Set noteType="template" to create in @Templates with proper frontmatter. After creating a template, verify it with noteplan_templates(action: "render").\n- update: Replace note content (requires filename, content, fullReplace + confirmationToken)\n- delete/move/restore: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- rename: Rename a note (accepts id, filename, title, or query to find the note + newTitle for the new name + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires filename + key)',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1115,7 +1115,11 @@ export function createServer(): Server {
               },
               title: {
                 type: 'string',
-                description: 'Note title — required for create',
+                description: 'Note title — required for create. Also used by rename to find the note by title (fuzzy matched).',
+              },
+              query: {
+                type: 'string',
+                description: 'Fuzzy search query to find the note — used by rename',
               },
               content: {
                 type: 'string',
@@ -1165,11 +1169,11 @@ export function createServer(): Server {
               },
               newFilename: {
                 type: 'string',
-                description: 'New filename for local notes — used by rename',
+                description: 'New filename for local notes — used by rename. Prefer newTitle instead.',
               },
               newTitle: {
                 type: 'string',
-                description: 'New title for TeamSpace notes — used by rename',
+                description: 'New title for the note — used by rename. Works for both local and TeamSpace notes. For local notes this renames the file and updates the # heading.',
               },
               keepExtension: {
                 type: 'boolean',
@@ -1190,7 +1194,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_edit_content',
           description:
-            'Edit note content. IMPORTANT: action values use snake_case.\n\nValid actions (exactly these strings):\n- "insert": Insert at position. Combine any position with heading="Section Name" to scope insertion to that section. position="start" + heading inserts right after the heading. position="end" + heading appends at end of the heading\'s section. position="after-heading" inserts right after a heading. position="in-section" appends at end of a heading\'s section. position="start" (no heading) inserts after frontmatter. position="at-line" inserts at a specific line number. position="end" (no heading) appends to note.\n- "append": Shorthand for insert at end. Supports heading="Section Name" to append at end of that section. Use date="today" to append to today\'s daily note.\n- "delete_lines": Delete a line range. Requires startLine + endLine (1-indexed). Use dryRun=true first, then confirmationToken to execute.\n- "edit_line": Edit a single line. Requires line (1-indexed) + content. Set content="" to clear a line.\n- "replace_lines": Replace a line range. Requires startLine + endLine + content. Use dryRun=true first, then confirmationToken to execute.\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet. Always use tab characters for indentation.\n\nIMPORTANT — Adding tasks: ALWAYS use noteplan_paragraphs(action="add") to add tasks. It auto-formats tasks to match the user\'s configured task marker style. Do NOT write raw task markdown (like "* [ ] text" or "- [ ] text") via insert/append — the marker format varies per user. For inserting tasks at a specific position, use type="task" with the insert action — this also auto-formats.\n\nSchedule tasks with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id).\n\nUse scheduleDate to auto-append >YYYY-MM-DD to content.',
+            'Edit note content. IMPORTANT: action values use snake_case.\n\nValid actions (exactly these strings):\n- "insert": Insert at position. Combine any position with heading="Section Name" to scope insertion to that section. position="start" + heading inserts right after the heading. position="end" + heading appends at end of the heading\'s section. position="after-heading" inserts right after a heading. position="in-section" appends at end of a heading\'s section. position="start" (no heading) inserts after frontmatter. position="at-line" inserts at a specific line number. position="end" (no heading) appends to note.\n- "append": Shorthand for insert at end. Supports heading="Section Name" to append at end of that section. Use date="today" to append to today\'s daily note.\n- "delete_lines": Delete a line range. Requires startLine + endLine (1-indexed). Use dryRun=true first, then confirmationToken to execute.\n- "edit_line": Edit a single line. Requires line (1-indexed) + content. Set content="" to clear a line.\n- "replace_lines": Replace a line range. Requires startLine + endLine + content. Use dryRun=true first, then confirmationToken to execute.\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet. Always use tab characters for indentation.\n\nAdding tasks: When inserting a task, set type="task" and pass only the task text as content (e.g. content="Buy groceries", type="task"). Do NOT include raw markers like "* [ ]" or "- [ ]" in content — the type parameter handles formatting to match the user\'s configured style. For checklists use type="checklist". For task lifecycle (complete, update, search), use noteplan_paragraphs instead.\n\nSchedule tasks with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id).\n\nUse scheduleDate to auto-append >YYYY-MM-DD to content.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1225,7 +1229,7 @@ export function createServer(): Server {
               },
               content: {
                 type: 'string',
-                description: 'Content to insert/append/replace, or new line content for edit_line',
+                description: 'Content to insert/append/replace, or new line content for edit_line. NEVER include task markers like "- [ ]", "* [ ]", or "* " — instead set type="task" and pass only the task text (e.g. content="Buy groceries", NOT content="- [ ] Buy groceries").',
               },
               position: {
                 type: 'string',
@@ -1298,7 +1302,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_paragraphs',
           description:
-            'Paragraph and task operations on notes.\n\nParagraph actions:\n- get: Get note lines with metadata (requires filename). Returns line, lineIndex, content, type, etc.\n- search: Search for matching lines in a note (requires query + note ref via id/filename/title/date)\n\nTask actions:\n- search_global: Search tasks across all notes (requires query, supports "*" wildcard)\n- add: Add a task (requires target + content). Target is a date ("today", "tomorrow", "YYYY-MM-DD") for daily notes or a filename for project notes. Task marker format auto-matches user settings — never write raw markers like "* [ ]". Position+heading combos: position="start"+heading inserts right after the heading, position="end"+heading appends at end of that section, position="after-heading" inserts right after heading, position="in-section" appends at end of section. Default position is "end" (bottom of note). Use scheduleDate for >YYYY-MM-DD, [[Note Name]] to link, #tag for tags, @person for mentions.\n- complete: Mark task done (requires filename + lineIndex or line)\n- update: Update task content/status (requires filename + lineIndex or line)',
+            'Task lifecycle and paragraph inspection.\n\nParagraph actions:\n- get: Get note lines with metadata (requires filename). Returns line, lineIndex, content, type, etc.\n- search: Search for matching lines in a note (requires query + note ref via id/filename/title/date)\n\nTask actions:\n- search_global: Search tasks across all notes (requires query, supports "*" wildcard)\n- add: Add a task (requires target + content). Target is a date ("today", "tomorrow", "YYYY-MM-DD") for daily notes or a filename for project notes. Pass only the task text as content — formatting auto-matches user settings. Position+heading combos: position="start"+heading inserts right after the heading, position="end"+heading appends at end of that section, position="after-heading" inserts right after heading, position="in-section" appends at end of section. Default position is "end" (bottom of note). Use scheduleDate for >YYYY-MM-DD, [[Note Name]] to link, #tag for tags, @person for mentions.\n- complete: Mark task done (requires filename + lineIndex or line)\n- update: Update task content/status (requires filename + lineIndex or line)',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1968,66 +1972,69 @@ export function createServer(): Server {
     );
   }
 
-  if (advancedFeaturesEnabled) {
-    toolDefinitions.push(
-      {
-        name: 'noteplan_ui',
-        description:
-          'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows\n- backup: Create a full backup of all notes, calendars, themes, filters, and plugin data. Old backups are pruned automatically.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            action: {
-              type: 'string',
-              enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows', 'backup'],
-              description: 'Action: open_note | open_today | search | run_plugin | open_view | toggle_sidebar | close_plugin_window | list_plugin_windows | backup',
-            },
-            title: {
-              type: 'string',
-              description: 'Note title — used by open_note; window title — used by close_plugin_window',
-            },
-            filename: {
-              type: 'string',
-              description: 'Filename — used by open_note',
-            },
-            inNewWindow: {
-              type: 'boolean',
-              description: 'Open in new window — used by open_note',
-            },
-            inSplitView: {
-              type: 'boolean',
-              description: 'Open in split view — used by open_note',
-            },
-            query: {
-              type: 'string',
-              description: 'Search text — used by search',
-            },
-            pluginId: {
-              type: 'string',
-              description: 'Plugin ID — used by run_plugin',
-            },
-            command: {
-              type: 'string',
-              description: 'Command name — used by run_plugin',
-            },
-            arguments: {
-              type: 'string',
-              description: 'JSON arguments string — used by run_plugin',
-            },
-            name: {
-              type: 'string',
-              description: 'View name — used by open_view',
-            },
-            windowID: {
-              type: 'string',
-              description: 'Window ID — used by close_plugin_window',
-            },
-          },
-          required: ['action'],
+  // noteplan_ui is always available — basic AppleScript commands work on all NotePlan versions
+  toolDefinitions.push({
+    name: 'noteplan_ui',
+    description:
+      'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows\n- backup: Create a full backup of all notes, calendars, themes, filters, and plugin data. Old backups are pruned automatically.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows', 'backup'],
+          description: 'Action: open_note | open_today | search | run_plugin | open_view | toggle_sidebar | close_plugin_window | list_plugin_windows | backup',
+        },
+        title: {
+          type: 'string',
+          description: 'Note title — used by open_note; window title — used by close_plugin_window',
+        },
+        filename: {
+          type: 'string',
+          description: 'Filename — used by open_note',
+        },
+        inNewWindow: {
+          type: 'boolean',
+          description: 'Open in new window — used by open_note',
+        },
+        inSplitView: {
+          type: 'boolean',
+          description: 'Open in split view — used by open_note',
+        },
+        query: {
+          type: 'string',
+          description: 'Search text — used by search',
+        },
+        pluginId: {
+          type: 'string',
+          description: 'Plugin ID — used by run_plugin',
+        },
+        command: {
+          type: 'string',
+          description: 'Command name — used by run_plugin',
+        },
+        arguments: {
+          type: 'string',
+          description: 'JSON arguments string — used by run_plugin',
+        },
+        name: {
+          type: 'string',
+          description: 'View name — used by open_view',
+        },
+        windowID: {
+          type: 'string',
+          description: 'Window ID — used by close_plugin_window',
         },
       },
-      {
-        name: 'noteplan_plugins',
+      required: ['action'],
+    },
+  });
+
+  // Always register all tools — if NotePlan is too old for a specific action,
+  // the action handler returns a helpful upgrade message instead of hiding the tool entirely.
+  toolDefinitions.push(
+    {
+      name: 'noteplan_plugins',
         description:
           'Plugin management: list, create, delete, install, read source/log, update HTML, screenshot.\n\nActions:\n- list: List installed plugins\n- list_available: List plugins from online repository\n- create: Create plugin with HTML view (requires pluginId, pluginName, commandName, html)\n- delete: Delete plugin (requires pluginId + confirmationToken)\n- install: Install from repository (requires pluginId)\n- log: Read plugin console log (requires pluginId)\n- source: Read plugin source (requires pluginId)\n- update_html: Apply find/replace patches (requires pluginId + patches)\n- screenshot: Capture plugin WebView screenshot (requires pluginId)',
         inputSchema: {
@@ -2235,8 +2242,7 @@ export function createServer(): Server {
           required: ['action'],
         },
       },
-    );
-  }
+  );
 
   const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
     ...tool,
@@ -2369,6 +2375,10 @@ export function createServer(): Server {
           if (a.scheduleDate && a.content) {
             a.content = appendScheduleDate(a.content, a.scheduleDate);
           }
+          // Derive `target` for addTaskToNote from date/filename when not provided
+          if (!a.target && (a.date || a.filename)) {
+            a.target = a.date || a.filename;
+          }
           const action = a?.action;
           switch (action) {
             case 'get': result = noteTools.getParagraphs(a); break;
@@ -2470,7 +2480,39 @@ export function createServer(): Server {
               }
               break;
             }
-            default: throw new Error(`Unknown action: ${action}`);
+            default: {
+              // Help the LLM recover from common mistakes (camelCase, missing underscore, etc.)
+              const UI_ACTION_ALIASES: Record<string, string> = {
+                open: 'open_note', opennote: 'open_note', open_notes: 'open_note',
+                opentoday: 'open_today', today: 'open_today',
+                openview: 'open_view', view: 'open_view',
+                runplugin: 'run_plugin', plugin: 'run_plugin',
+                togglesidebar: 'toggle_sidebar', sidebar: 'toggle_sidebar',
+                closepluginwindow: 'close_plugin_window',
+                listpluginwindows: 'list_plugin_windows',
+                navigate: 'open_note', show: 'open_note', select: 'open_note',
+              };
+              const normalized = (action || '').toLowerCase().replace(/[\s_-]/g, '');
+              const resolved = UI_ACTION_ALIASES[normalized];
+              if (resolved) {
+                (args as any).action = resolved;
+                // Re-dispatch with corrected action
+                switch (resolved) {
+                  case 'open_note': result = uiTools.openNote(args as any); break;
+                  case 'open_today': result = uiTools.openToday(args as any); break;
+                  case 'search': result = uiTools.searchNotes(args as any); break;
+                  case 'run_plugin': result = uiTools.runPlugin(args as any); break;
+                  case 'open_view': result = uiTools.openView(args as any); break;
+                  case 'toggle_sidebar': result = uiTools.toggleSidebar(args as any); break;
+                  case 'close_plugin_window': result = uiTools.closePluginWindow(args as any); break;
+                  case 'list_plugin_windows': result = uiTools.listPluginWindows(args as any); break;
+                  case 'backup': result = uiTools.createBackup(args as any); break;
+                  default: throw new Error(`Unknown action: ${action}. Valid actions: open_note, open_today, search, run_plugin, open_view, toggle_sidebar, close_plugin_window, list_plugin_windows, backup`);
+                }
+              } else {
+                throw new Error(`Unknown action: "${action}". Valid actions: open_note, open_today, search, run_plugin, open_view, toggle_sidebar, close_plugin_window, list_plugin_windows, backup`);
+              }
+            }
           }
           break;
         }
