@@ -38,6 +38,16 @@ function toOptionalBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+/**
+ * Coerce a value to boolean — handles MCP delivering boolean params as strings.
+ * Returns true for boolean true or string "true".
+ */
+function isTrueBool(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value.trim().toLowerCase() === 'true';
+  return false;
+}
+
 function confirmationFailureMessage(toolName: string, reason: string): string {
   const refreshHint = `Call ${toolName} with dryRun=true to get a new confirmationToken.`;
   if (reason === 'missing') {
@@ -864,7 +874,7 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
       };
     }
 
-    if (params.dryRun === true) {
+    if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_update_note',
         target: params.filename,
@@ -934,7 +944,7 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
       };
     }
 
-    if (params.dryRun === true) {
+    if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_delete_note',
         target: target.identifier,
@@ -1005,7 +1015,7 @@ export function moveNote(params: z.infer<typeof moveNoteSchema>) {
     const confirmationTarget =
       `${preview.fromFilename}=>${preview.toFilename}::${preview.destinationParentId ?? preview.destinationFolder}`;
 
-    if (params.dryRun === true) {
+    if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_move_note',
         target: confirmationTarget,
@@ -1084,7 +1094,7 @@ export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
     const preview = store.previewRestoreNote(target.identifier, params.destinationFolder);
     const confirmationTarget = `${preview.fromIdentifier}=>${preview.toIdentifier}`;
 
-    if (params.dryRun === true) {
+    if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_restore_note',
         target: confirmationTarget,
@@ -1174,7 +1184,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
       const writeId = note.id || note.filename;
       const confirmationTarget = `${note.title}=>${params.newTitle}`;
 
-      if (params.dryRun === true) {
+      if (isTrueBool(params.dryRun)) {
         const token = issueConfirmationToken({
           tool: 'noteplan_rename_note_file',
           target: confirmationTarget,
@@ -1243,7 +1253,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
     const preview = store.previewRenameNoteFile(note.filename, effectiveNewFilename, keepExtension);
     const confirmationTarget = `${preview.fromFilename}=>${preview.toFilename}`;
 
-    if (params.dryRun === true) {
+    if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_rename_note_file',
         target: confirmationTarget,
@@ -1944,7 +1954,7 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
         : undefined;
 
     const confirmTarget = `${note.filename}:${boundedStartLine}-${boundedEndLine}`;
-    if (params.dryRun === true) {
+    if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_delete_lines',
         target: confirmTarget,
@@ -2016,7 +2026,7 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
     const originalLineCount = lines.length;
     // Offset past frontmatter so line 1 = first content line
     const fmOffset = frontmatter.getFrontmatterLineCount(note.content);
-    const lineIndex = fmOffset + params.line - 1; // Convert to 0-indexed, skip FM
+    const lineIndex = fmOffset + Number(params.line) - 1; // Convert to 0-indexed, skip FM
 
     if (lineIndex < fmOffset || lineIndex >= lines.length) {
       return {
@@ -2128,7 +2138,7 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
     }
 
     const target = `${note.filename}:${boundedStartLine}-${boundedEndLine}:${replacementLines.length}:${normalized.content.length}`;
-    if (params.dryRun === true) {
+    if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_replace_lines',
         target,

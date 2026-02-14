@@ -51,8 +51,11 @@ function resolveTaskLineIndex(input: {
   lineIndex?: number;
   line?: number;
 }): { ok: true; lineIndex: number } | { ok: false; error: string } {
-  const hasLineIndex = typeof input.lineIndex === 'number' && Number.isFinite(input.lineIndex);
-  const hasLine = typeof input.line === 'number' && Number.isFinite(input.line);
+  // Coerce string→number since MCP may deliver numeric params as strings
+  const numLineIndex = input.lineIndex !== undefined && input.lineIndex !== null ? Number(input.lineIndex) : NaN;
+  const numLine = input.line !== undefined && input.line !== null ? Number(input.line) : NaN;
+  const hasLineIndex = Number.isFinite(numLineIndex);
+  const hasLine = Number.isFinite(numLine);
 
   if (!hasLineIndex && !hasLine) {
     return {
@@ -61,8 +64,8 @@ function resolveTaskLineIndex(input: {
     };
   }
 
-  const resolvedFromLine = hasLine ? Math.floor(input.line as number) - 1 : undefined;
-  const resolvedFromIndex = hasLineIndex ? Math.floor(input.lineIndex as number) : undefined;
+  const resolvedFromLine = hasLine ? Math.floor(numLine) - 1 : undefined;
+  const resolvedFromIndex = hasLineIndex ? Math.floor(numLineIndex) : undefined;
 
   if (resolvedFromLine !== undefined && resolvedFromLine < 0) {
     return {

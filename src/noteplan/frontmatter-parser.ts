@@ -259,7 +259,7 @@ export function insertContentAtPosition(
       }
       // Offset past frontmatter so line 1 = first content line
       const fmOffset = getFrontmatterLineCount(content);
-      const lineIndex = fmOffset + line - 1; // Convert 1-indexed to 0-indexed, offset past FM
+      const lineIndex = fmOffset + Number(line) - 1; // Convert 1-indexed to 0-indexed, offset past FM
       // Ensure we have enough lines
       while (lines.length <= lineIndex) {
         lines.push('');
