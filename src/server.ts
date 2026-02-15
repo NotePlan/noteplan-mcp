@@ -2419,7 +2419,7 @@ export function createServer(): Server {
           switch (action) {
             case 'get': result = noteTools.getParagraphs(a); break;
             case 'search': result = noteTools.searchParagraphs(a); break;
-            case 'search_global': result = taskTools.searchTasksGlobal(a); break;
+            case 'search_global': result = noteTools.searchParagraphsGlobal(a); break;
             case 'add': result = taskTools.addTaskToNote(a); break;
             case 'complete': result = taskTools.completeTask(a); break;
             case 'update': result = taskTools.updateTask(a); break;

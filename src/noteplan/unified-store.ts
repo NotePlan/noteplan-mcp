@@ -528,7 +528,7 @@ function scoreMetadataMatch(
   };
 }
 
-function normalizeFrontmatterScalar(value: string, caseSensitive: boolean): string {
+export function normalizeFrontmatterScalar(value: string, caseSensitive: boolean): string {
   let normalized = value.trim();
   const quoted =
     (normalized.startsWith('"') && normalized.endsWith('"')) ||
@@ -539,7 +539,7 @@ function normalizeFrontmatterScalar(value: string, caseSensitive: boolean): stri
   return caseSensitive ? normalized : normalized.toLowerCase();
 }
 
-function matchesFrontmatterProperties(
+export function matchesFrontmatterProperties(
   note: Note,
   propertyFilters: ReadonlyArray<readonly [string, string]>,
   caseSensitive: boolean

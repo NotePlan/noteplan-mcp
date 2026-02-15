@@ -2,7 +2,9 @@
 
 import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
+import { matchesFrontmatterProperties } from '../noteplan/unified-store.js';
 import { NoteType } from '../noteplan/types.js';
+import { parseFlexibleDateFilter, isDateInRange } from '../utils/date-filters.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -247,14 +249,43 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
       }
     }
 
-    const typed = (params.types?.length ?? 0) > 0
-      ? Array.from(uniqueByKey.values()).filter((note) =>
-          (params.types as Array<'calendar' | 'note' | 'trash'>).includes(note.type)
-        )
-      : Array.from(uniqueByKey.values());
+    let filtered = Array.from(uniqueByKey.values());
+
+    if ((params.types?.length ?? 0) > 0) {
+      filtered = filtered.filter((note) =>
+        (params.types as Array<'calendar' | 'note' | 'trash'>).includes(note.type)
+      );
+    }
+
+    // Apply propertyFilters (frontmatter matching)
+    if (params.propertyFilters && Object.keys(params.propertyFilters).length > 0) {
+      const filterEntries = Object.entries(params.propertyFilters) as ReadonlyArray<readonly [string, string]>;
+      const caseSensitive = params.propertyCaseSensitive ?? false;
+      filtered = filtered.filter((note) =>
+        matchesFrontmatterProperties(note, filterEntries, caseSensitive)
+      );
+    }
+
+    // Apply date filters
+    const modifiedAfter = params.modifiedAfter ? parseFlexibleDateFilter(params.modifiedAfter) : null;
+    const modifiedBefore = params.modifiedBefore ? parseFlexibleDateFilter(params.modifiedBefore) : null;
+    const createdAfter = params.createdAfter ? parseFlexibleDateFilter(params.createdAfter) : null;
+    const createdBefore = params.createdBefore ? parseFlexibleDateFilter(params.createdBefore) : null;
+    if (modifiedAfter || modifiedBefore || createdAfter || createdBefore) {
+      filtered = filtered.filter((note) => {
+        const modifiedOk = isDateInRange(note.modifiedAt, modifiedAfter, modifiedBefore);
+        const createdOk = isDateInRange(note.createdAt, createdAfter, createdBefore);
+        if ((modifiedAfter || modifiedBefore) && (createdAfter || createdBefore)) {
+          return modifiedOk && createdOk;
+        }
+        if (modifiedAfter || modifiedBefore) return modifiedOk;
+        if (createdAfter || createdBefore) return createdOk;
+        return true;
+      });
+    }
 
     const limit = toBoundedInt(params.limit, 20, 1, 200);
-    const page = typed.slice(0, limit);
+    const page = filtered.slice(0, limit);
 
     const response: Record<string, unknown> = {
       success: true,

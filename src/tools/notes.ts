@@ -10,7 +10,7 @@ import {
   validateAndConsumeConfirmationToken,
 } from '../utils/confirmation-tokens.js';
 import { parseParagraphLine, buildParagraphLine, stripRawMarkers } from '../noteplan/markdown-parser.js';
-import { ParagraphType, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
+import { NoteType, ParagraphType, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -2198,4 +2198,226 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
       error: error instanceof Error ? error.message : 'Failed to replace lines',
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// searchParagraphsGlobal — search ALL lines (including frontmatter) across notes
+// ---------------------------------------------------------------------------
+
+function normalizeType(value: unknown): NoteType | undefined {
+  if (typeof value !== 'string') return undefined;
+  const lower = value.trim().toLowerCase();
+  if (lower === 'calendar' || lower === 'note' || lower === 'trash') return lower;
+  return undefined;
+}
+
+function normalizeTypeList(values: unknown): NoteType[] | undefined {
+  if (!Array.isArray(values)) return undefined;
+  const unique = new Set<NoteType>();
+  for (const entry of values) {
+    const normalized = normalizeType(entry);
+    if (normalized) unique.add(normalized);
+  }
+  return unique.size > 0 ? Array.from(unique) : undefined;
+}
+
+function isPeriodicCalendarNote(note: { type: NoteType; date?: string }): boolean {
+  if (note.type !== 'calendar' || !note.date) return false;
+  return note.date.includes('-');
+}
+
+export const searchParagraphsGlobalSchema = z.object({
+  query: z.string().describe('Text to find across all notes (searches ALL lines including frontmatter)'),
+  caseSensitive: z.boolean().optional().default(false).describe('Case-sensitive match (default: false)'),
+  wholeWord: z.boolean().optional().default(false).describe('Require whole-word matches (default: false)'),
+  status: z
+    .enum(['open', 'done', 'cancelled', 'scheduled'])
+    .optional()
+    .describe('Filter results to only lines with this task status'),
+  contextLines: z.number().min(0).max(5).optional().default(1).describe('Context lines before/after each match'),
+  paragraphMaxChars: z
+    .number()
+    .min(50)
+    .max(5000)
+    .optional()
+    .default(600)
+    .describe('Maximum paragraph text chars per match'),
+  folder: z.string().optional().describe('Restrict to a specific folder path'),
+  space: z.string().optional().describe('Restrict to a specific space name or ID'),
+  noteQuery: z.string().optional().describe('Filter notes by title/filename/folder substring'),
+  noteTypes: z
+    .array(z.enum(['calendar', 'note', 'trash']))
+    .optional()
+    .describe('Restrict scanned notes by type'),
+  preferCalendar: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Prioritize calendar notes before maxNotes truncation'),
+  periodicOnly: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('When true, only scan periodic calendar notes (weekly/monthly/quarterly/yearly)'),
+  maxNotes: z.number().min(1).max(2000).optional().default(500).describe('Maximum notes to scan'),
+  limit: z.number().min(1).max(300).optional().default(30).describe('Maximum matches to return'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
+  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+});
+
+export function searchParagraphsGlobal(params: z.infer<typeof searchParagraphsGlobalSchema>) {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required',
+    };
+  }
+
+  const caseSensitive = params.caseSensitive ?? false;
+  const wholeWord = params.wholeWord ?? false;
+  const contextLines = toBoundedInt(params.contextLines, 1, 0, 5);
+  const paragraphMaxChars = toBoundedInt(params.paragraphMaxChars, 600, 50, 5000);
+  const normalizedQuery = caseSensitive ? query : query.toLowerCase();
+  const wildcardQuery = query === '*';
+  const matcher = wholeWord
+    ? new RegExp(`\\b${escapeRegExp(query)}\\b`, caseSensitive ? '' : 'i')
+    : null;
+  const maxNotes = toBoundedInt(params.maxNotes, 500, 1, 2000);
+  const noteQuery = typeof params.noteQuery === 'string' ? params.noteQuery.trim().toLowerCase() : '';
+  const noteTypes = normalizeTypeList((params as { noteTypes?: unknown }).noteTypes);
+  const preferCalendar = params.preferCalendar === true;
+  const periodicOnly = params.periodicOnly === true;
+
+  const allNotes = store.listNotes({
+    folder: params.folder,
+    space: params.space,
+  });
+  let filteredNotes = noteQuery
+    ? allNotes.filter((note) => {
+        const haystack = `${note.title} ${note.filename} ${note.folder || ''}`.toLowerCase();
+        return haystack.includes(noteQuery);
+      })
+    : allNotes;
+  if (noteTypes && noteTypes.length > 0) {
+    filteredNotes = filteredNotes.filter((note) => noteTypes.includes(note.type));
+  }
+  if (periodicOnly) {
+    filteredNotes = filteredNotes.filter((note) => isPeriodicCalendarNote(note));
+  }
+  if (preferCalendar) {
+    filteredNotes = [...filteredNotes].sort((a, b) => {
+      const aCalendar = a.type === 'calendar' ? 1 : 0;
+      const bCalendar = b.type === 'calendar' ? 1 : 0;
+      if (aCalendar !== bCalendar) return bCalendar - aCalendar;
+      const aModified = a.modifiedAt?.getTime() ?? 0;
+      const bModified = b.modifiedAt?.getTime() ?? 0;
+      return bModified - aModified;
+    });
+  }
+  const scannedNotes = filteredNotes.slice(0, maxNotes);
+  const truncatedByMaxNotes = filteredNotes.length > scannedNotes.length;
+
+  const allMatches: Array<Record<string, unknown>> = [];
+  for (const note of scannedNotes) {
+    const allLines = note.content.split('\n');
+
+    for (let lineIndex = 0; lineIndex < allLines.length; lineIndex++) {
+      const lineContent = allLines[lineIndex];
+      const haystack = caseSensitive ? lineContent : lineContent.toLowerCase();
+      const isMatch = wildcardQuery
+        ? true
+        : matcher
+          ? matcher.test(lineContent)
+          : haystack.includes(normalizedQuery);
+      if (!isMatch) continue;
+
+      const paragraphBounds = findParagraphBounds(allLines, lineIndex);
+      const paragraphRaw = allLines
+        .slice(paragraphBounds.startIndex, paragraphBounds.endIndex + 1)
+        .join('\n');
+      const paragraphTruncated = paragraphRaw.length > paragraphMaxChars;
+      const paragraph = paragraphTruncated
+        ? `${paragraphRaw.slice(0, Math.max(0, paragraphMaxChars - 3))}...`
+        : paragraphRaw;
+      const contextStart = Math.max(0, lineIndex - contextLines);
+      const contextEnd = Math.min(allLines.length - 1, lineIndex + contextLines);
+
+      const meta = parseParagraphLine(lineContent, lineIndex, lineIndex === 0);
+
+      // Apply status filter (backward compat with searchTasksGlobal)
+      if (params.status && meta.taskStatus !== params.status) continue;
+
+      allMatches.push({
+        note: {
+          id: note.id,
+          title: note.title,
+          filename: note.filename,
+          type: note.type,
+          source: note.source,
+          folder: note.folder,
+          spaceId: note.spaceId,
+          date: note.date,
+        },
+        lineIndex,
+        line: lineIndex + 1,
+        content: lineContent,
+        // Backward-compat alias: `status` mirrors `taskStatus` for old consumers
+        ...(meta.taskStatus !== undefined && { status: meta.taskStatus }),
+        type: meta.type,
+        indentLevel: meta.indentLevel,
+        ...(meta.headingLevel !== undefined && { headingLevel: meta.headingLevel }),
+        ...(meta.taskStatus !== undefined && { taskStatus: meta.taskStatus }),
+        ...(meta.priority !== undefined && { priority: meta.priority }),
+        ...(meta.marker !== undefined && { marker: meta.marker }),
+        ...(meta.hasCheckbox !== undefined && { hasCheckbox: meta.hasCheckbox }),
+        tags: meta.tags,
+        mentions: meta.mentions,
+        ...(meta.scheduledDate !== undefined && { scheduledDate: meta.scheduledDate }),
+        paragraphStartLine: paragraphBounds.startIndex + 1,
+        paragraphEndLine: paragraphBounds.endIndex + 1,
+        paragraph,
+        paragraphTruncated,
+        contextBefore: allLines.slice(contextStart, lineIndex),
+        contextAfter: allLines.slice(lineIndex + 1, contextEnd + 1),
+      });
+    }
+  }
+
+  const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = toBoundedInt(params.limit, 30, 1, 300);
+  const page = allMatches.slice(offset, offset + limit);
+  const hasMore = offset + page.length < allMatches.length;
+  const nextCursor = hasMore ? String(offset + page.length) : null;
+
+  const result: Record<string, unknown> = {
+    success: true,
+    query,
+    count: page.length,
+    totalCount: allMatches.length,
+    offset,
+    limit,
+    hasMore,
+    nextCursor,
+    scannedNoteCount: scannedNotes.length,
+    totalNotes: filteredNotes.length,
+    truncatedByMaxNotes,
+    maxNotes,
+    noteTypes,
+    preferCalendar,
+    periodicOnly,
+    matches: page,
+  };
+
+  if (hasMore) {
+    result.performanceHints = ['Continue with nextCursor to fetch the next global paragraph match page.'];
+  }
+  if (truncatedByMaxNotes) {
+    result.performanceHints = [
+      ...((result.performanceHints as string[] | undefined) ?? []),
+      'Increase maxNotes or narrow folder/space/noteQuery to reduce truncation.',
+    ];
+  }
+
+  return result;
 }

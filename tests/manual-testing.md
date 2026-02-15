@@ -391,6 +391,36 @@ Some notes at the bottom.
 
 ---
 
+### Test 25: Wildcard search with propertyFilters
+
+**Tool:** `noteplan_search`
+
+**Setup:** Ensure at least one note has frontmatter `type: book` and at least one note does NOT.
+
+**Call:**
+```json
+{ "action": "search", "query": "*", "propertyFilters": { "type": "book" } }
+```
+
+**Verify:** Only notes with `type: book` in frontmatter are returned. Notes without that property are excluded.
+
+---
+
+### Test 26: Global paragraph search matching frontmatter content
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure at least one note has frontmatter containing `type: book`.
+
+**Call:**
+```json
+{ "action": "search_global", "query": "type: book" }
+```
+
+**Verify:** Results include matches from frontmatter lines (e.g., `type: book`). The search is not limited to task lines only.
+
+---
+
 ## Results Tracker
 
 | # | Test | Result | Notes |
@@ -419,3 +449,5 @@ Some notes at the bottom.
 | 22 | Rename a note | | |
 | 23 | Move a note | | |
 | 24 | Delete a note | | |
+| 25 | Wildcard search with propertyFilters | | |
+| 26 | Global paragraph search matching frontmatter | | |

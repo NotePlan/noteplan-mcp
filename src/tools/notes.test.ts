@@ -720,3 +720,83 @@ describe('findParagraphBounds', () => {
     expect(findParagraphBounds(lines, 3)).toEqual({ startIndex: 2, endIndex: 3 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// matchesFrontmatterProperties — exported from unified-store
+// ---------------------------------------------------------------------------
+
+import { matchesFrontmatterProperties, normalizeFrontmatterScalar } from '../noteplan/unified-store.js';
+
+describe('normalizeFrontmatterScalar', () => {
+  it('strips surrounding double quotes', () => {
+    expect(normalizeFrontmatterScalar('"book"', false)).toBe('book');
+  });
+
+  it('strips surrounding single quotes', () => {
+    expect(normalizeFrontmatterScalar("'book'", false)).toBe('book');
+  });
+
+  it('lowercases when caseSensitive is false', () => {
+    expect(normalizeFrontmatterScalar('Book', false)).toBe('book');
+  });
+
+  it('preserves case when caseSensitive is true', () => {
+    expect(normalizeFrontmatterScalar('Book', true)).toBe('Book');
+  });
+
+  it('trims whitespace', () => {
+    expect(normalizeFrontmatterScalar('  hello  ', false)).toBe('hello');
+  });
+});
+
+describe('matchesFrontmatterProperties', () => {
+  const makeNote = (content: string) => ({
+    id: 'test-id',
+    title: 'Test Note',
+    filename: 'test.md',
+    type: 'note' as const,
+    source: 'local' as const,
+    folder: '',
+    content,
+    modifiedAt: new Date(),
+    createdAt: new Date(),
+    spaceId: undefined,
+    date: undefined,
+  });
+
+  it('matches a single property filter', () => {
+    const note = makeNote('---\ntype: book\n---\nSome content');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(true);
+  });
+
+  it('rejects when property value does not match', () => {
+    const note = makeNote('---\ntype: article\n---\nSome content');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(false);
+  });
+
+  it('rejects when property key is missing', () => {
+    const note = makeNote('---\ntitle: My Note\n---\nSome content');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(false);
+  });
+
+  it('returns false when there is no frontmatter', () => {
+    const note = makeNote('Just some text without frontmatter');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(false);
+  });
+
+  it('matches case-insensitively by default', () => {
+    const note = makeNote('---\nType: Book\n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(true);
+  });
+
+  it('matches comma-separated list values', () => {
+    const note = makeNote('---\ntags: fiction, book, novel\n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['tags', 'book']], false)).toBe(true);
+  });
+
+  it('requires all filters to match', () => {
+    const note = makeNote('---\ntype: book\nstatus: reading\n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['type', 'book'], ['status', 'reading']], false)).toBe(true);
+    expect(matchesFrontmatterProperties(note, [['type', 'book'], ['status', 'done']], false)).toBe(false);
+  });
+});
