@@ -6,7 +6,7 @@ import * as fileReader from './file-reader.js';
 import * as fileWriter from './file-writer.js';
 import * as sqliteReader from './sqlite-reader.js';
 import * as sqliteWriter from './sqlite-writer.js';
-import { parseNoteContent } from './frontmatter-parser.js';
+import * as frontmatter from './frontmatter-parser.js';
 import { getTodayDateString, parseFlexibleDate } from '../utils/date-utils.js';
 import { matchFolder, FolderMatchResult } from '../utils/folder-matcher.js';
 import { searchWithRipgrep, isRipgrepAvailable, RipgrepMatch } from './ripgrep-search.js';
@@ -544,7 +544,7 @@ export function matchesFrontmatterProperties(
   propertyFilters: ReadonlyArray<readonly [string, string]>,
   caseSensitive: boolean
 ): boolean {
-  const parsed = parseNoteContent(note.content);
+  const parsed = frontmatter.parseNoteContent(note.content);
   if (!parsed.frontmatter) return false;
 
   const frontmatterEntries = Object.entries(parsed.frontmatter);
@@ -752,8 +752,24 @@ export function createNote(
 
   // Auto-prepend title heading if content doesn't already start with one
   let effectiveContent = content || `# ${title}\n\n`;
-  if (content && !/^\s*(---[\s\S]*?---\s*)?#\s/.test(content)) {
-    effectiveContent = `# ${title}\n${content}`;
+  if (content) {
+    const hasHeadingDirectly = /^\s*#\s/.test(content);
+    const hasFmThenHeading = /^\s*---[\s\S]*?---\s*\n\s*#\s/.test(content);
+
+    if (!hasHeadingDirectly && !hasFmThenHeading) {
+      // Content has no heading — insert one
+      const parsed = frontmatter.parseNoteContent(content);
+      if (parsed.hasFrontmatter) {
+        // Insert heading after frontmatter, before body
+        const fmLineCount = frontmatter.getFrontmatterLineCount(content);
+        const lines = content.split('\n');
+        const fmPart = lines.slice(0, fmLineCount).join('\n');
+        const bodyPart = lines.slice(fmLineCount).join('\n');
+        effectiveContent = `${fmPart}\n# ${title}\n${bodyPart}`;
+      } else {
+        effectiveContent = `# ${title}\n${content}`;
+      }
+    }
   }
 
   const resolvedSpace = resolveSpaceId(space);

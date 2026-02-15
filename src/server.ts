@@ -2209,14 +2209,14 @@ export function createServer(): Server {
       {
         name: 'noteplan_templates',
         description:
-          'Template operations: list available templates or render a template.\n\nActions:\n- list: List templates from @Templates folder with their types and preview\n- render: Render a template by title (saved template) or raw content string (for debugging). Rendering requires a recent NotePlan build.\n\nDebugging workflow: After creating or editing a template, use render with its title or raw content to verify the output. Check variables, date formatting, and logic. If rendering fails or produces unexpected output, read the plugin log via noteplan_plugins(action: "log", pluginId: "np.Templating") for error details.\n\nTemplate syntax: <%- expr %> (output), <% code %> (logic), <%= expr %> (escaped output). Common helpers: date.now("YYYY-MM-DD"), web.weather(), date.tomorrow("format").',
+          'Template operations: list available templates, render a template, or search template documentation.\n\nActions:\n- list: List templates from @Templates folder with their types and preview\n- render: Render a template by title (saved template) or raw content string (for debugging). Rendering requires a recent NotePlan build.\n- search_docs: Semantic search over bundled NotePlan template documentation. Requires query param. Uses embeddings API or NotePlan built-in embedding. Returns matched doc chunks ranked by relevance — use this to look up template syntax, helpers, and examples before writing templates.\n- get_doc: Retrieve the full text of a doc chunk by noteTitle and chunkIndex (from search_docs results). Use this to read complete method signatures, format tokens, and examples that may be truncated in search_docs previews.\n\nDebugging workflow: After creating or editing a template, use render with its title or raw content to verify the output. Check variables, date formatting, and logic. If rendering fails or produces unexpected output, read the plugin log via noteplan_plugins(action: "log", pluginId: "np.Templating") for error details.\n\nTemplate syntax: <%- expr %> (output), <% code %> (logic), <%= expr %> (escaped output). Common helpers: date.now("YYYY-MM-DD"), web.weather(), date.tomorrow("format").',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'render'],
-              description: 'Action: list | render',
+              enum: ['list', 'render', 'search_docs', 'get_doc'],
+              description: 'Action: list | render | search_docs | get_doc',
             },
             templateTitle: {
               type: 'string',
@@ -2241,6 +2241,22 @@ export function createServer(): Server {
             cursor: {
               type: 'string',
               description: 'Cursor from previous page — used by list',
+            },
+            query: {
+              type: 'string',
+              description: 'Search query — used by search_docs',
+            },
+            includeContent: {
+              type: 'boolean',
+              description: 'Include full chunk text in results — used by search_docs',
+            },
+            noteTitle: {
+              type: 'string',
+              description: 'Doc note title — used by get_doc (from search_docs results)',
+            },
+            chunkIndex: {
+              type: 'number',
+              description: 'Chunk index — used by get_doc (from search_docs results, default 0)',
             },
           },
           required: ['action'],
@@ -2595,6 +2611,8 @@ export function createServer(): Server {
           switch (action) {
             case 'list': result = templateTools.listTemplates(args as any); break;
             case 'render': result = templateTools.renderTemplate(args as any); break;
+            case 'search_docs': result = await templateTools.searchDocs(args as any); break;
+            case 'get_doc': result = templateTools.getDoc(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;

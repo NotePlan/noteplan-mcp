@@ -172,7 +172,7 @@ function buildEmbeddingsEndpoint(baseUrl: string): string {
   return `${baseUrl}/v1/embeddings`;
 }
 
-function ensureEmbeddingsApiConfigured(): { ok: true } | { ok: false; error: string } {
+export function ensureEmbeddingsApiConfigured(): { ok: true } | { ok: false; error: string } {
   const config = getEmbeddingsConfig();
   if (!config.enabled) {
     return {
@@ -338,7 +338,7 @@ function chunkContent(
   return chunks;
 }
 
-async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
+export async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
 
   const config = getEmbeddingsConfig();
@@ -390,7 +390,7 @@ async function embedInBatches(texts: string[], batchSize: number): Promise<numbe
   return vectors;
 }
 
-function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length === 0 || b.length === 0 || a.length !== b.length) return 0;
 
   let dot = 0;

@@ -2105,13 +2105,22 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
       boundedStartLine,
       Math.max(boundedStartLine, contentLineCount)
     );
-    const startIndex = fmOffset + boundedStartLine - 1;
-    const lineCountToReplace = boundedEndLine - boundedStartLine + 1;
+    let startIndex = fmOffset + boundedStartLine - 1;
+    let lineCountToReplace = boundedEndLine - boundedStartLine + 1;
     const replacedText = allLines.slice(startIndex, fmOffset + boundedEndLine).join('\n');
     const indentationStyle = normalizeIndentationStyle(
       (params as { indentationStyle?: unknown }).indentationStyle
     );
     const normalized = normalizeContentIndentation(params.content, indentationStyle);
+    // If replacement content includes frontmatter and the note already has
+    // frontmatter, extend the splice to replace the old frontmatter too.
+    // The agent's frontmatter is the intended update.
+    const replacementHasFm = fmOffset > 0
+      && frontmatter.parseNoteContent(normalized.content).hasFrontmatter;
+    if (replacementHasFm) {
+      startIndex = 0;
+      lineCountToReplace += fmOffset;
+    }
     if (params.allowEmptyContent !== true && normalized.content.trim().length === 0) {
       return {
         success: false,

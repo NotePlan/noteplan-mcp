@@ -4,15 +4,20 @@ import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
 import { runAppleScript, escapeAppleScript, APP_NAME } from '../utils/applescript.js';
 import { getNotePlanVersion, MIN_BUILD_RENDER_TEMPLATE } from '../utils/version.js';
+import { tryEmbedQuery, searchTemplateDocs, textSearchTemplateDocs, getDocChunk } from '../noteplan/template-docs.js';
 
 export const templatesSchema = z.object({
-  action: z.enum(['list', 'render']).describe('Action to perform'),
+  action: z.enum(['list', 'render', 'search_docs', 'get_doc']).describe('Action to perform'),
   templateTitle: z.string().optional().describe('Template title — used by render (loads a saved template by title)'),
   content: z.string().optional().describe('Raw template content string — used by render (renders arbitrary template code for debugging)'),
   folder: z.string().optional().describe('Template subfolder — used by list (default: @Templates)'),
   limit: z.number().min(1).max(200).optional().default(50).describe('Maximum results — used by list'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset — used by list'),
   cursor: z.string().optional().describe('Cursor from previous page — used by list'),
+  query: z.string().optional().describe('Search query — used by search_docs'),
+  includeContent: z.boolean().optional().describe('Include full chunk text in results — used by search_docs'),
+  noteTitle: z.string().optional().describe('Doc note title — used by get_doc (from search_docs results)'),
+  chunkIndex: z.number().optional().describe('Chunk index — used by get_doc (from search_docs results, default 0)'),
 });
 
 // ── Frontmatter helpers ──
@@ -163,6 +168,80 @@ export function renderTemplate(params: z.infer<typeof templatesSchema>) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Template rendering failed',
+    };
+  }
+}
+
+// ── Get full doc chunk ──
+
+export function getDoc(params: z.infer<typeof templatesSchema>) {
+  const noteTitle = params.noteTitle?.trim();
+  if (!noteTitle) {
+    return { success: false, error: 'noteTitle is required for get_doc' };
+  }
+  const chunkIndex = params.chunkIndex ?? 0;
+
+  const chunk = getDocChunk(noteTitle, chunkIndex);
+  if (!chunk) {
+    return {
+      success: false,
+      error: `No doc chunk found for noteTitle="${noteTitle}" chunkIndex=${chunkIndex}`,
+    };
+  }
+
+  return {
+    success: true,
+    noteTitle: chunk.noteTitle,
+    chunkIndex: chunk.chunkIndex,
+    totalChunks: chunk.totalChunks,
+    content: chunk.content,
+  };
+}
+
+// ── Search template docs ──
+
+export async function searchDocs(params: z.infer<typeof templatesSchema>) {
+  const query = params.query?.trim();
+  if (!query) {
+    return {
+      success: false,
+      error: 'query is required for search_docs',
+    };
+  }
+
+  const searchOptions = {
+    limit: params.limit ?? 5,
+    includeContent: params.includeContent,
+  };
+
+  try {
+    const embedResult = await tryEmbedQuery(query);
+
+    if (embedResult.ok) {
+      // Semantic search using embeddings
+      const matches = searchTemplateDocs(embedResult.vector, searchOptions);
+      return {
+        success: true,
+        query,
+        count: matches.length,
+        embeddingSource: embedResult.source,
+        matches,
+      };
+    }
+
+    // No embedding source available — fall back to text search
+    const matches = textSearchTemplateDocs(query, searchOptions);
+    return {
+      success: true,
+      query,
+      count: matches.length,
+      embeddingSource: 'text' as const,
+      matches,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Template doc search failed',
     };
   }
 }

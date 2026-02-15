@@ -16,6 +16,9 @@ export const MIN_BUILD_ADVANCED_FEATURES = 1300;
 // Build that ships the renderTemplate AppleScript command
 export const MIN_BUILD_RENDER_TEMPLATE = 1400;
 
+// Build that ships the embedText AppleScript command
+export const MIN_BUILD_EMBED_TEXT = 1491;
+
 // Build that ships the createBackup AppleScript command
 export const MIN_BUILD_CREATE_BACKUP = 1492;
 
