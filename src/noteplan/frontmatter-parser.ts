@@ -257,9 +257,8 @@ export function insertContentAtPosition(
       if (line === undefined || line < 1) {
         throw new Error('Valid line number is required for at-line position');
       }
-      // Offset past frontmatter so line 1 = first content line
-      const fmOffset = getFrontmatterLineCount(content);
-      const lineIndex = fmOffset + Number(line) - 1; // Convert 1-indexed to 0-indexed, offset past FM
+      // Line numbers are absolute (1-indexed), matching get_notes/getParagraphs
+      const lineIndex = Number(line) - 1;
       // Ensure we have enough lines
       while (lines.length <= lineIndex) {
         lines.push('');
@@ -322,8 +321,8 @@ export function insertContentAtPosition(
 
 /**
  * Delete lines from content (1-indexed, inclusive).
- * Line numbers are relative to content after frontmatter — line 1 is the
- * first content line, frontmatter cannot be deleted via this function.
+ * Line numbers are absolute — line 1 is the first line of the file,
+ * matching get_notes/getParagraphs numbering.
  */
 export function deleteLines(content: string, startLine: number, endLine: number): string {
   if (startLine < 1 || endLine < startLine) {
@@ -331,16 +330,14 @@ export function deleteLines(content: string, startLine: number, endLine: number)
   }
 
   const lines = content.split('\n');
-  const fmOffset = getFrontmatterLineCount(content);
-  const contentLineCount = lines.length - fmOffset;
 
-  if (startLine > contentLineCount) {
-    throw new Error(`Start line ${startLine} exceeds content length (${contentLineCount} lines)`);
+  if (startLine > lines.length) {
+    throw new Error(`Start line ${startLine} exceeds content length (${lines.length} lines)`);
   }
 
-  // Convert to 0-indexed, offset past frontmatter
-  const startIndex = fmOffset + startLine - 1;
-  const endIndex = Math.min(fmOffset + endLine, lines.length);
+  // Convert to 0-indexed (absolute, no frontmatter offset)
+  const startIndex = startLine - 1;
+  const endIndex = Math.min(endLine, lines.length);
 
   // Remove the lines
   lines.splice(startIndex, endIndex - startIndex);

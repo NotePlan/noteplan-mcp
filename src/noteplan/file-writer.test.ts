@@ -11,6 +11,10 @@ vi.mock('./file-reader.js', () => ({
   hasYearSubfolders: vi.fn(() => false),
   buildCalendarNotePath: vi.fn((date: string) => `Calendar/${date}.md`),
   getCalendarNote: vi.fn(() => null),
+  isValidNoteExtension: vi.fn((filename: string) => {
+    const ext = path.extname(filename).toLowerCase();
+    return ext === '.md' || ext === '.txt';
+  }),
 }));
 
 import {

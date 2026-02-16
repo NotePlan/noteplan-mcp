@@ -568,6 +568,108 @@ describe('deleteLines', () => {
   });
 });
 
+// ── Regression: frontmatter line numbering must be absolute ──
+// All line numbers are absolute (1-indexed, line 1 = first line of file).
+// Previously, deleteLines/insertContentAtPosition(at-line) applied a
+// frontmatter offset so line 1 meant first line AFTER frontmatter.
+// This caused inconsistencies with get_notes/getParagraphs which use
+// absolute numbering. These tests ensure the fix doesn't regress.
+
+describe('deleteLines – frontmatter regression', () => {
+  const noteWithFM = [
+    '---',              // line 1
+    'title: Test',      // line 2
+    '---',              // line 3
+    '# Heading',        // line 4
+    'Body line 1',      // line 5
+    'Body line 2',      // line 6
+    'Body line 3',      // line 7
+  ].join('\n');
+
+  it('uses absolute line numbers — deleting line 5 removes "Body line 1"', () => {
+    const result = deleteLines(noteWithFM, 5, 5);
+    const resultLines = lines(result);
+    expect(resultLines).toEqual([
+      '---', 'title: Test', '---', '# Heading', 'Body line 2', 'Body line 3',
+    ]);
+  });
+
+  it('uses absolute line numbers — deleting lines 4-5 removes heading and first body line', () => {
+    const result = deleteLines(noteWithFM, 4, 5);
+    const resultLines = lines(result);
+    expect(resultLines).toEqual([
+      '---', 'title: Test', '---', 'Body line 2', 'Body line 3',
+    ]);
+  });
+
+  it('can delete frontmatter lines with absolute numbering', () => {
+    // deleteLines itself doesn't protect frontmatter — that's the caller's job.
+    // It should correctly delete whatever absolute lines are requested.
+    const result = deleteLines(noteWithFM, 1, 3);
+    const resultLines = lines(result);
+    expect(resultLines).toEqual([
+      '# Heading', 'Body line 1', 'Body line 2', 'Body line 3',
+    ]);
+  });
+
+  it('line 4 is the first content line, not line 1', () => {
+    // This is the key regression test: line 4 should be "# Heading"
+    // not "Body line 1" (which would happen with the old fmOffset behavior)
+    const result = deleteLines(noteWithFM, 4, 4);
+    const resultLines = lines(result);
+    expect(resultLines[3]).toBe('Body line 1');
+    expect(resultLines).toHaveLength(6);
+  });
+});
+
+describe('insertContentAtPosition at-line – frontmatter regression', () => {
+  const noteWithFM = [
+    '---',              // line 1
+    'title: Test',      // line 2
+    '---',              // line 3
+    '# Heading',        // line 4
+    'Body line 1',      // line 5
+  ].join('\n');
+
+  it('inserts at absolute line 5 — before "Body line 1"', () => {
+    const result = insertContentAtPosition(noteWithFM, 'INSERTED', {
+      position: 'at-line',
+      line: 5,
+    });
+    const resultLines = lines(result);
+    // line 5 should now be "INSERTED", pushing "Body line 1" to line 6
+    expect(resultLines[4]).toBe('INSERTED');
+    expect(resultLines[5]).toBe('Body line 1');
+  });
+
+  it('inserts at absolute line 4 — before "# Heading"', () => {
+    const result = insertContentAtPosition(noteWithFM, 'INSERTED', {
+      position: 'at-line',
+      line: 4,
+    });
+    const resultLines = lines(result);
+    expect(resultLines[3]).toBe('INSERTED');
+    expect(resultLines[4]).toBe('# Heading');
+  });
+
+  it('line numbers match what buildLineWindow would report', () => {
+    // Simulate what get_notes returns: absolute 1-indexed line numbers.
+    // If get_notes says "# Heading" is line 4, inserting at line 4
+    // should place content right before "# Heading".
+    const allLines = noteWithFM.split('\n');
+    // Verify the "read" side: line 4 (0-indexed: 3) is "# Heading"
+    expect(allLines[3]).toBe('# Heading');
+    // Now the "write" side: insert at line 4 should go before "# Heading"
+    const result = insertContentAtPosition(noteWithFM, 'NEW', {
+      position: 'at-line',
+      line: 4,
+    });
+    const resultLines = lines(result);
+    expect(resultLines[3]).toBe('NEW');
+    expect(resultLines[4]).toBe('# Heading');
+  });
+});
+
 // ── Issue A: position "start" + heading should insert after the heading ──
 
 describe('insertContentAtPosition – start + heading (Issue A)', () => {

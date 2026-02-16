@@ -1926,19 +1926,26 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
     const note = resolved.note;
 
     const allLines = note.content.split('\n');
-    // Line numbers are relative to content after frontmatter
-    const fmOffset = frontmatter.getFrontmatterLineCount(note.content);
-    const contentLineCount = allLines.length - fmOffset;
-    const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, contentLineCount));
+    // Line numbers are absolute (1-indexed), matching get_notes/getParagraphs
+    const totalLineCount = allLines.length;
+    const fmLineCount = frontmatter.getFrontmatterLineCount(note.content);
+    const minLine = fmLineCount > 0 ? fmLineCount + 1 : 1;
+    const boundedStartLine = toBoundedInt(params.startLine, minLine, minLine, Math.max(minLine, totalLineCount));
     const boundedEndLine = toBoundedInt(
       params.endLine,
       boundedStartLine,
       boundedStartLine,
-      Math.max(boundedStartLine, contentLineCount)
+      Math.max(boundedStartLine, totalLineCount)
     );
+    if (boundedStartLine <= fmLineCount) {
+      return {
+        success: false,
+        error: `Lines 1-${fmLineCount} are frontmatter and cannot be deleted. Content starts at line ${fmLineCount + 1}.`,
+      };
+    }
     const lineCountToDelete = boundedEndLine - boundedStartLine + 1;
-    const previewStartIndex = fmOffset + boundedStartLine - 1;
-    const previewEndIndexExclusive = fmOffset + boundedEndLine;
+    const previewStartIndex = boundedStartLine - 1;
+    const previewEndIndexExclusive = boundedEndLine;
     const deletedLinesPreview = allLines
       .slice(previewStartIndex, previewEndIndexExclusive)
       .slice(0, 20)
@@ -1986,7 +1993,10 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
       };
     }
 
-    const newContent = frontmatter.deleteLines(note.content, boundedStartLine, boundedEndLine);
+    // Splice out lines using absolute indices (no frontmatter offset needed)
+    const splicedLines = [...allLines];
+    splicedLines.splice(boundedStartLine - 1, lineCountToDelete);
+    const newContent = splicedLines.join('\n');
     const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
     store.updateNote(writeIdentifier, newContent, { source: note.source });
 
@@ -2024,14 +2034,20 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
 
     const lines = note.content.split('\n');
     const originalLineCount = lines.length;
-    // Offset past frontmatter so line 1 = first content line
-    const fmOffset = frontmatter.getFrontmatterLineCount(note.content);
-    const lineIndex = fmOffset + Number(params.line) - 1; // Convert to 0-indexed, skip FM
+    // Line numbers are absolute (1-indexed), matching get_notes/getParagraphs
+    const fmLineCount = frontmatter.getFrontmatterLineCount(note.content);
+    const lineIndex = Number(params.line) - 1; // Convert to 0-indexed
 
-    if (lineIndex < fmOffset || lineIndex >= lines.length) {
+    if (lineIndex < 0 || lineIndex >= lines.length) {
       return {
         success: false,
-        error: `Line ${params.line} does not exist (note has ${lines.length - fmOffset} content lines)`,
+        error: `Line ${params.line} does not exist (note has ${lines.length} lines)`,
+      };
+    }
+    if (fmLineCount > 0 && lineIndex < fmLineCount) {
+      return {
+        success: false,
+        error: `Line ${params.line} is inside frontmatter (lines 1-${fmLineCount}). Content starts at line ${fmLineCount + 1}.`,
       };
     }
 
@@ -2095,19 +2111,25 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
 
     const allLines = note.content.split('\n');
     const originalLineCount = allLines.length;
-    // Line numbers are relative to content after frontmatter
-    const fmOffset = frontmatter.getFrontmatterLineCount(note.content);
-    const contentLineCount = originalLineCount - fmOffset;
-    const boundedStartLine = toBoundedInt(params.startLine, 1, 1, Math.max(1, contentLineCount));
+    // Line numbers are absolute (1-indexed), matching get_notes/getParagraphs
+    const fmLineCount = frontmatter.getFrontmatterLineCount(note.content);
+    const minLine = fmLineCount > 0 ? fmLineCount + 1 : 1;
+    const boundedStartLine = toBoundedInt(params.startLine, minLine, minLine, Math.max(minLine, originalLineCount));
     const boundedEndLine = toBoundedInt(
       params.endLine,
       boundedStartLine,
       boundedStartLine,
-      Math.max(boundedStartLine, contentLineCount)
+      Math.max(boundedStartLine, originalLineCount)
     );
-    let startIndex = fmOffset + boundedStartLine - 1;
+    if (boundedStartLine <= fmLineCount) {
+      return {
+        success: false,
+        error: `Lines 1-${fmLineCount} are frontmatter and cannot be replaced directly. Content starts at line ${fmLineCount + 1}.`,
+      };
+    }
+    let startIndex = boundedStartLine - 1;
     let lineCountToReplace = boundedEndLine - boundedStartLine + 1;
-    const replacedText = allLines.slice(startIndex, fmOffset + boundedEndLine).join('\n');
+    const replacedText = allLines.slice(startIndex, boundedEndLine).join('\n');
     const indentationStyle = normalizeIndentationStyle(
       (params as { indentationStyle?: unknown }).indentationStyle
     );
@@ -2115,11 +2137,11 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
     // If replacement content includes frontmatter and the note already has
     // frontmatter, extend the splice to replace the old frontmatter too.
     // The agent's frontmatter is the intended update.
-    const replacementHasFm = fmOffset > 0
+    const replacementHasFm = fmLineCount > 0
       && frontmatter.parseNoteContent(normalized.content).hasFrontmatter;
     if (replacementHasFm) {
+      lineCountToReplace += startIndex;  // extend to also cover frontmatter lines
       startIndex = 0;
-      lineCountToReplace += fmOffset;
     }
     if (params.allowEmptyContent !== true && normalized.content.trim().length === 0) {
       return {

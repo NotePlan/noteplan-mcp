@@ -800,3 +800,150 @@ describe('matchesFrontmatterProperties', () => {
     expect(matchesFrontmatterProperties(note, [['type', 'book'], ['status', 'done']], false)).toBe(false);
   });
 });
+
+// ── Regression: read-write line number consistency with frontmatter ──
+// These tests verify that line numbers from buildLineWindow (used by get_notes
+// and getParagraphs) can be directly used in delete/edit/replace operations
+// without any frontmatter offset mismatch. This was a real user-reported bug
+// where delete_lines previewed wrong content because it applied a frontmatter
+// offset while get_notes used absolute line numbers.
+
+describe('frontmatter line number consistency (regression)', () => {
+  // A note with 3 lines of frontmatter (lines 1-3) and 5 content lines (4-8)
+  const noteWithFM = [
+    '---',                    // line 1
+    'title: Wishlist',        // line 2
+    '---',                    // line 3
+    '# Wishlist',             // line 4
+    '',                       // line 5
+    '## AI',                  // line 6
+    '- Feature A',            // line 7
+    '- Choose AI provider',   // line 8  ← user wants to delete this
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+
+  it('buildLineWindow reports absolute line numbers including frontmatter', () => {
+    const window = buildLineWindow(allLines, {
+      startLine: 1,
+      endLine: 8,
+      defaultLimit: 100,
+      maxLimit: 100,
+    });
+    expect(window.lines[0]).toEqual({ line: 1, lineIndex: 0, content: '---' });
+    expect(window.lines[3]).toEqual({ line: 4, lineIndex: 3, content: '# Wishlist' });
+    expect(window.lines[7]).toEqual({ line: 8, lineIndex: 7, content: '- Choose AI provider' });
+  });
+
+  it('line number from buildLineWindow can be used directly for array splice', () => {
+    // Simulate: user reads note, gets line 8 = "- Choose AI provider"
+    const window = buildLineWindow(allLines, {
+      startLine: 1,
+      endLine: 8,
+      defaultLimit: 100,
+      maxLimit: 100,
+    });
+    const targetLine = window.lines.find(l => l.content === '- Choose AI provider');
+    expect(targetLine).toBeDefined();
+    expect(targetLine!.line).toBe(8);
+
+    // Now simulate delete: splice at (line - 1) with no frontmatter offset
+    const splicedLines = [...allLines];
+    splicedLines.splice(targetLine!.line - 1, 1);
+    expect(splicedLines).toEqual([
+      '---', 'title: Wishlist', '---', '# Wishlist', '', '## AI', '- Feature A',
+    ]);
+    // The deleted line should be "- Choose AI provider", not something else
+    expect(splicedLines).not.toContain('- Choose AI provider');
+  });
+
+  it('searching for content returns line numbers usable for deletion', () => {
+    // Simulate searchParagraphs: find "Choose AI provider", get line number
+    const window = buildLineWindow(allLines, {
+      defaultLimit: allLines.length,
+      maxLimit: allLines.length,
+    });
+    const match = window.lines.find(l => l.content.includes('Choose AI provider'));
+    expect(match).toBeDefined();
+    expect(match!.line).toBe(8);
+
+    // Use that line number for deletion (absolute, no offset)
+    const startIndex = match!.line - 1; // 0-indexed
+    expect(allLines[startIndex]).toBe('- Choose AI provider');
+  });
+
+  it('startLine/endLine window with frontmatter uses absolute numbering', () => {
+    // Read lines 6-8 (the AI section)
+    const window = buildLineWindow(allLines, {
+      startLine: 6,
+      endLine: 8,
+      defaultLimit: 100,
+      maxLimit: 100,
+    });
+    expect(window.lines).toEqual([
+      { line: 6, lineIndex: 5, content: '## AI' },
+      { line: 7, lineIndex: 6, content: '- Feature A' },
+      { line: 8, lineIndex: 7, content: '- Choose AI provider' },
+    ]);
+  });
+
+  it('note without frontmatter: line 1 is first line of content', () => {
+    const noFM = ['# Title', 'Body 1', 'Body 2'].join('\n');
+    const noFMLines = noFM.split('\n');
+    const window = buildLineWindow(noFMLines, {
+      defaultLimit: 100,
+      maxLimit: 100,
+    });
+    expect(window.lines[0]).toEqual({ line: 1, lineIndex: 0, content: '# Title' });
+    expect(window.lines[1]).toEqual({ line: 2, lineIndex: 1, content: 'Body 1' });
+  });
+});
+
+// ── Manual test procedure for frontmatter line consistency ──
+// Run this against a live NotePlan MCP server to verify read/write consistency.
+//
+// SETUP: Create a test note with frontmatter:
+//   noteplan_manage_note(action="create", title="FM Line Test", content=`
+//   ---
+//   test: true
+//   ---
+//   # FM Line Test
+//
+//   Line A
+//   Line B
+//   Line C
+//   `)
+//
+// TEST 1: Read and verify line numbers
+//   noteplan_get_notes(filename="...", includeContent=true)
+//   → Verify: "---" is line 1, "# FM Line Test" is line 4, "Line A" is line 6
+//
+// TEST 2: Search and verify line numbers match
+//   noteplan_paragraphs(action="search", filename="...", query="Line B")
+//   → Verify: result.line matches get_notes line for "Line B" (should be 7)
+//
+// TEST 3: Delete using the line number from search
+//   noteplan_edit_content(action="delete_lines", filename="...", startLine=7, endLine=7, dryRun=true)
+//   → Verify: dry run preview shows "Line B", NOT a different line
+//   → If preview shows wrong content, the frontmatter offset bug has regressed!
+//
+// TEST 4: Edit a line using absolute number
+//   noteplan_edit_content(action="edit_line", filename="...", line=6, content="Line A (edited)")
+//   → Verify: "Line A" was changed, not a different line
+//
+// TEST 5: Replace lines using absolute numbers
+//   noteplan_edit_content(action="replace_lines", filename="...", startLine=6, endLine=8,
+//     content="Replaced A\nReplaced B\nReplaced C", dryRun=true)
+//   → Verify: preview shows "Line A", "Line B", "Line C" being replaced
+//
+// TEST 6: Insert at absolute line
+//   noteplan_edit_content(action="insert", filename="...", position="at-line", line=6,
+//     content="Inserted before Line A")
+//   → Verify: new line appears at line 6, "Line A" moves to line 7
+//
+// TEST 7: Frontmatter protection
+//   noteplan_edit_content(action="delete_lines", filename="...", startLine=1, endLine=3)
+//   → Verify: returns error about frontmatter protection, does NOT delete
+//
+// CLEANUP:
+//   noteplan_manage_note(action="delete", filename="...")
+//
