@@ -231,7 +231,7 @@ export function textSearchTemplateDocs(
 // ── Embedding via AppleScript ──
 
 export function embedViaAppleScript(text: string): number[] {
-  const script = `tell application "${APP_NAME}" to embedText text "${escapeAppleScript(text)}"`;
+  const script = `tell application "${APP_NAME}" to embedText for "${escapeAppleScript(text)}"`;
   const raw = runAppleScript(script);
   const parsed = JSON.parse(raw);
   if (parsed.success === true && Array.isArray(parsed.embedding)) {
