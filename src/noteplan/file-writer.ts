@@ -10,6 +10,7 @@ import {
   hasYearSubfolders,
   buildCalendarNotePath,
   getCalendarNote,
+  isValidNoteExtension,
 } from './file-reader.js';
 
 /**
@@ -411,6 +412,13 @@ export function deleteNote(filePath: string): string {
     throw new Error(`Note not found: ${filePath}`);
   }
 
+  // Reject non-text files (e.g. .key, .pdf) — only .md and .txt are valid notes
+  if (!isValidNoteExtension(path.basename(fullPath))) {
+    throw new Error(
+      `Cannot delete: "${path.basename(fullPath)}" is not a note file. Only .md and .txt files are supported.`
+    );
+  }
+
   // Move to Notes/@Trash (matching NotePlan's own moveToTrash behavior)
   const trashPath = path.join(getNotesPath(), '@Trash');
   if (!fs.existsSync(trashPath)) {
@@ -444,6 +452,13 @@ export function previewMoveLocalNote(filePath: string, destinationFolder: string
   }
   if (fs.statSync(fullPath).isDirectory()) {
     throw new Error(`Not a note file: ${filePath}`);
+  }
+
+  // Reject non-text files (e.g. .key, .pdf) — only .md and .txt are valid notes
+  if (!isValidNoteExtension(path.basename(fullPath))) {
+    throw new Error(
+      `Cannot move: "${path.basename(fullPath)}" is not a note file. Only .md and .txt files are supported.`
+    );
   }
 
   const notesRoot = getNotesPath();
@@ -551,6 +566,13 @@ export function previewRenameLocalNoteFile(
   }
   if (fs.statSync(fullPath).isDirectory()) {
     throw new Error(`Not a note file: ${filePath}`);
+  }
+
+  // Reject non-text files (e.g. .key, .pdf) — only .md and .txt are valid notes
+  if (!isValidNoteExtension(path.basename(fullPath))) {
+    throw new Error(
+      `Cannot rename: "${path.basename(fullPath)}" is not a note file. Only .md and .txt files are supported.`
+    );
   }
 
   const notesRoot = getNotesPath();

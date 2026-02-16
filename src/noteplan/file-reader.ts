@@ -7,6 +7,19 @@ import { Note, NoteType, Folder } from './types.js';
 import { extractTitle, extractTagsFromContent } from './markdown-parser.js';
 import { extractDateFromFilename } from '../utils/date-utils.js';
 
+/** Valid note file extensions in NotePlan */
+const VALID_NOTE_EXTENSIONS = ['.md', '.txt'];
+
+/**
+ * Check if a filename has a valid note file extension (.md or .txt).
+ * NotePlan only treats .md and .txt files as text notes; all other files
+ * (e.g. .key, .pdf, .png) are non-text attachments and should be ignored.
+ */
+export function isValidNoteExtension(filename: string): boolean {
+  const ext = path.extname(filename).toLowerCase();
+  return VALID_NOTE_EXTENSIONS.includes(ext);
+}
+
 // Possible NotePlan storage paths (in order of preference)
 const POSSIBLE_PATHS = [
   // Direct local paths (AppStore version) - preferred for local dev
@@ -277,6 +290,11 @@ export function readNoteFile(filePath: string): Note | null {
 
     const stats = fs.statSync(fullPath);
     if (stats.isDirectory()) {
+      return null;
+    }
+
+    // Only read files with valid note extensions (.md, .txt)
+    if (!isValidNoteExtension(path.basename(fullPath))) {
       return null;
     }
 
