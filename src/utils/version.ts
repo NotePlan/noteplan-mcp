@@ -26,43 +26,85 @@ const CACHE_TTL_MS = 60_000;
 let cachedVersion: NotePlanVersion | null = null;
 let cachedAt = 0;
 
-function detectViaAppleScript(): NotePlanVersion | null {
-  try {
-    // Check if NotePlan is running first to avoid launching it as a side effect
-    const isRunning = execFileSync('osascript', ['-e', 'application "NotePlan" is running'], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 3_000,
-    }).trim();
-    if (isRunning !== 'true') return null;
+// AppleScript may resolve the app by CFBundleName or by .app filename depending on macOS version.
+// MAS installs can use the store marketing name as the .app folder name, so we try multiple names.
+const APPLESCRIPT_APP_NAMES = [
+  'NotePlan',
+  'NotePlan 3',
+  'NotePlan - To-Do List & Notes',
+];
 
-    const raw = execFileSync('osascript', ['-e', 'tell application "NotePlan" to getVersion'], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5_000,
-    }).trim();
-    const parsed = JSON.parse(raw);
-    if (typeof parsed.version === 'string' && typeof parsed.build === 'number') {
-      return { version: parsed.version, build: parsed.build, source: 'applescript' };
+function detectViaAppleScript(): NotePlanVersion | null {
+  for (const appName of APPLESCRIPT_APP_NAMES) {
+    try {
+      const isRunning = execFileSync('osascript', ['-e', `application "${appName}" is running`], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 3_000,
+      }).trim();
+      if (isRunning !== 'true') continue;
+
+      const raw = execFileSync('osascript', ['-e', `tell application "${appName}" to getVersion`], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 5_000,
+      }).trim();
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.version === 'string' && typeof parsed.build === 'number') {
+        return { version: parsed.version, build: parsed.build, source: 'applescript' };
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[noteplan-mcp] AppleScript detection failed for "${appName}": ${msg}`);
+      if (msg.includes('not allowed') || msg.includes('permission') || msg.includes('1743') || msg.includes('assistive')) {
+        console.error('[noteplan-mcp] Hint: The parent app (e.g. Claude Desktop, Terminal) may need Automation permission for NotePlan. Check System Settings > Privacy & Security > Automation.');
+        return null; // Permission issue — no point trying other names
+      }
     }
-  } catch {
-    // App not running or command not available
   }
+  console.error('[noteplan-mcp] AppleScript: NotePlan not found running under any known name.');
   return null;
 }
 
 const KNOWN_APP_PATHS = [
   '/Applications/NotePlan 3.app',
   '/Applications/NotePlan.app',
+  '/Applications/NotePlan - To-Do List & Notes.app',
   path.join(process.env.HOME ?? '', 'Applications/NotePlan 3.app'),
   path.join(process.env.HOME ?? '', 'Applications/NotePlan.app'),
+  path.join(process.env.HOME ?? '', 'Applications/NotePlan - To-Do List & Notes.app'),
   // Setapp
   '/Applications/Setapp/NotePlan 3.app',
   '/Applications/Setapp/NotePlan.app',
 ];
 
 function detectViaPlist(): NotePlanVersion | null {
-  for (const appPath of KNOWN_APP_PATHS) {
+  // First try hardcoded known paths
+  const result = readVersionFromAppPath(KNOWN_APP_PATHS);
+  if (result) return result;
+
+  // Fallback: use mdfind (Spotlight) to locate the app bundle dynamically
+  console.error(`[noteplan-mcp] Plist: app not found at known paths, trying mdfind...`);
+  try {
+    const mdfindResult = execFileSync('mdfind', ['kMDItemCFBundleIdentifier == "co.noteplan.NotePlan3" || kMDItemCFBundleIdentifier == "co.noteplan.NotePlan-setapp" || kMDItemCFBundleIdentifier == "co.noteplan.NotePlan"'], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5_000,
+    }).trim();
+    if (mdfindResult) {
+      const discoveredPaths = mdfindResult.split('\n').filter(Boolean);
+      console.error(`[noteplan-mcp] mdfind discovered: ${discoveredPaths.join(', ')}`);
+      const found = readVersionFromAppPath(discoveredPaths);
+      if (found) return found;
+    }
+  } catch (err: unknown) {
+    console.error(`[noteplan-mcp] mdfind fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return null;
+}
+
+function readVersionFromAppPath(appPaths: string[]): NotePlanVersion | null {
+  for (const appPath of appPaths) {
     const plistPath = path.join(appPath, 'Contents/Info.plist');
     if (!fs.existsSync(plistPath)) continue;
     try {
@@ -80,8 +122,8 @@ function detectViaPlist(): NotePlanVersion | null {
       if (version) {
         return { version, build, source: 'plist' };
       }
-    } catch {
-      // plist read failed for this path, try next
+    } catch (err: unknown) {
+      console.error(`[noteplan-mcp] Plist read failed for ${appPath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return null;
