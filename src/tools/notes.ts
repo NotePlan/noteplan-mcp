@@ -824,6 +824,7 @@ export function createNote(params: z.infer<typeof createNoteSchema>) {
 
     return {
       success: true,
+      tip: 'Use action "set_property" to add frontmatter fields (e.g. type, tags) or "remove_property" to delete them.',
       note: {
         title: result.note.title,
         filename: result.note.filename,
@@ -1544,6 +1545,7 @@ export function searchParagraphs(params: z.infer<typeof searchParagraphsSchema>)
 
   const result: Record<string, unknown> = {
     success: true,
+    tip: 'To search across ALL notes at once, use action "search_global" instead. It supports query "*" to match all tasks.',
     query,
     count: page.length,
     totalCount: allMatches.length,
@@ -1856,6 +1858,7 @@ export function insertContent(params: z.infer<typeof insertContentSchema>) {
 
     return {
       success: true,
+      tip: 'Use noteplan_paragraphs(action: "get") to inspect line numbers and content before making further edits.',
       message: `Content inserted at ${params.position}`,
       note: {
         id: note.id,

@@ -150,6 +150,7 @@ export function listPlugins(args: z.infer<typeof listPluginsSchema>): Record<str
 
   return {
     success: true,
+    tip: 'Use action "log" to view a plugin\'s console output for debugging, or "source" with a query to search its code.',
     count: plugins.length,
     plugins,
   };

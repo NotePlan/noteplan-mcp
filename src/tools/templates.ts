@@ -87,6 +87,7 @@ export function listTemplates(params: z.infer<typeof templatesSchema>) {
 
   return {
     success: true,
+    tip: 'Before writing or editing templates, use action "search_docs" with a query to search the built-in documentation for syntax, helpers, DataStore API, and examples.',
     count: page.length,
     totalCount: notes.length,
     offset,
@@ -146,6 +147,7 @@ export function renderTemplate(params: z.infer<typeof templatesSchema>) {
       if (parsed.success === true) {
         return {
           success: true,
+          tip: 'Use action "search_docs" with a query to search the built-in documentation for template syntax, helpers, DataStore API, and examples.',
           renderedContent: parsed.rendered ?? raw,
           source: content ? 'raw_content' : 'saved_template',
           templateTitle: templateTitle || undefined,

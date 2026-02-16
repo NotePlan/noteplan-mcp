@@ -956,6 +956,17 @@ export function createServer(): Server {
         '- Notes can be targeted by `id`, `filename`, `title`, `date`, or `query` — prefer `id` or `filename` when available for precision',
         '- Errors include a `hint` and often a `suggestedTool` to guide recovery',
         '- The `noteplan_memory` tool stores user preferences (formatting, style, workflow) persistently across sessions',
+        '',
+        '## Templates',
+        '',
+        '- IMPORTANT: Before writing or editing templates, ALWAYS search the built-in documentation first: `noteplan_templates(action: "search_docs", query: "your topic")`',
+        '- Use `get_doc` to read the full text of a doc chunk returned by `search_docs`',
+        '- Then use `render` to test/debug your template code',
+        '',
+        '## Action Discovery',
+        '',
+        '- Every tool supports `action: "list_actions"` — call it to get a list of all available actions with descriptions',
+        '- Use `list_actions` when you are unsure what a tool can do or need to discover capabilities',
       ].join('\n'),
     }
   );
@@ -1138,8 +1149,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['create', 'update', 'delete', 'move', 'restore', 'rename', 'set_property', 'remove_property'],
-                description: 'Action: create | update | delete | move | restore | rename | set_property | remove_property',
+                enum: ['create', 'update', 'delete', 'move', 'restore', 'rename', 'set_property', 'remove_property', 'list_actions'],
+                description: 'Action: create | update | delete | move | restore | rename | set_property | remove_property | list_actions (discover all actions)',
               },
               id: {
                 type: 'string',
@@ -1236,8 +1247,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['insert', 'append', 'delete_lines', 'edit_line', 'replace_lines'],
-                description: 'Action: insert | append | delete_lines | edit_line | replace_lines',
+                enum: ['insert', 'append', 'delete_lines', 'edit_line', 'replace_lines', 'list_actions'],
+                description: 'Action: insert | append | delete_lines | edit_line | replace_lines | list_actions (discover all actions)',
               },
               id: {
                 type: 'string',
@@ -1344,8 +1355,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['get', 'search', 'search_global', 'add', 'complete', 'update'],
-                description: 'Action: get | search | search_global | add | complete | update',
+                enum: ['get', 'search', 'search_global', 'add', 'complete', 'update', 'list_actions'],
+                description: 'Action: get | search | search_global | add | complete | update | list_actions (discover all actions)',
               },
               id: {
                 type: 'string',
@@ -1492,8 +1503,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'find', 'resolve', 'create', 'move', 'rename', 'delete', 'list_spaces'],
-                description: 'Action: list | find | resolve | create | move | rename | delete | list_spaces',
+                enum: ['list', 'find', 'resolve', 'create', 'move', 'rename', 'delete', 'list_spaces', 'list_actions'],
+                description: 'Action: list | find | resolve | create | move | rename | delete | list_spaces | list_actions (discover all actions)',
               },
               path: {
                 type: 'string',
@@ -1596,8 +1607,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'get', 'get_tasks', 'list_parameters', 'save', 'rename'],
-                description: 'Action: list | get | get_tasks | list_parameters | save | rename',
+                enum: ['list', 'get', 'get_tasks', 'list_parameters', 'save', 'rename', 'list_actions'],
+                description: 'Action: list | get | get_tasks | list_parameters | save | rename | list_actions (discover all actions)',
               },
               name: {
                 type: 'string',
@@ -1682,8 +1693,8 @@ export function createServer(): Server {
               },
               action: {
                 type: 'string',
-                enum: ['get_events', 'list_calendars', 'create_event', 'update_event', 'delete_event', 'get', 'list_lists', 'create', 'complete', 'update', 'delete'],
-                description: 'Action: get_events | list_calendars | create_event | update_event | delete_event | get | list_lists | create | complete | update | delete',
+                enum: ['get_events', 'list_calendars', 'create_event', 'update_event', 'delete_event', 'get', 'list_lists', 'create', 'complete', 'update', 'delete', 'list_actions'],
+                description: 'Action: get_events | list_calendars | create_event | update_event | delete_event | get | list_lists | create | complete | update | delete | list_actions (discover all actions)',
               },
               // Calendar params
               eventId: {
@@ -1785,8 +1796,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'save', 'update', 'delete'],
-                description: 'Action: list | save | update | delete',
+                enum: ['list', 'save', 'update', 'delete', 'list_actions'],
+                description: 'Action: list | save | update | delete | list_actions (discover all actions)',
               },
               id: {
                 type: 'string',
@@ -1833,8 +1844,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['search', 'list_tags'],
-                description: 'Action to perform (default: search)',
+                enum: ['search', 'list_tags', 'list_actions'],
+                description: 'Action to perform (default: search) | list_actions (discover all actions)',
               },
               query: {
                 type: 'string',
@@ -1928,8 +1939,8 @@ export function createServer(): Server {
           properties: {
             action: {
               type: 'string',
-              enum: ['status', 'search', 'sync', 'reset'],
-              description: 'Action: status | search | sync | reset',
+              enum: ['status', 'search', 'sync', 'reset', 'list_actions'],
+              description: 'Action: status | search | sync | reset | list_actions (discover all actions)',
             },
             query: {
               type: 'string',
@@ -2018,8 +2029,8 @@ export function createServer(): Server {
       properties: {
         action: {
           type: 'string',
-          enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows', 'backup'],
-          description: 'Action: open_note | open_today | search | run_plugin | open_view | toggle_sidebar | close_plugin_window | list_plugin_windows | backup',
+          enum: ['open_note', 'open_today', 'search', 'run_plugin', 'open_view', 'toggle_sidebar', 'close_plugin_window', 'list_plugin_windows', 'backup', 'list_actions'],
+          description: 'Action: open_note | open_today | search | run_plugin | open_view | toggle_sidebar | close_plugin_window | list_plugin_windows | backup | list_actions (discover all actions)',
         },
         title: {
           type: 'string',
@@ -2078,8 +2089,8 @@ export function createServer(): Server {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'list_available', 'create', 'delete', 'install', 'log', 'source', 'update_html', 'screenshot'],
-              description: 'Action: list | list_available | create | delete | install | log | source | update_html | screenshot',
+              enum: ['list', 'list_available', 'create', 'delete', 'install', 'log', 'source', 'update_html', 'screenshot', 'list_actions'],
+              description: 'Action: list | list_available | create | delete | install | log | source | update_html | screenshot | list_actions (discover all actions)',
             },
             pluginId: {
               type: 'string',
@@ -2171,8 +2182,8 @@ export function createServer(): Server {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'get', 'save', 'set_active'],
-              description: 'Action: list | get | save | set_active',
+              enum: ['list', 'get', 'save', 'set_active', 'list_actions'],
+              description: 'Action: list | get | save | set_active | list_actions (discover all actions)',
             },
             filename: {
               type: 'string',
@@ -2215,8 +2226,8 @@ export function createServer(): Server {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'render', 'search_docs', 'get_doc'],
-              description: 'Action: list | render | search_docs | get_doc',
+              enum: ['list', 'render', 'search_docs', 'get_doc', 'list_actions'],
+              description: 'Action: list | render | search_docs | get_doc | list_actions (discover all actions)',
             },
             templateTitle: {
               type: 'string',
@@ -2271,8 +2282,8 @@ export function createServer(): Server {
           properties: {
             action: {
               type: 'string',
-              enum: ['add', 'list', 'get', 'move'],
-              description: 'Action: add | list | get | move',
+              enum: ['add', 'list', 'get', 'move', 'list_actions'],
+              description: 'Action: add | list | get | move | list_actions (discover all actions)',
             },
             id: { type: 'string', description: 'Source note ID — used by all actions' },
             filename: { type: 'string', description: 'Source note filename/path — used by all actions' },
@@ -2352,6 +2363,131 @@ export function createServer(): Server {
     };
   });
 
+  // ── Action registry for list_actions discovery ──
+  const TOOL_ACTIONS: Record<string, { action: string; description: string }[]> = {
+    noteplan_get_notes: [
+      { action: 'get', description: 'Get a single note by id, filename, title, date, or query' },
+      { action: 'list', description: 'List notes with optional folder/type/date filtering' },
+      { action: 'resolve', description: 'Resolve a reference (title, filename, query) to a single note' },
+      { action: 'today', description: 'Get today\'s daily note' },
+      { action: 'calendar', description: 'Get a calendar note by date' },
+      { action: 'periodic', description: 'Get a periodic note (week, month, quarter, year)' },
+      { action: 'range', description: 'Get calendar notes in a date range' },
+    ],
+    noteplan_search: [
+      { action: 'search', description: 'Full-text or metadata search across notes' },
+      { action: 'list_tags', description: 'List all tags/hashtags with optional filtering' },
+    ],
+    noteplan_manage_note: [
+      { action: 'create', description: 'Create a project note (requires title)' },
+      { action: 'update', description: 'Replace note content (requires filename, content, fullReplace + confirmationToken)' },
+      { action: 'delete', description: 'Delete a note (requires dryRun/confirmationToken)' },
+      { action: 'move', description: 'Move a note to another folder (requires dryRun/confirmationToken)' },
+      { action: 'restore', description: 'Restore a trashed note (requires dryRun/confirmationToken)' },
+      { action: 'rename', description: 'Rename a note (requires newTitle)' },
+      { action: 'set_property', description: 'Set a frontmatter property (requires key + value)' },
+      { action: 'remove_property', description: 'Remove a frontmatter property (requires key)' },
+    ],
+    noteplan_edit_content: [
+      { action: 'insert', description: 'Insert content at a position. Use heading param to scope to a section' },
+      { action: 'append', description: 'Append content at end of note or section' },
+      { action: 'delete_lines', description: 'Delete a line range (requires startLine + endLine, 1-indexed)' },
+      { action: 'edit_line', description: 'Edit a single line (requires line + content)' },
+      { action: 'replace_lines', description: 'Replace a line range (requires startLine + endLine + content)' },
+    ],
+    noteplan_paragraphs: [
+      { action: 'get', description: 'Get note lines with metadata (requires filename)' },
+      { action: 'search', description: 'Search for matching lines in a note (requires query + note ref)' },
+      { action: 'search_global', description: 'Search tasks across all notes (requires query, supports "*" wildcard)' },
+      { action: 'add', description: 'Add a task (requires target + content)' },
+      { action: 'complete', description: 'Mark task done (requires filename + lineIndex or line)' },
+      { action: 'update', description: 'Update task content/status (requires filename + lineIndex or line)' },
+    ],
+    noteplan_folders: [
+      { action: 'list', description: 'List folders with optional filtering' },
+      { action: 'find', description: 'Find folder matches for exploration' },
+      { action: 'resolve', description: 'Resolve to one canonical folder path' },
+      { action: 'create', description: 'Create a folder' },
+      { action: 'move', description: 'Move a folder (requires dryRun/confirmationToken)' },
+      { action: 'rename', description: 'Rename a folder (requires dryRun/confirmationToken)' },
+      { action: 'delete', description: 'Delete folder to trash (requires dryRun/confirmationToken)' },
+      { action: 'list_spaces', description: 'List spaces/workspaces' },
+    ],
+    noteplan_filters: [
+      { action: 'list', description: 'List saved filters' },
+      { action: 'get', description: 'Get one filter with parsed params (requires name)' },
+      { action: 'get_tasks', description: 'Execute a filter against tasks (requires name)' },
+      { action: 'list_parameters', description: 'List supported filter parameter keys' },
+      { action: 'save', description: 'Create or update a filter (requires name + items)' },
+      { action: 'rename', description: 'Rename a filter (requires oldName + newName)' },
+    ],
+    noteplan_eventkit: [
+      { action: 'get_events', description: 'Get events for a date/range (source: calendar)' },
+      { action: 'list_calendars', description: 'List all calendars (source: calendar)' },
+      { action: 'create_event', description: 'Create event (source: calendar, requires title + startDate)' },
+      { action: 'update_event', description: 'Update event (source: calendar, requires eventId)' },
+      { action: 'delete_event', description: 'Delete event (source: calendar, requires eventId + dryRun/confirmationToken)' },
+      { action: 'get', description: 'Get reminders (source: reminders, optional list/query filter)' },
+      { action: 'list_lists', description: 'List reminder lists (source: reminders)' },
+      { action: 'create', description: 'Create reminder (source: reminders, requires title)' },
+      { action: 'complete', description: 'Mark reminder done (source: reminders, requires reminderId)' },
+      { action: 'update', description: 'Update reminder (source: reminders, requires reminderId)' },
+      { action: 'delete', description: 'Delete reminder (source: reminders, requires reminderId + dryRun/confirmationToken)' },
+    ],
+    noteplan_memory: [
+      { action: 'list', description: 'List/search stored memories' },
+      { action: 'save', description: 'Save a new memory (requires content)' },
+      { action: 'update', description: 'Update memory content/tags (requires id)' },
+      { action: 'delete', description: 'Delete a memory (requires id)' },
+    ],
+    noteplan_ui: [
+      { action: 'open_note', description: 'Open a note by title or filename' },
+      { action: 'open_today', description: 'Open today\'s note' },
+      { action: 'search', description: 'Search in UI' },
+      { action: 'run_plugin', description: 'Run a plugin command (requires pluginId + command)' },
+      { action: 'open_view', description: 'Open a named view' },
+      { action: 'toggle_sidebar', description: 'Toggle sidebar visibility' },
+      { action: 'close_plugin_window', description: 'Close plugin window (by windowID/title, or omit both to close all)' },
+      { action: 'list_plugin_windows', description: 'List open plugin windows' },
+      { action: 'backup', description: 'Create a full backup of all notes, calendars, themes, filters, and plugin data' },
+    ],
+    noteplan_plugins: [
+      { action: 'list', description: 'List installed plugins' },
+      { action: 'list_available', description: 'List plugins from online repository' },
+      { action: 'create', description: 'Create plugin with HTML view (requires pluginId, pluginName, commandName, html)' },
+      { action: 'delete', description: 'Delete plugin (requires pluginId + confirmationToken)' },
+      { action: 'install', description: 'Install from repository (requires pluginId)' },
+      { action: 'log', description: 'Read plugin console log (requires pluginId)' },
+      { action: 'source', description: 'Read plugin source (requires pluginId)' },
+      { action: 'update_html', description: 'Apply find/replace patches (requires pluginId + patches)' },
+      { action: 'screenshot', description: 'Capture plugin WebView screenshot (requires pluginId)' },
+    ],
+    noteplan_themes: [
+      { action: 'list', description: 'List all themes and active theme names' },
+      { action: 'get', description: 'Read a custom theme JSON (requires filename)' },
+      { action: 'save', description: 'Create/update a custom theme (requires filename + theme)' },
+      { action: 'set_active', description: 'Activate a theme (requires name)' },
+    ],
+    noteplan_embeddings: [
+      { action: 'status', description: 'Get embeddings config and index status' },
+      { action: 'search', description: 'Semantic search over indexed notes (requires query)' },
+      { action: 'sync', description: 'Build/refresh embeddings index' },
+      { action: 'reset', description: 'Delete index rows (requires dryRun/confirmationToken)' },
+    ],
+    noteplan_templates: [
+      { action: 'list', description: 'List templates from @Templates folder with types and preview' },
+      { action: 'render', description: 'Render a template by title or raw content string' },
+      { action: 'search_docs', description: 'Semantic search over bundled template documentation (requires query). Use this to look up template syntax, helpers, and examples before writing templates' },
+      { action: 'get_doc', description: 'Get full text of a doc chunk by noteTitle + chunkIndex (from search_docs results)' },
+    ],
+    noteplan_attachments: [
+      { action: 'add', description: 'Write a file to the note\'s _attachments folder (requires data + attachmentFilename)' },
+      { action: 'list', description: 'List all attachments for a note' },
+      { action: 'get', description: 'Get attachment metadata. Set includeData=true for base64 content' },
+      { action: 'move', description: 'Move an attachment between notes' },
+    ],
+  };
+
   // Register tool call handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
@@ -2361,6 +2497,13 @@ export function createServer(): Server {
 
     try {
       let result;
+
+      // ── Intercept list_actions for any tool with an action registry ──
+      if ((args as any)?.action === 'list_actions' && TOOL_ACTIONS[normalizedName]) {
+        result = { success: true, tool: normalizedName, actions: TOOL_ACTIONS[normalizedName] };
+        const resultWithDuration = withDuration(result, Date.now() - startTime, includeTiming);
+        return { content: [{ type: 'text', text: JSON.stringify(resultWithDuration, null, 2) }] };
+      }
 
       switch (normalizedName) {
         // ── Primary consolidated tools ──
@@ -2672,7 +2815,12 @@ export function createServer(): Server {
         ...(hasOutputSchema ? { structuredContent: resultWithDuration } : {}),
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      let errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      // Append list_actions hint for unknown action errors
+      if (errorMessage.includes('Unknown action') && TOOL_ACTIONS[normalizedName]) {
+        const validActions = TOOL_ACTIONS[normalizedName].map(a => a.action).join(', ');
+        errorMessage += `. Valid actions: ${validActions}. Tip: use action "list_actions" to discover all actions with descriptions.`;
+      }
       const meta = inferToolErrorMeta(normalizedName, errorMessage, registeredToolNames);
       const errorResult: Record<string, unknown> = {
         success: false,
