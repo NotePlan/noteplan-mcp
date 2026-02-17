@@ -421,6 +421,86 @@ Some notes at the bottom.
 
 ---
 
+### Test 27: Update task — content with marker is not duplicated
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure today's note has the fixture content with `* Existing task 1` under `## Tasks`.
+
+**Call (step 1 — add a checkbox task):**
+```json
+{ "action": "add", "content": "Marker test task", "heading": "Tasks", "date": "today" }
+```
+
+**Call (step 2 — update it with content that includes a marker):**
+```json
+{ "action": "update", "content": "- [ ] Marker test updated", "lineIndex": "<line of task>", "date": "today" }
+```
+
+**Verify:** Read today's note. The task should be a single `* Marker test updated` (or `* [ ] Marker test updated` depending on config) — NOT `* [ ] - [ ] Marker test updated` or any double-marker variant.
+
+---
+
+### Test 28: Update task — content with different marker style is stripped
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure today's note has a task line like `- [ ] Some task` (dash-style).
+
+**Call:**
+```json
+{ "action": "update", "content": "* [ ] Changed text", "lineIndex": "<line of task>", "date": "today" }
+```
+
+**Verify:** The result should be `- [ ] Changed text` — preserving the original dash marker, NOT `- [ ] * [ ] Changed text`.
+
+---
+
+### Test 29: Update task — clean content (no marker) still works
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure today's note has a task under `## Tasks`.
+
+**Call:**
+```json
+{ "action": "update", "content": "Clean content no markers", "lineIndex": "<line of task>", "date": "today" }
+```
+
+**Verify:** Task text is updated to "Clean content no markers" with its original marker preserved.
+
+---
+
+### Test 30: Update task — completed marker in content is stripped
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure today's note has an open task `* [ ] Some task`.
+
+**Call:**
+```json
+{ "action": "update", "content": "- [x] Should not duplicate", "lineIndex": "<line of task>", "date": "today" }
+```
+
+**Verify:** The result should be `* [ ] Should not duplicate` — the `- [x]` from the content is stripped, and the original `* [ ]` open status is preserved.
+
+---
+
+### Test 31: Edit line with raw task marker does not double-format
+
+**Tool:** `noteplan_edit_content`
+
+**Setup:** Ensure today's note has a task `* Existing task 1` at a known line.
+
+**Call:**
+```json
+{ "action": "edit_line", "line": "<line number>", "content": "* [ ] Rewritten task", "date": "today" }
+```
+
+**Verify:** The line should be exactly `* [ ] Rewritten task` — a straight replacement. Note: `edit_line` does raw line replacement, so the full line content is expected. This test confirms no extra formatting is applied on top.
+
+---
+
 ## Results Tracker
 
 | # | Test | Result | Notes |
@@ -451,3 +531,8 @@ Some notes at the bottom.
 | 24 | Delete a note | | |
 | 25 | Wildcard search with propertyFilters | | |
 | 26 | Global paragraph search matching frontmatter | | |
+| 27 | Update task — marker not duplicated | | |
+| 28 | Update task — different marker style stripped | | |
+| 29 | Update task — clean content works | | |
+| 30 | Update task — completed marker stripped | | |
+| 31 | Edit line — no double formatting | | |

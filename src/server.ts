@@ -50,6 +50,11 @@ type ToolAnnotations = {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PLUGIN_API_DOCS_DIR = path.join(__dirname, '../docs/plugin-api');
+const DOCS_DIR = path.join(__dirname, '../docs');
+
+const GENERAL_DOC_RESOURCES: { file: string; name: string; desc: string }[] = [
+  { file: 'x-callback-url.md', name: 'x-callback-url Reference', desc: 'NotePlan URL scheme — all actions (openNote, addText, addNote, addQuickTask, search, runPlugin, etc.), parameters, and encoding examples' },
+];
 
 const PLUGIN_API_RESOURCES = [
   { file: 'plugin-api-condensed.md', name: 'Plugin API Reference (Condensed)', desc: 'Complete NotePlan plugin API — all signatures, types, and patterns in one reference. Read this first.' },
@@ -2325,41 +2330,53 @@ export function createServer(): Server {
 
   // Register resource listing handler
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    return {
-      resources: PLUGIN_API_RESOURCES.map((r) => ({
-        uri: `noteplan://plugin-api/${r.file}`,
-        name: r.name,
-        description: r.desc,
-        mimeType: r.file.endsWith('.md') ? 'text/markdown' : r.file.endsWith('.json') ? 'application/json' : 'text/javascript',
-      })),
-    };
+    const pluginResources = PLUGIN_API_RESOURCES.map((r) => ({
+      uri: `noteplan://plugin-api/${r.file}`,
+      name: r.name,
+      description: r.desc,
+      mimeType: r.file.endsWith('.md') ? 'text/markdown' : r.file.endsWith('.json') ? 'application/json' : 'text/javascript',
+    }));
+    const generalResources = GENERAL_DOC_RESOURCES.map((r) => ({
+      uri: `noteplan://docs/${r.file}`,
+      name: r.name,
+      description: r.desc,
+      mimeType: 'text/markdown' as const,
+    }));
+    return { resources: [...pluginResources, ...generalResources] };
   });
 
   // Register resource read handler
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
-    const prefix = 'noteplan://plugin-api/';
-    if (!uri.startsWith(prefix)) {
+    const pluginPrefix = 'noteplan://plugin-api/';
+    const docsPrefix = 'noteplan://docs/';
+
+    let filePath: string;
+    if (uri.startsWith(pluginPrefix)) {
+      const filename = uri.slice(pluginPrefix.length);
+      const entry = PLUGIN_API_RESOURCES.find((r) => r.file === filename);
+      if (!entry) {
+        throw new Error(`Unknown resource: ${filename}. Available: ${PLUGIN_API_RESOURCES.map((r) => r.file).join(', ')}`);
+      }
+      filePath = path.join(PLUGIN_API_DOCS_DIR, entry.file);
+    } else if (uri.startsWith(docsPrefix)) {
+      const filename = uri.slice(docsPrefix.length);
+      const entry = GENERAL_DOC_RESOURCES.find((r) => r.file === filename);
+      if (!entry) {
+        throw new Error(`Unknown resource: ${filename}. Available: ${GENERAL_DOC_RESOURCES.map((r) => r.file).join(', ')}`);
+      }
+      filePath = path.join(DOCS_DIR, entry.file);
+    } else {
       throw new Error(`Unknown resource URI: ${uri}`);
     }
-    const filename = uri.slice(prefix.length);
-    const entry = PLUGIN_API_RESOURCES.find((r) => r.file === filename);
-    if (!entry) {
-      throw new Error(`Unknown resource: ${filename}. Available: ${PLUGIN_API_RESOURCES.map((r) => r.file).join(', ')}`);
-    }
-    const filePath = path.join(PLUGIN_API_DOCS_DIR, entry.file);
+
     if (!fs.existsSync(filePath)) {
       throw new Error(`Resource file not found on disk: ${filePath}`);
     }
     const content = fs.readFileSync(filePath, 'utf-8');
+    const mimeType = filePath.endsWith('.md') ? 'text/markdown' : filePath.endsWith('.json') ? 'application/json' : 'text/javascript';
     return {
-      contents: [
-        {
-          uri,
-          mimeType: entry.file.endsWith('.md') ? 'text/markdown' : entry.file.endsWith('.json') ? 'application/json' : 'text/javascript',
-          text: content,
-        },
-      ],
+      contents: [{ uri, mimeType, text: content }],
     };
   });
 

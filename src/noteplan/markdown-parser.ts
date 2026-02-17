@@ -277,18 +277,20 @@ export function updateTaskContent(content: string, lineIndex: number, newTaskCon
   }
 
   const line = lines[lineIndex];
+  // Strip any raw task markers the LLM may have included (e.g. "- [ ] Buy groceries" → "Buy groceries")
+  const cleanedContent = stripRawMarkers(newTaskContent);
 
   // First try checkbox-style task: * [ ] task
   const checkboxMatch = line.match(/^(\s*[*+\-]\s*\[.\]\s*)/);
   if (checkboxMatch) {
-    lines[lineIndex] = checkboxMatch[1] + newTaskContent;
+    lines[lineIndex] = checkboxMatch[1] + cleanedContent;
     return lines.join('\n');
   }
 
   // Then try plain marker task: * task
   const plainMatch = line.match(/^(\s*[*\-]\s+)/);
   if (plainMatch) {
-    lines[lineIndex] = plainMatch[1] + newTaskContent;
+    lines[lineIndex] = plainMatch[1] + cleanedContent;
     return lines.join('\n');
   }
 

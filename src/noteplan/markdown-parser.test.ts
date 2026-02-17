@@ -606,6 +606,50 @@ describe('updateTaskContent', () => {
   it('throws for non-task line', () => {
     expect(() => updateTaskContent('just text', 0, 'new')).toThrow('not a task');
   });
+
+  // Regression tests for marker duplication bug:
+  // LLMs frequently echo back markers in content, causing "* [ ] - [ ] text"
+  it('strips dash checkbox marker from new content', () => {
+    const content = '* [ ] Old content';
+    const result = updateTaskContent(content, 0, '- [ ] New content');
+    expect(result).toBe('* [ ] New content');
+  });
+
+  it('strips asterisk checkbox marker from new content', () => {
+    const content = '- [ ] Old content';
+    const result = updateTaskContent(content, 0, '* [ ] New content');
+    expect(result).toBe('- [ ] New content');
+  });
+
+  it('strips completed checkbox marker from new content', () => {
+    const content = '* [ ] Old content';
+    const result = updateTaskContent(content, 0, '- [x] New content');
+    expect(result).toBe('* [ ] New content');
+  });
+
+  it('strips plain dash marker from new content', () => {
+    const content = '* Old content';
+    const result = updateTaskContent(content, 0, '- New content');
+    expect(result).toBe('* New content');
+  });
+
+  it('strips plain asterisk marker from new content on plain task', () => {
+    const content = '- Old content';
+    const result = updateTaskContent(content, 0, '* New content');
+    expect(result).toBe('- New content');
+  });
+
+  it('strips marker with leading whitespace from new content', () => {
+    const content = '* [ ] Old content';
+    const result = updateTaskContent(content, 0, '  - [ ] New content');
+    expect(result).toBe('* [ ] New content');
+  });
+
+  it('preserves indentation of original line when stripping markers', () => {
+    const content = '  * [ ] Indented task';
+    const result = updateTaskContent(content, 0, '- [ ] Updated task');
+    expect(result).toBe('  * [ ] Updated task');
+  });
 });
 
 // ---------------------------------------------------------------------------
