@@ -31,6 +31,7 @@ let cachedAt = 0;
 const APPLESCRIPT_APP_NAMES = [
   'NotePlan',
   'NotePlan 3',
+  'NotePlan Beta',
   'NotePlan - To-Do List & Notes',
 ];
 
@@ -69,9 +70,11 @@ function detectViaAppleScript(): NotePlanVersion | null {
 const KNOWN_APP_PATHS = [
   '/Applications/NotePlan 3.app',
   '/Applications/NotePlan.app',
+  '/Applications/NotePlan Beta.app',
   '/Applications/NotePlan - To-Do List & Notes.app',
   path.join(process.env.HOME ?? '', 'Applications/NotePlan 3.app'),
   path.join(process.env.HOME ?? '', 'Applications/NotePlan.app'),
+  path.join(process.env.HOME ?? '', 'Applications/NotePlan Beta.app'),
   path.join(process.env.HOME ?? '', 'Applications/NotePlan - To-Do List & Notes.app'),
   // Setapp
   '/Applications/Setapp/NotePlan 3.app',
