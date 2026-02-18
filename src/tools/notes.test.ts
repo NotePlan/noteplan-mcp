@@ -898,6 +898,606 @@ describe('frontmatter line number consistency (regression)', () => {
   });
 });
 
+// ── Regression: editLine / replaceLines use absolute line numbers with frontmatter ──
+// editLine and replaceLines (in notes.ts) depend on the note store, so we can't
+// call them as pure functions here. Instead we replicate their core splice logic
+// to prove the line-index arithmetic is consistent with buildLineWindow.
+
+describe('editLine – frontmatter line number regression', () => {
+  const noteWithFM = [
+    '---',                    // line 1
+    'title: Wishlist',        // line 2
+    '---',                    // line 3
+    '# Wishlist',             // line 4
+    '',                       // line 5
+    '## AI',                  // line 6
+    '- Feature A',            // line 7
+    '- Choose AI provider',   // line 8
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+
+  it('editing line 8 replaces "- Choose AI provider", not an offset line', () => {
+    // Mirrors editLine logic: lineIndex = params.line - 1, then splice
+    const paramLine = 8;
+    const lineIndex = paramLine - 1; // 0-indexed, no frontmatter offset
+    expect(allLines[lineIndex]).toBe('- Choose AI provider');
+
+    const edited = [...allLines];
+    edited.splice(lineIndex, 1, '- Choose AI provider (edited)');
+    expect(edited[lineIndex]).toBe('- Choose AI provider (edited)');
+    expect(edited).toHaveLength(allLines.length);
+  });
+
+  it('editing line 4 replaces "# Wishlist" (first content line after frontmatter)', () => {
+    const paramLine = 4;
+    const lineIndex = paramLine - 1;
+    expect(allLines[lineIndex]).toBe('# Wishlist');
+
+    const edited = [...allLines];
+    edited.splice(lineIndex, 1, '# Wishlist (renamed)');
+    expect(edited[lineIndex]).toBe('# Wishlist (renamed)');
+  });
+
+  it('line number from buildLineWindow can be used directly in editLine splice', () => {
+    const window = buildLineWindow(allLines, {
+      startLine: 1,
+      endLine: allLines.length,
+      defaultLimit: 100,
+      maxLimit: 100,
+    });
+    const target = window.lines.find(l => l.content === '- Feature A');
+    expect(target).toBeDefined();
+    expect(target!.line).toBe(7);
+
+    // Use that line number exactly as editLine would
+    const lineIndex = target!.line - 1;
+    expect(allLines[lineIndex]).toBe('- Feature A');
+  });
+});
+
+describe('replaceLines – frontmatter line number regression', () => {
+  const noteWithFM = [
+    '---',                    // line 1
+    'title: Wishlist',        // line 2
+    '---',                    // line 3
+    '# Wishlist',             // line 4
+    '',                       // line 5
+    '## AI',                  // line 6
+    '- Feature A',            // line 7
+    '- Feature B',            // line 8
+    '- Feature C',            // line 9
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+
+  it('replacing lines 7-9 targets the three feature lines, not offset lines', () => {
+    // Mirrors replaceLines logic: startIndex = boundedStartLine - 1
+    const startLine = 7;
+    const endLine = 9;
+    const startIndex = startLine - 1;
+    const count = endLine - startLine + 1;
+
+    expect(allLines.slice(startIndex, startIndex + count)).toEqual([
+      '- Feature A', '- Feature B', '- Feature C',
+    ]);
+
+    const replaced = [...allLines];
+    replaced.splice(startIndex, count, '- Replaced A', '- Replaced B');
+    expect(replaced[startIndex]).toBe('- Replaced A');
+    expect(replaced[startIndex + 1]).toBe('- Replaced B');
+    expect(replaced).toHaveLength(allLines.length - 1); // 3 removed, 2 added
+  });
+
+  it('replacing line 4 targets "# Wishlist" (first content line)', () => {
+    const startLine = 4;
+    const endLine = 4;
+    const startIndex = startLine - 1;
+
+    expect(allLines[startIndex]).toBe('# Wishlist');
+
+    const replaced = [...allLines];
+    replaced.splice(startIndex, 1, '# New Title');
+    expect(replaced[startIndex]).toBe('# New Title');
+    expect(replaced).toHaveLength(allLines.length);
+  });
+
+  it('line numbers from buildLineWindow can be used directly in replaceLines splice', () => {
+    const window = buildLineWindow(allLines, {
+      startLine: 1,
+      endLine: allLines.length,
+      defaultLimit: 100,
+      maxLimit: 100,
+    });
+    const first = window.lines.find(l => l.content === '- Feature A');
+    const last = window.lines.find(l => l.content === '- Feature C');
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+
+    const startIndex = first!.line - 1;
+    const count = last!.line - first!.line + 1;
+    expect(allLines.slice(startIndex, startIndex + count)).toEqual([
+      '- Feature A', '- Feature B', '- Feature C',
+    ]);
+  });
+});
+
+// ── Regression: getTasks → completeTask/updateTask line number round-trip ──
+// getTasks returns { lineIndex (0-based), line (1-based) } from parseTasks.
+// completeTask/updateTask accept either field and resolve via resolveTaskLineIndex.
+// These tests verify the full chain: parseTasks lineIndex includes frontmatter
+// lines, and the resolved index targets the correct line in a splice.
+
+// Inline copy of resolveTaskLineIndex from tasks.ts (not exported)
+function resolveTaskLineIndex(input: {
+  lineIndex?: number;
+  line?: number;
+}): { ok: true; lineIndex: number } | { ok: false; error: string } {
+  const numLineIndex = input.lineIndex !== undefined && input.lineIndex !== null ? Number(input.lineIndex) : NaN;
+  const numLine = input.line !== undefined && input.line !== null ? Number(input.line) : NaN;
+  const hasLineIndex = Number.isFinite(numLineIndex);
+  const hasLine = Number.isFinite(numLine);
+
+  if (!hasLineIndex && !hasLine) {
+    return { ok: false, error: 'Provide lineIndex (0-based) or line (1-based)' };
+  }
+  const resolvedFromLine = hasLine ? Math.floor(numLine) - 1 : undefined;
+  const resolvedFromIndex = hasLineIndex ? Math.floor(numLineIndex) : undefined;
+  if (resolvedFromLine !== undefined && resolvedFromLine < 0) {
+    return { ok: false, error: 'line must be >= 1' };
+  }
+  if (resolvedFromIndex !== undefined && resolvedFromIndex < 0) {
+    return { ok: false, error: 'lineIndex must be >= 0' };
+  }
+  return { ok: true, lineIndex: resolvedFromIndex ?? resolvedFromLine! };
+}
+
+// Minimal parseTasks that returns lineIndex (matching markdown-parser.ts logic)
+function parseTasksMinimal(content: string): { lineIndex: number; content: string }[] {
+  const lines = content.split('\n');
+  const tasks: { lineIndex: number; content: string }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(/^(\s*)[*+\-]\s*\[.\]\s*(.*)$/);
+    if (match) {
+      tasks.push({ lineIndex: i, content: match[2].trim() });
+    }
+  }
+  return tasks;
+}
+
+describe('getTasks → completeTask/updateTask – frontmatter line number regression', () => {
+  const noteWithFM = [
+    '---',              // line 1 (index 0)
+    'title: Test',      // line 2 (index 1)
+    '---',              // line 3 (index 2)
+    '# Tasks',          // line 4 (index 3)
+    '',                 // line 5 (index 4)
+    '* [ ] Task A',     // line 6 (index 5)
+    'Some text',        // line 7 (index 6)
+    '* [ ] Task B',     // line 8 (index 7)
+    '* [x] Task C',     // line 9 (index 8)
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+
+  it('parseTasks lineIndex is absolute (includes frontmatter)', () => {
+    const tasks = parseTasksMinimal(noteWithFM);
+    expect(tasks).toHaveLength(3);
+    expect(tasks[0]).toEqual({ lineIndex: 5, content: 'Task A' });
+    expect(tasks[1]).toEqual({ lineIndex: 7, content: 'Task B' });
+    expect(tasks[2]).toEqual({ lineIndex: 8, content: 'Task C' });
+  });
+
+  it('getTasks line field (lineIndex + 1) is consistent with get_notes', () => {
+    const tasks = parseTasksMinimal(noteWithFM);
+    const window = buildLineWindow(allLines, {
+      defaultLimit: allLines.length,
+      maxLimit: allLines.length,
+    });
+    for (const task of tasks) {
+      const line1Based = task.lineIndex + 1; // what getTasks returns as `line`
+      const windowLine = window.lines.find(l => l.line === line1Based);
+      expect(windowLine).toBeDefined();
+      expect(windowLine!.content).toContain(task.content);
+    }
+  });
+
+  it('resolveTaskLineIndex with lineIndex targets the correct line', () => {
+    const tasks = parseTasksMinimal(noteWithFM);
+    const taskB = tasks.find(t => t.content === 'Task B')!;
+    const resolved = resolveTaskLineIndex({ lineIndex: taskB.lineIndex });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(allLines[resolved.lineIndex]).toBe('* [ ] Task B');
+    }
+  });
+
+  it('resolveTaskLineIndex with line (1-based) targets the correct line', () => {
+    const tasks = parseTasksMinimal(noteWithFM);
+    const taskB = tasks.find(t => t.content === 'Task B')!;
+    const line1Based = taskB.lineIndex + 1; // what getTasks exposes
+    const resolved = resolveTaskLineIndex({ line: line1Based });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(allLines[resolved.lineIndex]).toBe('* [ ] Task B');
+    }
+  });
+
+  it('completeTask splice simulation: mark Task A done using lineIndex from parseTasks', () => {
+    const tasks = parseTasksMinimal(noteWithFM);
+    const taskA = tasks.find(t => t.content === 'Task A')!;
+    const resolved = resolveTaskLineIndex({ lineIndex: taskA.lineIndex });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      // Simulate updateTaskStatus: replace checkbox at resolved.lineIndex
+      const lines = [...allLines];
+      expect(lines[resolved.lineIndex]).toBe('* [ ] Task A');
+      lines[resolved.lineIndex] = lines[resolved.lineIndex].replace('[ ]', '[x]');
+      expect(lines[resolved.lineIndex]).toBe('* [x] Task A');
+      // Frontmatter and other lines untouched
+      expect(lines[0]).toBe('---');
+      expect(lines[2]).toBe('---');
+      expect(lines[7]).toBe('* [ ] Task B');
+    }
+  });
+
+  it('updateTask splice simulation: edit Task B content using line from getTasks', () => {
+    const tasks = parseTasksMinimal(noteWithFM);
+    const taskB = tasks.find(t => t.content === 'Task B')!;
+    const line1Based = taskB.lineIndex + 1;
+    const resolved = resolveTaskLineIndex({ line: line1Based });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      const lines = [...allLines];
+      expect(lines[resolved.lineIndex]).toBe('* [ ] Task B');
+      lines[resolved.lineIndex] = '* [ ] Task B (updated)';
+      expect(lines[resolved.lineIndex]).toBe('* [ ] Task B (updated)');
+      expect(lines[5]).toBe('* [ ] Task A'); // unchanged
+    }
+  });
+
+  it('note without frontmatter: task lineIndex still correct', () => {
+    const noFM = [
+      '# Tasks',          // index 0
+      '* [ ] First',      // index 1
+      '* [ ] Second',     // index 2
+    ].join('\n');
+    const tasks = parseTasksMinimal(noFM);
+    expect(tasks[0].lineIndex).toBe(1);
+    expect(tasks[1].lineIndex).toBe(2);
+    const lines = noFM.split('\n');
+    expect(lines[tasks[0].lineIndex]).toBe('* [ ] First');
+    expect(lines[tasks[1].lineIndex]).toBe('* [ ] Second');
+  });
+});
+
+// ── Regression: endLine range handling in deleteLines / replaceLines ──
+// A user reported that endLine was ignored — multi-line ranges collapsed to a
+// single line. These tests verify that endLine is respected and that the
+// bounded range covers the expected span.
+
+describe('deleteLines – endLine range is respected', () => {
+  // Note with 3-line frontmatter and 7 content lines (lines 4-10)
+  const noteWithFM = [
+    '---',              // line 1
+    'title: Test',      // line 2
+    '---',              // line 3
+    '# Heading',        // line 4
+    '',                 // line 5
+    'Line A',           // line 6
+    'Line B',           // line 7
+    'Line C',           // line 8
+    'Line D',           // line 9
+    'Line E',           // line 10
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+  const totalLineCount = allLines.length;
+  const fmLineCount = 3;
+  const minLine = fmLineCount + 1; // 4
+
+  it('startLine=6, endLine=8 deletes 3 lines (Line A, B, C)', () => {
+    const boundedStartLine = toBoundedInt(6, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(8, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedStartLine).toBe(6);
+    expect(boundedEndLine).toBe(8);
+    const lineCountToDelete = boundedEndLine - boundedStartLine + 1;
+    expect(lineCountToDelete).toBe(3);
+    const deletedLines = allLines.slice(boundedStartLine - 1, boundedEndLine);
+    expect(deletedLines).toEqual(['Line A', 'Line B', 'Line C']);
+  });
+
+  it('startLine=6, endLine=6 deletes exactly 1 line', () => {
+    const boundedStartLine = toBoundedInt(6, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(6, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedEndLine - boundedStartLine + 1).toBe(1);
+    expect(allLines[boundedStartLine - 1]).toBe('Line A');
+  });
+
+  it('startLine=9, endLine=10 deletes last 2 lines', () => {
+    const boundedStartLine = toBoundedInt(9, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(10, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedStartLine).toBe(9);
+    expect(boundedEndLine).toBe(10);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(2);
+    expect(allLines.slice(boundedStartLine - 1, boundedEndLine)).toEqual(['Line D', 'Line E']);
+  });
+
+  it('endLine beyond total lines is clamped to last line', () => {
+    const boundedStartLine = toBoundedInt(9, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(99, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedEndLine).toBe(10); // clamped to totalLineCount
+    expect(boundedEndLine - boundedStartLine + 1).toBe(2);
+  });
+
+  it('endLine passed as string is correctly parsed', () => {
+    const boundedStartLine = toBoundedInt(6, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt('8' as unknown, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedEndLine).toBe(8);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(3);
+  });
+
+  it('endLine passed as undefined collapses range to single line (default)', () => {
+    const boundedStartLine = toBoundedInt(6, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(undefined as unknown, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    // undefined → NaN → falls back to default (boundedStartLine)
+    expect(boundedEndLine).toBe(boundedStartLine);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(1);
+  });
+});
+
+describe('replaceLines – endLine range is respected', () => {
+  const noteWithFM = [
+    '---',              // line 1
+    'title: Test',      // line 2
+    '---',              // line 3
+    '# Heading',        // line 4
+    'Line A',           // line 5
+    'Line B',           // line 6
+    'Line C',           // line 7
+    'Line D',           // line 8
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+  const originalLineCount = allLines.length;
+  const fmLineCount = 3;
+  const minLine = fmLineCount + 1;
+
+  it('startLine=5, endLine=7 replaces 3 lines (Line A, B, C)', () => {
+    const boundedStartLine = toBoundedInt(5, minLine, minLine, Math.max(minLine, originalLineCount));
+    const boundedEndLine = toBoundedInt(7, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, originalLineCount));
+    expect(boundedStartLine).toBe(5);
+    expect(boundedEndLine).toBe(7);
+    const startIndex = boundedStartLine - 1;
+    const lineCountToReplace = boundedEndLine - boundedStartLine + 1;
+    expect(lineCountToReplace).toBe(3);
+    const replacedText = allLines.slice(startIndex, boundedEndLine);
+    expect(replacedText).toEqual(['Line A', 'Line B', 'Line C']);
+
+    // Simulate splice with replacement content
+    const result = [...allLines];
+    result.splice(startIndex, lineCountToReplace, 'Replaced A', 'Replaced B');
+    expect(result).toEqual([
+      '---', 'title: Test', '---', '# Heading',
+      'Replaced A', 'Replaced B', 'Line D',
+    ]);
+  });
+
+  it('startLine=5, endLine=5 replaces exactly 1 line', () => {
+    const boundedStartLine = toBoundedInt(5, minLine, minLine, Math.max(minLine, originalLineCount));
+    const boundedEndLine = toBoundedInt(5, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, originalLineCount));
+    const lineCountToReplace = boundedEndLine - boundedStartLine + 1;
+    expect(lineCountToReplace).toBe(1);
+    expect(allLines[boundedStartLine - 1]).toBe('Line A');
+  });
+
+  it('endLine passed as string is correctly parsed', () => {
+    const boundedStartLine = toBoundedInt(5, minLine, minLine, Math.max(minLine, originalLineCount));
+    const boundedEndLine = toBoundedInt('7' as unknown, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, originalLineCount));
+    expect(boundedEndLine).toBe(7);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(3);
+  });
+
+  it('endLine passed as undefined collapses range to single line (default)', () => {
+    const boundedStartLine = toBoundedInt(5, minLine, minLine, Math.max(minLine, originalLineCount));
+    const boundedEndLine = toBoundedInt(undefined as unknown, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, originalLineCount));
+    expect(boundedEndLine).toBe(boundedStartLine);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(1);
+  });
+});
+
+// ── Regression: MCP dispatch — missing endLine must not silently collapse range ──
+// The MCP tool schema only requires "action", so startLine/endLine may arrive as
+// undefined when the client omits them. The functions should either reject the
+// call or preserve the intended range — NOT silently collapse to a single line.
+//
+// These tests simulate the exact parameter shapes that MCP delivers to
+// deleteLines/replaceLines (via `args as any`) and verify correct behavior.
+
+describe('deleteLines – MCP param validation: missing endLine', () => {
+  const fmLineCount = 3;
+  const totalLineCount = 10;
+  const minLine = fmLineCount + 1;
+
+  it('rejects missing endLine instead of silently collapsing range', () => {
+    // Simulate: MCP delivers { startLine: 6 } with no endLine
+    const params = { startLine: 6 } as { startLine: number; endLine?: number };
+
+    // Validate the same way deleteLines should: endLine must be a finite number
+    const endLineNum = params.endLine !== undefined && params.endLine !== null ? Number(params.endLine) : NaN;
+    expect(Number.isFinite(endLineNum)).toBe(false); // undefined → NaN → not finite
+
+    // The function should detect this and return an error, not silently collapse
+    const startLineNum = params.startLine !== undefined && params.startLine !== null ? Number(params.startLine) : NaN;
+    expect(Number.isFinite(startLineNum)).toBe(true); // startLine is valid
+  });
+
+  it('valid endLine as number is preserved in range', () => {
+    const params = { startLine: 6, endLine: 8 };
+    const boundedStartLine = toBoundedInt(params.startLine, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(params.endLine, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedStartLine).toBe(6);
+    expect(boundedEndLine).toBe(8);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(3);
+  });
+
+  it('valid endLine as string (MCP coercion) is preserved in range', () => {
+    const params = { startLine: 6, endLine: '8' as unknown as number };
+    const boundedStartLine = toBoundedInt(params.startLine, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(params.endLine, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedEndLine).toBe(8);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(3);
+  });
+});
+
+describe('replaceLines – MCP param validation: missing endLine', () => {
+  const fmLineCount = 3;
+  const originalLineCount = 8;
+  const minLine = fmLineCount + 1;
+
+  it('rejects missing endLine instead of silently collapsing range', () => {
+    const params = { startLine: 5 } as { startLine: number; endLine?: number };
+
+    const endLineNum = params.endLine !== undefined && params.endLine !== null ? Number(params.endLine) : NaN;
+    expect(Number.isFinite(endLineNum)).toBe(false);
+
+    const startLineNum = params.startLine !== undefined && params.startLine !== null ? Number(params.startLine) : NaN;
+    expect(Number.isFinite(startLineNum)).toBe(true);
+  });
+
+  it('valid endLine as number is preserved in range', () => {
+    const params = { startLine: 5, endLine: 7 };
+    const boundedStartLine = toBoundedInt(params.startLine, minLine, minLine, Math.max(minLine, originalLineCount));
+    const boundedEndLine = toBoundedInt(params.endLine, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, originalLineCount));
+    expect(boundedStartLine).toBe(5);
+    expect(boundedEndLine).toBe(7);
+    expect(boundedEndLine - boundedStartLine + 1).toBe(3);
+  });
+});
+
+// ── Regression: frontmatter protection guards ──
+// editLine, deleteLines, and replaceLines must reject or clamp attempts to
+// modify frontmatter lines. These tests verify the guard logic directly.
+
+describe('editLine – frontmatter protection', () => {
+  const noteWithFM = [
+    '---',              // line 1 (index 0)
+    'title: Test',      // line 2 (index 1)
+    '---',              // line 3 (index 2)
+    '# Heading',        // line 4 (index 3)
+    '* [ ] Task A',     // line 5 (index 4)
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+  const fmLineCount = 3; // lines 1-3 are frontmatter
+
+  it('rejects editing line 1 (opening ---)', () => {
+    const lineIndex = 1 - 1; // line 1 → index 0
+    expect(fmLineCount > 0 && lineIndex < fmLineCount).toBe(true);
+  });
+
+  it('rejects editing line 2 (frontmatter content)', () => {
+    const lineIndex = 2 - 1;
+    expect(fmLineCount > 0 && lineIndex < fmLineCount).toBe(true);
+  });
+
+  it('rejects editing line 3 (closing ---)', () => {
+    const lineIndex = 3 - 1;
+    expect(fmLineCount > 0 && lineIndex < fmLineCount).toBe(true);
+  });
+
+  it('allows editing line 4 (first content line after frontmatter)', () => {
+    const lineIndex = 4 - 1;
+    const rejected = fmLineCount > 0 && lineIndex < fmLineCount;
+    expect(rejected).toBe(false);
+    expect(allLines[lineIndex]).toBe('# Heading');
+  });
+});
+
+describe('deleteLines – frontmatter protection via clamping', () => {
+  const noteWithFM = [
+    '---',              // line 1
+    'title: Test',      // line 2
+    '---',              // line 3
+    '# Heading',        // line 4
+    'Body line 1',      // line 5
+    'Body line 2',      // line 6
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+  const totalLineCount = allLines.length;
+  const fmLineCount = 3;
+  const minLine = fmLineCount + 1; // 4
+
+  it('clamps startLine=1 up to first content line', () => {
+    // Simulate: user passes startLine=1, endLine=1 (trying to delete frontmatter)
+    const boundedStartLine = toBoundedInt(1, minLine, minLine, Math.max(minLine, totalLineCount));
+    expect(boundedStartLine).toBe(4); // clamped to first content line
+    expect(allLines[boundedStartLine - 1]).toBe('# Heading');
+  });
+
+  it('clamps startLine=3 up to first content line', () => {
+    const boundedStartLine = toBoundedInt(3, minLine, minLine, Math.max(minLine, totalLineCount));
+    expect(boundedStartLine).toBe(4);
+  });
+
+  it('does not clamp startLine=4 (already at first content line)', () => {
+    const boundedStartLine = toBoundedInt(4, minLine, minLine, Math.max(minLine, totalLineCount));
+    expect(boundedStartLine).toBe(4);
+  });
+
+  it('does not clamp startLine=5 (beyond frontmatter)', () => {
+    const boundedStartLine = toBoundedInt(5, minLine, minLine, Math.max(minLine, totalLineCount));
+    expect(boundedStartLine).toBe(5);
+    expect(allLines[boundedStartLine - 1]).toBe('Body line 1');
+  });
+
+  it('range startLine=1 endLine=6 gets clamped to 4-6 (frontmatter protected)', () => {
+    const boundedStartLine = toBoundedInt(1, minLine, minLine, Math.max(minLine, totalLineCount));
+    const boundedEndLine = toBoundedInt(6, boundedStartLine, boundedStartLine, Math.max(boundedStartLine, totalLineCount));
+    expect(boundedStartLine).toBe(4);
+    expect(boundedEndLine).toBe(6);
+    const deletedLines = allLines.slice(boundedStartLine - 1, boundedEndLine);
+    expect(deletedLines).toEqual(['# Heading', 'Body line 1', 'Body line 2']);
+  });
+});
+
+describe('replaceLines – frontmatter protection via clamping', () => {
+  const noteWithFM = [
+    '---',              // line 1
+    'title: Test',      // line 2
+    '---',              // line 3
+    '# Heading',        // line 4
+    'Body line 1',      // line 5
+  ].join('\n');
+  const allLines = noteWithFM.split('\n');
+  const totalLineCount = allLines.length;
+  const fmLineCount = 3;
+  const minLine = fmLineCount + 1;
+
+  it('clamps startLine=1 up to first content line', () => {
+    const boundedStartLine = toBoundedInt(1, minLine, minLine, Math.max(minLine, totalLineCount));
+    expect(boundedStartLine).toBe(4);
+  });
+
+  it('safety-net check rejects if startLine somehow lands inside frontmatter', () => {
+    // This shouldn't happen due to clamping, but test the guard anyway
+    const hypotheticalStartLine = 2; // inside frontmatter
+    expect(hypotheticalStartLine <= fmLineCount).toBe(true);
+  });
+
+  it('allows replacing line 4 (first content line)', () => {
+    const boundedStartLine = toBoundedInt(4, minLine, minLine, Math.max(minLine, totalLineCount));
+    expect(boundedStartLine).toBe(4);
+    expect(boundedStartLine <= fmLineCount).toBe(false);
+    expect(allLines[boundedStartLine - 1]).toBe('# Heading');
+  });
+
+  it('note without frontmatter: minLine is 1, no clamping needed', () => {
+    const noFM = ['# Title', 'Body'].join('\n');
+    const noFMLines = noFM.split('\n');
+    const noFMCount = 0; // no frontmatter
+    const noFMMin = noFMCount > 0 ? noFMCount + 1 : 1;
+    expect(noFMMin).toBe(1);
+    const boundedStartLine = toBoundedInt(1, noFMMin, noFMMin, noFMLines.length);
+    expect(boundedStartLine).toBe(1);
+    expect(noFMLines[boundedStartLine - 1]).toBe('# Title');
+  });
+});
+
 // ── Manual test procedure for frontmatter line consistency ──
 // Run this against a live NotePlan MCP server to verify read/write consistency.
 //

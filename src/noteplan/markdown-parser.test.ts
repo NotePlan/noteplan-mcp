@@ -838,3 +838,106 @@ describe('parseTasks', () => {
     expect(parseTasks('# Title\nJust text\n- bullet')).toEqual([]);
   });
 });
+
+// ── Regression: task line numbers must be absolute (include frontmatter) ──
+// parseTasks returns lineIndex (0-indexed, absolute). updateTaskStatus and
+// updateTaskContent accept that lineIndex and splice content.split('\n').
+// These tests verify the round-trip: parseTasks lineIndex → update functions
+// target the correct line when frontmatter is present.
+
+describe('parseTasks – frontmatter line number regression', () => {
+  beforeEach(() => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: false,
+      defaultTodoCharacter: '*',
+      useCheckbox: true,
+      taskPrefix: '* [ ] ',
+    });
+  });
+
+  const noteWithFM = [
+    '---',              // line 1 (index 0)
+    'title: Test',      // line 2 (index 1)
+    '---',              // line 3 (index 2)
+    '# Heading',        // line 4 (index 3)
+    '',                 // line 5 (index 4)
+    '* [ ] Task A',     // line 6 (index 5)
+    'Some text',        // line 7 (index 6)
+    '* [x] Task B',     // line 8 (index 7)
+  ].join('\n');
+
+  it('lineIndex includes frontmatter lines in the count', () => {
+    const tasks = parseTasks(noteWithFM);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0].content).toBe('Task A');
+    expect(tasks[0].lineIndex).toBe(5); // index 5, not 2 (without FM offset)
+    expect(tasks[1].content).toBe('Task B');
+    expect(tasks[1].lineIndex).toBe(7); // index 7, not 4
+  });
+
+  it('lineIndex maps directly to the correct array element', () => {
+    const tasks = parseTasks(noteWithFM);
+    const lines = noteWithFM.split('\n');
+    expect(lines[tasks[0].lineIndex]).toBe('* [ ] Task A');
+    expect(lines[tasks[1].lineIndex]).toBe('* [x] Task B');
+  });
+});
+
+describe('updateTaskStatus – frontmatter line number regression', () => {
+  const noteWithFM = [
+    '---',              // index 0
+    'title: Test',      // index 1
+    '---',              // index 2
+    '# Heading',        // index 3
+    '* [ ] Task A',     // index 4
+    '* [ ] Task B',     // index 5
+  ].join('\n');
+
+  it('updates the correct task when frontmatter is present', () => {
+    // Update Task B at lineIndex 5 (absolute, including frontmatter)
+    const result = updateTaskStatus(noteWithFM, 5, 'done');
+    const lines = result.split('\n');
+    expect(lines[4]).toBe('* [ ] Task A'); // Task A unchanged
+    expect(lines[5]).toBe('* [x] Task B'); // Task B marked done
+  });
+
+  it('parseTasks lineIndex can be passed directly to updateTaskStatus', () => {
+    const tasks = parseTasks(noteWithFM);
+    const taskA = tasks.find(t => t.content === 'Task A')!;
+    const result = updateTaskStatus(noteWithFM, taskA.lineIndex, 'done');
+    const lines = result.split('\n');
+    expect(lines[taskA.lineIndex]).toBe('* [x] Task A');
+    // Frontmatter and other lines untouched
+    expect(lines[0]).toBe('---');
+    expect(lines[2]).toBe('---');
+  });
+});
+
+describe('updateTaskContent – frontmatter line number regression', () => {
+  const noteWithFM = [
+    '---',              // index 0
+    'title: Test',      // index 1
+    '---',              // index 2
+    '# Heading',        // index 3
+    '* [ ] Task A',     // index 4
+    '* [ ] Task B',     // index 5
+  ].join('\n');
+
+  it('updates the correct task content when frontmatter is present', () => {
+    const result = updateTaskContent(noteWithFM, 5, 'Task B (edited)');
+    const lines = result.split('\n');
+    expect(lines[4]).toBe('* [ ] Task A');          // unchanged
+    expect(lines[5]).toBe('* [ ] Task B (edited)'); // updated
+  });
+
+  it('parseTasks lineIndex can be passed directly to updateTaskContent', () => {
+    const tasks = parseTasks(noteWithFM);
+    const taskB = tasks.find(t => t.content === 'Task B')!;
+    const result = updateTaskContent(noteWithFM, taskB.lineIndex, 'Updated B');
+    const lines = result.split('\n');
+    expect(lines[taskB.lineIndex]).toBe('* [ ] Updated B');
+    expect(lines[0]).toBe('---');
+    expect(lines[2]).toBe('---');
+  });
+});

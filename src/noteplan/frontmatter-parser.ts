@@ -21,8 +21,8 @@ export interface InsertOptions {
 /**
  * Return the number of lines occupied by frontmatter (including both `---`
  * delimiters).  Returns 0 when the note has no valid frontmatter.
- * This is used to offset user-facing line numbers so that line 1 always
- * refers to the first content line after frontmatter.
+ * This is used to prevent edits to frontmatter lines — callers validate
+ * that user-supplied line numbers fall after the frontmatter boundary.
  */
 export function getFrontmatterLineCount(content: string): number {
   const parsed = parseNoteContent(content);

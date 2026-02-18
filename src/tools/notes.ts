@@ -1922,6 +1922,16 @@ export function appendContent(params: z.infer<typeof appendContentSchema>) {
 
 export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
   try {
+    // Validate required line params — MCP may deliver them as undefined when omitted
+    const rawStart = params.startLine !== undefined && params.startLine !== null ? Number(params.startLine) : NaN;
+    const rawEnd = params.endLine !== undefined && params.endLine !== null ? Number(params.endLine) : NaN;
+    if (!Number.isFinite(rawStart)) {
+      return { success: false, error: 'startLine is required (1-indexed).' };
+    }
+    if (!Number.isFinite(rawEnd)) {
+      return { success: false, error: 'endLine is required (1-indexed). Pass the same value as startLine to delete a single line.' };
+    }
+
     const resolved = resolveWritableNoteReference(params);
     if (!resolved.note) {
       return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
@@ -2106,6 +2116,16 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
 
 export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
   try {
+    // Validate required line params — MCP may deliver them as undefined when omitted
+    const rawStart = params.startLine !== undefined && params.startLine !== null ? Number(params.startLine) : NaN;
+    const rawEnd = params.endLine !== undefined && params.endLine !== null ? Number(params.endLine) : NaN;
+    if (!Number.isFinite(rawStart)) {
+      return { success: false, error: 'startLine is required (1-indexed).' };
+    }
+    if (!Number.isFinite(rawEnd)) {
+      return { success: false, error: 'endLine is required (1-indexed). Pass the same value as startLine to replace a single line.' };
+    }
+
     const resolved = resolveWritableNoteReference(params);
     if (!resolved.note) {
       return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
