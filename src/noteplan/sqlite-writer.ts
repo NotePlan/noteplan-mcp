@@ -71,6 +71,7 @@ function ensureMcpChangesTable(database: OpenDatabase): void {
 function queueMcpChange(database: OpenDatabase, noteId: string, oldParent?: string): void {
   ensureMcpChangesTable(database);
   database.prepare('INSERT INTO mcp_changes (note_id, old_parent) VALUES (?, ?)').run(noteId, oldParent ?? null);
+  console.error(`[noteplan-mcp] Queued mcp_change for note_id=${noteId}${oldParent ? ` (old_parent=${oldParent})` : ''}`);
 }
 
 function getSpaceNode(identifier: string): SpaceNodeRow {
@@ -256,6 +257,7 @@ export function createSpaceNote(
       )
       .run(noteId, content, SQLITE_NOTE_TYPES.TEAMSPACE_NOTE, title, filename, parent || spaceId, now, now);
     queueMcpChange(database, noteId);
+    console.error(`[noteplan-mcp] Created space note: id=${noteId}, title="${title}", space=${spaceId}`);
     return filename;
   } catch (error) {
     console.error('Error creating space note:', error);
@@ -356,6 +358,7 @@ export function updateSpaceNote(identifier: string, content: string): void {
       throw new Error(`Note not found: ${identifier}`);
     }
     queueMcpChange(database, node.id);
+    console.error(`[noteplan-mcp] Updated space note: id=${node.id}, content_length=${content.length}`);
   } catch (error) {
     console.error('Error updating space note:', error);
     throw new Error(`Failed to update space note: ${error instanceof Error ? error.message : 'unknown error'}`);

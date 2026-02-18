@@ -179,6 +179,7 @@ export class SqliteDatabase {
       try {
         const data = this.db.export();
         fs.writeFileSync(this.filePath, Buffer.from(data));
+        console.error(`[noteplan-mcp] Flushed database: ${this.filePath} (${data.byteLength} bytes)`);
       } catch (err) {
         console.error('[noteplan-mcp] Failed to flush database:', err);
       }

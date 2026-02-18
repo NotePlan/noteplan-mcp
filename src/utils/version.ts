@@ -43,7 +43,11 @@ function detectViaAppleScript(): NotePlanVersion | null {
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 3_000,
       }).trim();
-      if (isRunning !== 'true') continue;
+      if (isRunning !== 'true') {
+        console.error(`[noteplan-mcp] AppleScript: "${appName}" not running, skipping`);
+        continue;
+      }
+      console.error(`[noteplan-mcp] AppleScript: "${appName}" is running, querying version...`);
 
       const raw = execFileSync('osascript', ['-e', `tell application "${appName}" to getVersion`], {
         encoding: 'utf-8',
@@ -52,6 +56,7 @@ function detectViaAppleScript(): NotePlanVersion | null {
       }).trim();
       const parsed = JSON.parse(raw);
       if (typeof parsed.version === 'string' && typeof parsed.build === 'number') {
+        console.error(`[noteplan-mcp] AppleScript: detected "${appName}" v${parsed.version} build ${parsed.build}`);
         return { version: parsed.version, build: parsed.build, source: 'applescript' };
       }
     } catch (err: unknown) {
@@ -82,6 +87,7 @@ const KNOWN_APP_PATHS = [
 ];
 
 function detectViaPlist(): NotePlanVersion | null {
+  console.error(`[noteplan-mcp] Plist: scanning ${KNOWN_APP_PATHS.length} known app paths...`);
   // First try hardcoded known paths
   const result = readVersionFromAppPath(KNOWN_APP_PATHS);
   if (result) return result;
@@ -109,7 +115,10 @@ function detectViaPlist(): NotePlanVersion | null {
 function readVersionFromAppPath(appPaths: string[]): NotePlanVersion | null {
   for (const appPath of appPaths) {
     const plistPath = path.join(appPath, 'Contents/Info.plist');
-    if (!fs.existsSync(plistPath)) continue;
+    if (!fs.existsSync(plistPath)) {
+      console.error(`[noteplan-mcp] Plist: no Info.plist at ${appPath}`);
+      continue;
+    }
     try {
       const version = execFileSync('defaults', ['read', path.join(appPath, 'Contents/Info'), 'CFBundleShortVersionString'], {
         encoding: 'utf-8',
@@ -123,6 +132,7 @@ function readVersionFromAppPath(appPaths: string[]): NotePlanVersion | null {
       }).trim();
       const build = parseInt(buildStr, 10) || 0;
       if (version) {
+        console.error(`[noteplan-mcp] Plist: found v${version} build ${build} at ${appPath}`);
         return { version, build, source: 'plist' };
       }
     } catch (err: unknown) {
@@ -135,13 +145,19 @@ function readVersionFromAppPath(appPaths: string[]): NotePlanVersion | null {
 export function getNotePlanVersion(forceRefresh = false): NotePlanVersion {
   const now = Date.now();
   if (!forceRefresh && cachedVersion && (now - cachedAt) < CACHE_TTL_MS) {
+    console.error(`[noteplan-mcp] Version: serving from cache (v${cachedVersion.version} build ${cachedVersion.build})`);
     return cachedVersion;
   }
 
-  const version = detectViaAppleScript() ?? detectViaPlist() ?? { version: '0.0.0', build: 0, source: 'unknown' as const };
-  cachedVersion = version;
+  const version = detectViaAppleScript() ?? detectViaPlist() ?? null;
+  if (!version) {
+    console.error('[noteplan-mcp] Version: both AppleScript and Plist detection failed, falling back to 0.0.0');
+    cachedVersion = { version: '0.0.0', build: 0, source: 'unknown' as const };
+  } else {
+    cachedVersion = version;
+  }
   cachedAt = now;
-  return version;
+  return cachedVersion;
 }
 
 export function isAdvancedFeaturesAvailable(forceRefresh = false): boolean {
