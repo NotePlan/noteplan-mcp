@@ -1223,6 +1223,23 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
       }
 
       const renamed = store.renameSpaceNote(writeId, params.newTitle);
+
+      // Also update the # Title heading in the note content if it matches the old title
+      if (renamed.note.content) {
+        const lines = renamed.note.content.split('\n');
+        const titleLineIndex = lines.findIndex((l) => /^#\s+/.test(l));
+        if (titleLineIndex !== -1) {
+          const oldHeadingTitle = lines[titleLineIndex].replace(/^#\s+/, '');
+          if (oldHeadingTitle === renamed.fromTitle) {
+            lines[titleLineIndex] = `# ${params.newTitle}`;
+            const renamedWriteTarget = getWritableIdentifier(renamed.note);
+            store.updateNote(renamedWriteTarget.identifier, lines.join('\n'), {
+              source: renamedWriteTarget.source,
+            });
+          }
+        }
+      }
+
       return {
         success: true,
         message: `TeamSpace note renamed from "${renamed.fromTitle}" to "${renamed.toTitle}"`,
