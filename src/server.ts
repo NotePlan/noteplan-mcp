@@ -28,7 +28,6 @@ import * as pluginTools from './tools/plugins.js';
 import * as themeTools from './tools/themes.js';
 import * as templateTools from './tools/templates.js';
 import * as attachmentTools from './tools/attachments.js';
-import * as automationTools from './tools/ui-automation.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
 import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES, MIN_BUILD_CREATE_BACKUP } from './utils/version.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
@@ -237,7 +236,6 @@ function getToolOutputSchema(toolName: string): Record<string, unknown> {
     case 'noteplan_embeddings':
     case 'noteplan_templates':
     case 'noteplan_attachments':
-    case 'noteplan_automation':
       return GENERIC_TOOL_OUTPUT_SCHEMA;
     default:
       return GENERIC_TOOL_OUTPUT_SCHEMA;
@@ -430,7 +428,6 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_themes',
     'noteplan_embeddings',
     'noteplan_attachments',
-    'noteplan_automation',
   ]);
 
   const nonIdempotentTools = new Set([
@@ -447,7 +444,6 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
     'noteplan_embeddings',
     'noteplan_templates',
     'noteplan_attachments',
-    'noteplan_automation',
   ]);
 
   const openWorldTools = new Set([
@@ -546,9 +542,6 @@ function getToolSearchAliases(toolName: string): string[] {
       break;
     case 'noteplan_attachments':
       aliases.push('attachment', 'attachments', 'image', 'file', 'upload', 'add image', 'add file', 'add attachment', 'list attachments', 'get attachment', 'base64', 'photo', 'screenshot');
-      break;
-    case 'noteplan_automation':
-      aliases.push('automation', 'click', 'type', 'scroll', 'key press', 'window screenshot', 'ui test', 'computer use', 'interact', 'mouse');
       break;
   }
 
@@ -865,9 +858,6 @@ function withSuggestedNextTools(result: unknown, toolName: string, availableTool
       break;
     case 'noteplan_attachments':
       suggestedNextTools = ['noteplan_attachments', 'noteplan_edit_content', 'noteplan_get_notes'];
-      break;
-    case 'noteplan_automation':
-      suggestedNextTools = ['noteplan_automation'];
       break;
     default:
       suggestedNextTools = [];
@@ -2052,7 +2042,7 @@ export function createServer(): Server {
   toolDefinitions.push({
     name: 'noteplan_ui',
     description:
-      'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows\n- backup: Create a full backup of all notes, calendars, themes, filters, and plugin data. Old backups are pruned automatically.',
+      'NotePlan UI control via AppleScript.\n\nActions:\n- open_note: Open a note (title or filename)\n- open_today: Open today\'s note\n- search: Search in UI\n- run_plugin: Run a plugin command (requires pluginId + command)\n- open_view: Open a named view\n- toggle_sidebar: Toggle sidebar visibility\n- close_plugin_window: Close plugin window (by windowID/title, or omit both to close all)\n- list_plugin_windows: List open plugin windows\n- backup: Create a full backup',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2336,54 +2326,6 @@ export function createServer(): Server {
       },
   );
 
-  toolDefinitions.push({
-    name: 'noteplan_automation',
-    description:
-      'UI automation for visual interaction with the NotePlan window. Enables taking screenshots, clicking, typing, scrolling, and pressing keyboard shortcuts.\n\nActions:\n- screenshot: Capture the main window as a PNG image. Returns the image, window dimensions (points), and scaleFactor. To convert image pixel coords to point coords: pointX = pixelX / scaleFactor\n- click: Click at a point (x, y in points, origin top-left). Optional doubleClick.\n- type_text: Type text into the currently focused element\n- scroll: Scroll at a point with deltaX/deltaY (negative deltaY = scroll down)\n- key_press: Press a named key with optional modifiers (cmd, shift, opt, ctrl)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          enum: ['screenshot', 'click', 'type_text', 'scroll', 'key_press', 'list_actions'],
-          description: 'Action: screenshot | click | type_text | scroll | key_press | list_actions (discover all actions)',
-        },
-        x: {
-          type: 'number',
-          description: 'X coordinate in points — used by click, scroll',
-        },
-        y: {
-          type: 'number',
-          description: 'Y coordinate in points (0 = top of content area) — used by click, scroll',
-        },
-        doubleClick: {
-          type: 'boolean',
-          description: 'Perform a double click — used by click',
-        },
-        text: {
-          type: 'string',
-          description: 'Text to type — used by type_text',
-        },
-        deltaX: {
-          type: 'number',
-          description: 'Horizontal scroll amount in pixels — used by scroll (default: 0)',
-        },
-        deltaY: {
-          type: 'number',
-          description: 'Vertical scroll amount in pixels (negative = down) — used by scroll',
-        },
-        key: {
-          type: 'string',
-          description: 'Key name (return, tab, escape, delete, space, left/right/up/down, a-z, 0-9, f1-f12) — used by key_press',
-        },
-        modifiers: {
-          type: 'string',
-          description: 'Comma-separated modifiers: cmd, shift, opt, ctrl, fn — used by key_press',
-        },
-      },
-      required: ['action'],
-    },
-  });
 
   const annotatedToolDefinitions: ToolDefinition[] = toolDefinitions.map((tool): ToolDefinition => ({
     ...tool,
@@ -2575,13 +2517,6 @@ export function createServer(): Server {
       { action: 'list', description: 'List all attachments for a note' },
       { action: 'get', description: 'Get attachment metadata. Set includeData=true for base64 content' },
       { action: 'move', description: 'Move an attachment between notes' },
-    ],
-    noteplan_automation: [
-      { action: 'screenshot', description: 'Capture the main window as a PNG image with dimensions and scale factor' },
-      { action: 'click', description: 'Click at a point in the window (requires x, y in points)' },
-      { action: 'type_text', description: 'Type text into the focused element (requires text)' },
-      { action: 'scroll', description: 'Scroll at a point (requires x, y, deltaY)' },
-      { action: 'key_press', description: 'Press a key with optional modifiers (requires key)' },
     ],
   };
 
@@ -2866,18 +2801,6 @@ export function createServer(): Server {
             case 'get': result = attachmentTools.getAttachment(args as any); break;
             case 'move': result = attachmentTools.moveAttachment(args as any); break;
             default: throw new Error(`Unknown action: ${action}. Valid actions: add, list, get, move`);
-          }
-          break;
-        }
-        case 'noteplan_automation': {
-          const action = (args as any)?.action;
-          switch (action) {
-            case 'screenshot': result = automationTools.screenshot(args as any); break;
-            case 'click': result = automationTools.click(args as any); break;
-            case 'type_text': result = automationTools.typeText(args as any); break;
-            case 'scroll': result = automationTools.scroll(args as any); break;
-            case 'key_press': result = automationTools.keyPress(args as any); break;
-            default: throw new Error(`Unknown action: ${action}. Valid actions: screenshot, click, type_text, scroll, key_press`);
           }
           break;
         }
