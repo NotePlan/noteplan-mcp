@@ -144,7 +144,15 @@ export function getEvents(params: z.infer<typeof getEventsSchema>) {
       args.push(input.calendar);
     }
 
-    const allEvents = runSwiftHelper(args) || [];
+    const result = runSwiftHelper(args);
+    if (result && !Array.isArray(result)) {
+      // Swift helper returned an error object (e.g. {"error": "Calendar access denied..."})
+      return {
+        success: false,
+        error: result.error || 'Calendar helper returned unexpected data',
+      };
+    }
+    const allEvents = result || [];
     const events = allEvents.slice(offset, offset + limit);
     const hasMore = offset + events.length < allEvents.length;
     const nextCursor = hasMore ? String(offset + events.length) : null;
@@ -333,7 +341,14 @@ export function deleteEvent(params: z.infer<typeof deleteEventSchema>) {
  */
 export function listCalendars(_params: z.infer<typeof listCalendarsSchema>) {
   try {
-    const calendars = runSwiftHelper(['list-calendars']) || [];
+    const result = runSwiftHelper(['list-calendars']);
+    if (result && !Array.isArray(result)) {
+      return {
+        success: false,
+        error: result.error || 'Calendar helper returned unexpected data',
+      };
+    }
+    const calendars = result || [];
 
     return {
       success: true,
