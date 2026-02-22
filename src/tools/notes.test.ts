@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Copies of private helper functions from notes.ts
@@ -1495,6 +1495,283 @@ describe('replaceLines – frontmatter protection via clamping', () => {
     const boundedStartLine = toBoundedInt(1, noFMMin, noFMMin, noFMLines.length);
     expect(boundedStartLine).toBe(1);
     expect(noFMLines[boundedStartLine - 1]).toBe('# Title');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// matchesFrontmatterProperties — edge cases for developer report
+// ---------------------------------------------------------------------------
+
+describe('matchesFrontmatterProperties – property filter edge cases', () => {
+  const makeNote = (content: string) => ({
+    id: 'test-id',
+    title: 'Test Note',
+    filename: 'test.md',
+    type: 'note' as const,
+    source: 'local' as const,
+    folder: '',
+    content,
+    modifiedAt: new Date(),
+    createdAt: new Date(),
+    spaceId: undefined,
+    date: undefined,
+  });
+
+  it('matches quoted property value: type: "book" matches filter {type: "book"}', () => {
+    const note = makeNote('---\ntype: "book"\n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(true);
+  });
+
+  it('matches quoted filter against unquoted value: filter "book" matches type: book', () => {
+    const note = makeNote('---\ntype: book\n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['type', '"book"']], false)).toBe(true);
+  });
+
+  it('matches single-quoted property value', () => {
+    const note = makeNote("---\ntype: 'book'\n---\nContent");
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(true);
+  });
+
+  it('matches semicolon-separated list values', () => {
+    const note = makeNote('---\ncategories: fiction;non-fiction;book\n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['categories', 'book']], false)).toBe(true);
+  });
+
+  it('matches semicolon-separated list with spaces', () => {
+    const note = makeNote('---\ncategories: fiction; book; novel\n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['categories', 'book']], false)).toBe(true);
+  });
+
+  it('does not match empty property value against non-empty filter', () => {
+    const note = makeNote('---\ntype: \n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(false);
+  });
+
+  it('does not match when property value is whitespace-only', () => {
+    const note = makeNote('---\ntype:   \n---\nContent');
+    expect(matchesFrontmatterProperties(note, [['type', 'book']], false)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getNote id/filename resolution — regression test
+// ---------------------------------------------------------------------------
+
+// We test the getNote logic by importing the function and mocking the readers.
+// Since getNote depends on sqliteReader and fileReader, we use vi.mock.
+
+import { getNote } from '../noteplan/unified-store.js';
+import * as sqliteReader from '../noteplan/sqlite-reader.js';
+import * as fileReader from '../noteplan/file-reader.js';
+vi.mock('../noteplan/sqlite-reader.js', () => ({
+  getSpaceNote: vi.fn(),
+  listSpaces: vi.fn(() => []),
+  listSpaceNotes: vi.fn(() => []),
+  searchSpaceNotesFTS: vi.fn(() => []),
+  getSpaceNoteByTitle: vi.fn(),
+  getSpaceCalendarNote: vi.fn(),
+  listSpaceFolders: vi.fn(() => []),
+  extractSpaceTags: vi.fn(() => []),
+  resolveSpaceFolder: vi.fn(),
+  isSpaceNoteInTrash: vi.fn(),
+  countSpaceFolderContents: vi.fn(() => ({ noteCount: 0, folderCount: 0 })),
+}));
+
+vi.mock('../noteplan/file-reader.js', () => ({
+  readNoteFile: vi.fn(),
+  getCalendarNote: vi.fn(),
+  getNoteByTitle: vi.fn(),
+  listProjectNotes: vi.fn(() => []),
+  listCalendarNotes: vi.fn(() => []),
+  listFolders: vi.fn(() => []),
+  searchLocalNotes: vi.fn(() => []),
+  getNotesPath: vi.fn(() => '/tmp/notes'),
+  extractAllTags: vi.fn(() => []),
+  countNotesInDirectory: vi.fn(() => ({ noteCount: 0, folderCount: 0 })),
+}));
+
+vi.mock('../noteplan/file-writer.js', () => ({}));
+vi.mock('../noteplan/sqlite-writer.js', () => ({}));
+vi.mock('./ripgrep-search.js', () => ({
+  isRipgrepAvailable: vi.fn(() => Promise.resolve(false)),
+  searchWithRipgrep: vi.fn(),
+}));
+vi.mock('../noteplan/fuzzy-search.js', () => ({
+  fuzzySearch: vi.fn(() => []),
+}));
+
+describe('getNote id/filename resolution', () => {
+  const localNote = {
+    id: 'Notes/Books/my-book.md',
+    title: 'My Book',
+    filename: 'Notes/Books/my-book.md',
+    type: 'note' as const,
+    source: 'local' as const,
+    folder: 'Books',
+    content: '---\ntype: book\n---\n# My Book\nContent here',
+    modifiedAt: new Date(),
+    createdAt: new Date(),
+    spaceId: undefined,
+    date: undefined,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('retrieves a local note via id when SQLite lookup returns null', () => {
+    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(null);
+    vi.mocked(fileReader.readNoteFile).mockReturnValue(localNote);
+
+    const result = getNote({ id: 'Notes/Books/my-book.md' });
+    expect(result).toEqual(localNote);
+    expect(sqliteReader.getSpaceNote).toHaveBeenCalledWith('Notes/Books/my-book.md');
+    expect(fileReader.readNoteFile).toHaveBeenCalledWith('Notes/Books/my-book.md');
+  });
+
+  it('retrieves a local note via filename', () => {
+    vi.mocked(fileReader.readNoteFile).mockReturnValue(localNote);
+
+    const result = getNote({ filename: 'Notes/Books/my-book.md' });
+    expect(result).toEqual(localNote);
+  });
+
+  it('id and filename return the same note for local notes', () => {
+    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(null);
+    vi.mocked(fileReader.readNoteFile).mockReturnValue(localNote);
+
+    const byId = getNote({ id: localNote.filename });
+    const byFilename = getNote({ filename: localNote.filename });
+    expect(byId).toEqual(byFilename);
+  });
+
+  it('returns null for non-existent id', () => {
+    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(null);
+    vi.mocked(fileReader.readNoteFile).mockReturnValue(null);
+
+    const result = getNote({ id: 'Notes/nonexistent.md' });
+    expect(result).toBeNull();
+  });
+
+  it('prefers space note when SQLite lookup succeeds', () => {
+    const spaceNote = { ...localNote, source: 'space' as const, id: 'space-uuid-123' };
+    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(spaceNote);
+
+    const result = getNote({ id: 'space-uuid-123' });
+    expect(result).toEqual(spaceNote);
+    expect(fileReader.readNoteFile).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2 verification: searchLocalNotes with colons in query
+// searchLocalNotes uses a simple content.toLowerCase().includes(query) check.
+// This verifies colons in the query don't cause matching failures.
+// ---------------------------------------------------------------------------
+
+describe('searchLocalNotes – colon in query (issue #2 verification)', () => {
+  // Replicate the matching logic from file-reader.ts searchLocalNotes
+  function matchesSearchQuery(note: { content: string; title: string }, query: string): boolean {
+    const lowerQuery = query.toLowerCase();
+    return (
+      note.content.toLowerCase().includes(lowerQuery) ||
+      note.title.toLowerCase().includes(lowerQuery)
+    );
+  }
+
+  it('finds notes containing "type: book" when query includes a colon', () => {
+    const note = {
+      content: '---\ntype: book\n---\n# My Book\nSome content',
+      title: 'My Book',
+    };
+    expect(matchesSearchQuery(note, 'type: book')).toBe(true);
+  });
+
+  it('finds notes containing "articles:" when query ends with a colon', () => {
+    const note = {
+      content: '---\ntitle: Reading List\narticles: yes\n---\n# Reading List',
+      title: 'Reading List',
+    };
+    expect(matchesSearchQuery(note, 'articles:')).toBe(true);
+  });
+
+  it('colon in query does not cause false positives', () => {
+    const note = {
+      content: '---\ntype: article\n---\n# Article\nSome content',
+      title: 'Article',
+    };
+    expect(matchesSearchQuery(note, 'type: book')).toBe(false);
+  });
+
+  it('matches colon query case-insensitively', () => {
+    const note = {
+      content: '---\nType: Book\n---\n# My Book',
+      title: 'My Book',
+    };
+    expect(matchesSearchQuery(note, 'type: book')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3 verification: searchParagraphsGlobal finds frontmatter text
+// searchParagraphsGlobal iterates ALL lines of a note (including frontmatter).
+// This verifies frontmatter lines are not skipped during paragraph search.
+// ---------------------------------------------------------------------------
+
+describe('searchParagraphsGlobal – frontmatter text matching (issue #3 verification)', () => {
+  // Replicate the core line-matching logic from searchParagraphsGlobal in notes.ts
+  function findMatchingLines(
+    content: string,
+    query: string,
+    caseSensitive = false
+  ): Array<{ lineIndex: number; line: number; content: string }> {
+    const normalizedQuery = caseSensitive ? query : query.toLowerCase();
+    const lines = content.split('\n');
+    const matches: Array<{ lineIndex: number; line: number; content: string }> = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineText = caseSensitive ? lines[i] : lines[i].toLowerCase();
+      if (lineText.includes(normalizedQuery)) {
+        matches.push({ lineIndex: i, line: i + 1, content: lines[i] });
+      }
+    }
+    return matches;
+  }
+
+  it('finds "type: book" in frontmatter lines', () => {
+    const content = '---\ntype: book\nauthor: Someone\n---\n# My Book\nContent';
+    const matches = findMatchingLines(content, 'type: book');
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].content).toBe('type: book');
+    expect(matches[0].line).toBe(2); // line 2 in the frontmatter
+  });
+
+  it('finds frontmatter property among all note lines', () => {
+    const content = '---\ntags: fiction, novel\nstatus: reading\n---\n# Novel\nGreat book';
+    const matches = findMatchingLines(content, 'status: reading');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].lineIndex).toBe(2); // 0-indexed: ---(0), tags(1), status(2)
+  });
+
+  it('does not skip the opening --- delimiter', () => {
+    const content = '---\ntype: book\n---\n# Title';
+    const matches = findMatchingLines(content, '---');
+    // Should find both the opening and closing ---
+    expect(matches.length).toBe(2);
+    expect(matches[0].line).toBe(1);
+    expect(matches[1].line).toBe(3);
+  });
+
+  it('finds matches in both frontmatter and body', () => {
+    const content = '---\nnote: book review\n---\n# Book Review\nThis is a book review.';
+    const matches = findMatchingLines(content, 'book review');
+    expect(matches.length).toBe(3); // frontmatter line, heading, body line
+  });
+
+  it('returns empty when query does not match any line', () => {
+    const content = '---\ntype: article\n---\n# Article\nSome content';
+    const matches = findMatchingLines(content, 'type: book');
+    expect(matches).toHaveLength(0);
   });
 });
 

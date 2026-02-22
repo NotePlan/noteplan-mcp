@@ -167,7 +167,12 @@ export function getNote(options: {
 
   // If ID is specified, get directly (best for space notes)
   if (id) {
-    return sqliteReader.getSpaceNote(id);
+    const spaceNote = sqliteReader.getSpaceNote(id);
+    if (spaceNote) return spaceNote;
+    // Fallback: for local notes, id === filename
+    const localNote = fileReader.readNoteFile(id);
+    if (localNote) return localNote;
+    return null;
   }
 
   // If date is specified, get calendar note
