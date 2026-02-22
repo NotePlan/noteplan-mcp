@@ -562,6 +562,131 @@ Take the `id` from the first result and fetch it:
 
 ---
 
+### Test 35: Complete task using `date` parameter (no filename resolution needed)
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure the 2026-02-15 daily note has the fixture content with `* Existing task 1` under `## Tasks`.
+
+**Call:**
+```json
+{ "action": "complete", "date": "2026-02-15", "taskQuery": "Existing task 1" }
+```
+
+**Verify:** Task is completed successfully using `date` + `taskQuery` without needing to resolve the filename or line number first. The response should include `success: true`.
+
+---
+
+### Test 36: Complete task using `taskQuery` (find by text)
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure the 2026-02-15 daily note has the fixture content with `* Existing task 2` under `## Tasks`.
+
+**Call:**
+```json
+{ "action": "complete", "date": "2026-02-15", "taskQuery": "Existing task 2" }
+```
+
+**Verify:** "Existing task 2" is marked as done. No lineIndex or line was needed — the task was found by content text.
+
+---
+
+### Test 37: Update task using `date` parameter
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure the 2026-02-15 daily note has the fixture content with tasks under `## Tasks`. First call `noteplan_paragraphs(action: "get", date: "2026-02-15")` to discover the actual lineIndex of "Existing task 1".
+
+**Call:**
+```json
+{ "action": "update", "date": "2026-02-15", "lineIndex": "<lineIndex from get>", "content": "Updated via date param" }
+```
+
+**Verify:** Task content is updated successfully using `date` instead of `filename`. Note: use the lineIndex from the `get` call — line numbers are absolute and include frontmatter.
+
+---
+
+### Test 38: Set frontmatter property using `title` parameter
+
+**Tool:** `noteplan_manage_note`
+
+**Setup:** Ensure "MCP Test Note" exists in root folder.
+
+**Call:**
+```json
+{ "action": "set_property", "title": "MCP Test Note", "key": "status", "value": "tested" }
+```
+
+**Verify:** Property is set successfully without needing to resolve the filename first. Read the note and confirm `status: tested` appears in frontmatter.
+
+---
+
+### Test 39: Set frontmatter property using `date` parameter
+
+**Tool:** `noteplan_manage_note`
+
+**Setup:** Ensure the 2026-02-15 daily note exists.
+
+**Call:**
+```json
+{ "action": "set_property", "date": "2026-02-15", "key": "test-run", "value": "true" }
+```
+
+**Verify:** Property `test-run: true` is set on the 2026-02-15 daily note. No filename resolution needed.
+
+---
+
+### Test 40: Remove frontmatter property using `title` parameter
+
+**Tool:** `noteplan_manage_note`
+
+**Setup:** Ensure "MCP Test Note" has `status: tested` from Test 38.
+
+**Call:**
+```json
+{ "action": "remove_property", "title": "MCP Test Note", "key": "status" }
+```
+
+**Verify:** The `status` property is removed from "MCP Test Note" without needing filename resolution.
+
+---
+
+### Test 41: Get paragraphs using `date` parameter
+
+**Tool:** `noteplan_paragraphs`
+
+**Setup:** Ensure the 2026-02-15 daily note has the fixture content.
+
+**Call:**
+```json
+{ "action": "get", "date": "2026-02-15" }
+```
+
+**Verify:** Returns paragraph data for the 2026-02-15 daily note without needing to resolve the filename first. Each line should include lineIndex, content, and type metadata.
+
+---
+
+### Test 42: Move a note using `title` parameter
+
+**Tool:** `noteplan_manage_note`
+
+**Setup:** Ensure "MCP Verified Note" exists (renamed from "MCP Test Note" in test 22).
+
+**Call (dryRun):**
+```json
+{ "action": "move", "title": "MCP Verified Note", "destinationFolder": "@Archive", "dryRun": true }
+```
+
+**Call (confirm):**
+```json
+{ "action": "move", "title": "MCP Verified Note", "destinationFolder": "@Archive", "confirmationToken": "<token from dryRun>" }
+```
+
+**Verify:** Note is moved to @Archive using `title` instead of `filename`. No filename resolution step needed.
+
+---
+
 ## Results Tracker
 
 | # | Test | Result | Notes |
@@ -600,3 +725,11 @@ Take the `id` from the first result and fetch it:
 | 32 | Retrieve note using id from search | | |
 | 33 | Search with colon in query | | |
 | 34 | Property-only search with round-trip fetch | | |
+| 35 | Complete task using `date` param | | |
+| 36 | Complete task using `taskQuery` | | |
+| 37 | Update task using `date` param | | |
+| 38 | Set property using `title` param | | |
+| 39 | Set property using `date` param | | |
+| 40 | Remove property using `title` param | | |
+| 41 | Get paragraphs using `date` param | | |
+| 42 | Move note using `title` param | | |

@@ -1162,7 +1162,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_manage_note',
           description:
-            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title). Set noteType="template" to create in @Templates with proper frontmatter. After creating a template, verify it with noteplan_templates(action: "render").\n- update: Replace note content (requires filename, content, fullReplace + confirmationToken)\n- delete/move/restore: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- rename: Rename a note (accepts id, filename, title, or query to find the note + newTitle for the new name + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires filename + key)',
+            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title). Set noteType="template" to create in @Templates with proper frontmatter. After creating a template, verify it with noteplan_templates(action: "render").\n- update: Replace note content (requires filename, content, fullReplace + confirmationToken)\n- delete/move/restore: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- rename: Rename a note (accepts id, filename, title, or query to find the note + newTitle for the new name + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires note ref via id/filename/title/date/query + key)',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1173,7 +1173,7 @@ export function createServer(): Server {
               },
               id: {
                 type: 'string',
-                description: 'Note ID — used by delete, move, rename, restore (preferred for TeamSpace notes)',
+                description: 'Note ID — used by delete, move, rename, restore, set_property, remove_property (preferred for TeamSpace notes)',
               },
               filename: {
                 type: 'string',
@@ -1181,11 +1181,15 @@ export function createServer(): Server {
               },
               title: {
                 type: 'string',
-                description: 'Note title — required for create. Also used by rename to find the note by title (fuzzy matched).',
+                description: 'Note title — required for create. Also used by rename, move, set_property, remove_property to find the note by title (fuzzy matched).',
+              },
+              date: {
+                type: 'string',
+                description: 'Calendar note date (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday) — used by set_property, remove_property, move',
               },
               query: {
                 type: 'string',
-                description: 'Fuzzy search query to find the note — used by rename',
+                description: 'Fuzzy search query to find the note — used by rename, move, set_property, remove_property',
               },
               content: {
                 type: 'string',
@@ -1368,7 +1372,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_paragraphs',
           description:
-            'Task lifecycle and paragraph inspection.\n\nParagraph actions:\n- get: Get note lines with metadata (requires filename). Returns line, lineIndex, content, type, etc.\n- search: Search for matching lines in a note (requires query + note ref via id/filename/title/date)\n\nTask actions:\n- search_global: Search tasks across all notes (requires query, supports "*" wildcard)\n- add: Add a task (requires target + content). Target is a date ("today", "tomorrow", "YYYY-MM-DD") for daily notes or a filename for project notes. Pass only the task text as content — formatting auto-matches user settings. Position+heading combos: position="start"+heading inserts right after the heading, position="end"+heading appends at end of that section, position="after-heading" inserts right after heading, position="in-section" appends at end of section. Default position is "end" (bottom of note). Use scheduleDate for >YYYY-MM-DD, [[Note Name]] to link, #tag for tags, @person for mentions.\n- complete: Mark task done (requires filename + lineIndex or line)\n- update: Update task content/status (requires filename + lineIndex or line)',
+            'Task lifecycle and paragraph inspection.\n\nParagraph actions:\n- get: Get note lines with metadata (requires filename). Returns line, lineIndex, content, type, etc.\n- search: Search for matching lines in a note (requires query + note ref via id/filename/title/date)\n\nTask actions:\n- search_global: Search tasks across all notes (requires query, supports "*" wildcard)\n- add: Add a task (requires target + content). Target is a date ("today", "tomorrow", "YYYY-MM-DD") for daily notes or a filename for project notes. Pass only the task text as content — formatting auto-matches user settings. Position+heading combos: position="start"+heading inserts right after the heading, position="end"+heading appends at end of that section, position="after-heading" inserts right after heading, position="in-section" appends at end of section. Default position is "end" (bottom of note). Use scheduleDate for >YYYY-MM-DD, [[Note Name]] to link, #tag for tags, @person for mentions.\n- complete: Mark task done (requires note ref via id/filename/title/date + lineIndex/line or taskQuery to find by text)\n- update: Update task content/status (requires note ref via id/filename/title/date + lineIndex or line)',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1379,7 +1383,7 @@ export function createServer(): Server {
               },
               id: {
                 type: 'string',
-                description: 'Note ID — used by search',
+                description: 'Note ID — used by get, search, complete, update',
               },
               filename: {
                 type: 'string',
@@ -1387,11 +1391,11 @@ export function createServer(): Server {
               },
               title: {
                 type: 'string',
-                description: 'Note title — used by search',
+                description: 'Note title — used by get, search, complete, update',
               },
               date: {
                 type: 'string',
-                description: 'Calendar date — used by search',
+                description: 'Calendar date (e.g. today, YYYY-MM-DD) — used by get, search, complete, update',
               },
               space: {
                 type: 'string',
@@ -1455,6 +1459,10 @@ export function createServer(): Server {
               line: {
                 type: 'number',
                 description: 'Task line number (1-based) — used by complete, update',
+              },
+              taskQuery: {
+                type: 'string',
+                description: 'Find task by content text instead of line number (completes first matching open task) — used by complete',
               },
               priority: {
                 type: 'number',

@@ -12,6 +12,7 @@ import {
 } from '../noteplan/markdown-parser.js';
 
 import { TaskStatus, NoteType } from '../noteplan/types.js';
+import { resolveWritableNoteReference, getWritableIdentifier } from './notes.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -240,22 +241,38 @@ export const addTaskSchema = z.object({
 });
 
 export const completeTaskSchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
   lineIndex: z.number().optional().describe('Line index of the task (0-based)'),
   line: z.number().optional().describe('Line number of the task (1-based)'),
+  taskQuery: z.string().optional().describe('Find task by content text instead of line number (completes first matching open task)'),
   space: z.string().optional().describe('Space name or ID to search in'),
 }).superRefine((input, ctx) => {
-  if (input.lineIndex === undefined && input.line === undefined) {
+  if (!input.id && !input.filename && !input.title && !input.date && !input.query) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Provide lineIndex (0-based) or line (1-based)',
+      message: 'Provide one note reference: id, filename, title, date, or query',
+      path: ['filename'],
+    });
+  }
+  if (input.lineIndex === undefined && input.line === undefined && !input.taskQuery) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide lineIndex (0-based), line (1-based), or taskQuery to find the task',
       path: ['lineIndex'],
     });
   }
 });
 
 export const updateTaskSchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
   lineIndex: z.number().optional().describe('Line index of the task (0-based)'),
   line: z.number().optional().describe('Line number of the task (1-based)'),
   space: z.string().optional().describe('Space name or ID to search in'),
@@ -269,6 +286,13 @@ export const updateTaskSchema = z.object({
     .optional()
     .describe('New task status'),
 }).superRefine((input, ctx) => {
+  if (!input.id && !input.filename && !input.title && !input.date && !input.query) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, filename, title, date, or query',
+      path: ['filename'],
+    });
+  }
   if (input.lineIndex === undefined && input.line === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -639,34 +663,60 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
 
 export function completeTask(params: z.infer<typeof completeTaskSchema>) {
   try {
-    const resolved = resolveTaskLineIndex({
-      lineIndex: params.lineIndex,
-      line: params.line,
+    const noteRef = resolveWritableNoteReference({
+      id: params.id,
+      filename: params.filename,
+      title: params.title,
+      date: params.date,
+      query: params.query,
+      space: params.space,
     });
-    if (!resolved.ok) {
+
+    if (!noteRef.note) {
       return {
         success: false,
-        error: resolved.error,
+        error: noteRef.error || 'Note not found',
+        candidates: noteRef.candidates,
       };
     }
-    const lineIndex = resolved.lineIndex;
+    const note = noteRef.note;
 
-    const note = store.getNote({ filename: params.filename, space: params.space });
+    let lineIndex: number;
 
-    if (!note) {
-      return {
-        success: false,
-        error: 'Note not found',
-      };
+    if (params.taskQuery) {
+      // Find task by content text
+      const tasks = parseTasks(note.content);
+      const openTasks = filterTasksByStatus(tasks, 'open');
+      const queryLower = params.taskQuery.toLowerCase();
+      const match = openTasks.find((t) => t.content.toLowerCase().includes(queryLower));
+      if (!match) {
+        return {
+          success: false,
+          error: `No open task matching "${params.taskQuery}" found in note`,
+        };
+      }
+      lineIndex = match.lineIndex;
+    } else {
+      const resolved = resolveTaskLineIndex({
+        lineIndex: params.lineIndex,
+        line: params.line,
+      });
+      if (!resolved.ok) {
+        return {
+          success: false,
+          error: resolved.error,
+        };
+      }
+      lineIndex = resolved.lineIndex;
     }
 
     const lines = note.content.split('\n');
     const originalLine = lines[lineIndex] || '';
 
     const newContent = updateTaskStatus(note.content, lineIndex, 'done');
-    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    const updatedNote = store.updateNote(writeIdentifier, newContent, {
-      source: note.source,
+    const writable = getWritableIdentifier(note);
+    const updatedNote = store.updateNote(writable.identifier, newContent, {
+      source: writable.source,
     });
 
     const newLines = updatedNote.content.split('\n');
@@ -721,14 +771,23 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
       };
     }
 
-    const note = store.getNote({ filename: params.filename, space: params.space });
+    const noteRef = resolveWritableNoteReference({
+      id: params.id,
+      filename: params.filename,
+      title: params.title,
+      date: params.date,
+      query: params.query,
+      space: params.space,
+    });
 
-    if (!note) {
+    if (!noteRef.note) {
       return {
         success: false,
-        error: 'Note not found',
+        error: noteRef.error || 'Note not found',
+        candidates: noteRef.candidates,
       };
     }
+    const note = noteRef.note;
 
     let newContent = note.content;
 
@@ -740,9 +799,9 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
       newContent = updateTaskContent(newContent, lineIndex, params.content);
     }
 
-    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    store.updateNote(writeIdentifier, newContent, {
-      source: note.source,
+    const writable = getWritableIdentifier(note);
+    store.updateNote(writable.identifier, newContent, {
+      source: writable.source,
     });
 
     return {

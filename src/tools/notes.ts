@@ -78,7 +78,7 @@ function resolveNoteTarget(
   };
 }
 
-type WritableNoteReferenceInput = {
+export type WritableNoteReferenceInput = {
   id?: string;
   filename?: string;
   title?: string;
@@ -87,7 +87,7 @@ type WritableNoteReferenceInput = {
   space?: string;
 };
 
-function resolveWritableNoteReference(input: WritableNoteReferenceInput): {
+export function resolveWritableNoteReference(input: WritableNoteReferenceInput): {
   note: ReturnType<typeof store.getNote>;
   error?: string;
   candidates?: Array<{ id: string; title: string; filename: string; score: number }>;
@@ -159,7 +159,7 @@ function resolveWritableNoteReference(input: WritableNoteReferenceInput): {
   };
 }
 
-function getWritableIdentifier(
+export function getWritableIdentifier(
   note: NonNullable<ReturnType<typeof store.getNote>>
 ): { identifier: string; source: 'local' | 'space' } {
   if (note.source === 'space') {
@@ -447,6 +447,9 @@ export const deleteNoteSchema = z.object({
 export const moveNoteSchema = z.object({
   id: z.string().optional().describe('Note ID (preferred for TeamSpace notes)'),
   filename: z.string().optional().describe('Filename/path of the note to move'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
   space: z.string().optional().describe('Space name or ID to search in'),
   destinationFolder: z
     .string()
@@ -1005,14 +1008,16 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
 
 export function moveNote(params: z.infer<typeof moveNoteSchema>) {
   try {
-    const target = resolveNoteTarget(params.id, params.filename, params.space);
-    if (!target.note) {
+    const noteRef = resolveWritableNoteReference(params);
+    if (!noteRef.note) {
       return {
         success: false,
-        error: 'Note not found',
+        error: noteRef.error || 'Note not found',
+        candidates: noteRef.candidates,
       };
     }
-    const preview = store.previewMoveNote(target.identifier, params.destinationFolder);
+    const writable = getWritableIdentifier(noteRef.note);
+    const preview = store.previewMoveNote(writable.identifier, params.destinationFolder);
     const confirmationTarget =
       `${preview.fromFilename}=>${preview.toFilename}::${preview.destinationParentId ?? preview.destinationFolder}`;
 
@@ -1054,7 +1059,7 @@ export function moveNote(params: z.infer<typeof moveNoteSchema>) {
       };
     }
 
-    const moved = store.moveNote(target.identifier, params.destinationFolder);
+    const moved = store.moveNote(writable.identifier, params.destinationFolder);
     return {
       success: true,
       message:
@@ -1354,13 +1359,25 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
 
 // Get note with line numbers
 export const getParagraphsSchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
   space: z.string().optional().describe('Space name or ID to search in'),
   startLine: z.number().min(1).optional().describe('First line to include (1-indexed, inclusive)'),
   endLine: z.number().min(1).optional().describe('Last line to include (1-indexed, inclusive)'),
   limit: z.number().min(1).max(1000).optional().default(200).describe('Maximum lines to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset within selected range'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.filename && !input.title && !input.date && !input.query) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, filename, title, date, or query',
+      path: ['filename'],
+    });
+  }
 });
 
 export const searchParagraphsSchema = z.object({
@@ -1396,14 +1413,15 @@ export const searchParagraphsSchema = z.object({
 });
 
 export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
-  const note = store.getNote({ filename: params.filename, space: params.space });
-
-  if (!note) {
+  const noteRef = resolveWritableNoteReference(params);
+  if (!noteRef.note) {
     return {
       success: false,
-      error: 'Note not found',
+      error: noteRef.error || 'Note not found',
+      candidates: noteRef.candidates,
     };
   }
+  const note = noteRef.note;
 
   const allLines = note.content.split('\n');
   const lineWindow = buildLineWindow(allLines, {
@@ -1599,16 +1617,40 @@ export function searchParagraphs(params: z.infer<typeof searchParagraphsSchema>)
 
 // Granular note operation schemas
 export const setPropertySchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
   space: z.string().optional().describe('Space name or ID to search in'),
   key: z.string().describe('Property key (e.g., "icon", "bg-color", "status")'),
   value: z.string().describe('Property value'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.filename && !input.title && !input.date && !input.query) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, filename, title, date, or query',
+      path: ['filename'],
+    });
+  }
 });
 
 export const removePropertySchema = z.object({
-  filename: z.string().describe('Filename/path of the note'),
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
   space: z.string().optional().describe('Space name or ID to search in'),
   key: z.string().describe('Property key to remove'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.filename && !input.title && !input.date && !input.query) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, filename, title, date, or query',
+      path: ['filename'],
+    });
+  }
 });
 
 export const insertContentSchema = z.object({
@@ -1757,14 +1799,15 @@ export const replaceLinesSchema = z.object({
 // Granular note operation implementations
 export function setProperty(params: z.infer<typeof setPropertySchema>) {
   try {
-    const note = store.getNote({ filename: params.filename, space: params.space });
-    if (!note) {
-      return { success: false, error: 'Note not found' };
+    const noteRef = resolveWritableNoteReference(params);
+    if (!noteRef.note) {
+      return { success: false, error: noteRef.error || 'Note not found', candidates: noteRef.candidates };
     }
+    const note = noteRef.note;
 
     const newContent = frontmatter.setFrontmatterProperty(note.content, params.key, params.value);
-    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    store.updateNote(writeIdentifier, newContent, { source: note.source });
+    const writable = getWritableIdentifier(note);
+    store.updateNote(writable.identifier, newContent, { source: writable.source });
 
     return {
       success: true,
@@ -1780,14 +1823,15 @@ export function setProperty(params: z.infer<typeof setPropertySchema>) {
 
 export function removeProperty(params: z.infer<typeof removePropertySchema>) {
   try {
-    const note = store.getNote({ filename: params.filename, space: params.space });
-    if (!note) {
-      return { success: false, error: 'Note not found' };
+    const noteRef = resolveWritableNoteReference(params);
+    if (!noteRef.note) {
+      return { success: false, error: noteRef.error || 'Note not found', candidates: noteRef.candidates };
     }
+    const note = noteRef.note;
 
     const newContent = frontmatter.removeFrontmatterProperty(note.content, params.key);
-    const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    store.updateNote(writeIdentifier, newContent, { source: note.source });
+    const writable = getWritableIdentifier(note);
+    store.updateNote(writable.identifier, newContent, { source: writable.source });
 
     return {
       success: true,
