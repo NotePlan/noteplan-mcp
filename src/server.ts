@@ -1162,7 +1162,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_manage_note',
           description:
-            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title). Set noteType="template" to create in @Templates with proper frontmatter. After creating a template, verify it with noteplan_templates(action: "render").\n- update: Replace note content (requires filename, content, fullReplace + confirmationToken)\n- delete/move/restore: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- rename: Rename a note (accepts id, filename, title, or query to find the note + newTitle for the new name + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires note ref via id/filename/title/date/query + key)',
+            'Manage notes: create, update, delete, move, restore, rename, or manage frontmatter properties.\n\nActions:\n- create: Create a project note (requires title). Set noteType="template" to create in @Templates with proper frontmatter. After creating a template, verify it with noteplan_templates(action: "render").\n- update: Replace note content (requires note ref via id/filename/title/date/query, content, fullReplace + confirmationToken)\n- delete/move/restore: Lifecycle ops (requires id or filename + dryRun/confirmationToken)\n- rename: Rename a note (accepts id, filename, title, or query to find the note + newTitle for the new name + dryRun/confirmationToken)\n- set_property/remove_property: Frontmatter (requires note ref via id/filename/title/date/query + key)',
           inputSchema: {
             type: 'object',
             properties: {

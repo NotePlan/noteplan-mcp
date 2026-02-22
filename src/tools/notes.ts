@@ -399,7 +399,11 @@ export const createNoteSchema = z.object({
 });
 
 export const updateNoteSchema = z.object({
-  filename: z.string().describe('Filename/path of the note to update'),
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note to update'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
   space: z.string().optional().describe('Space name or ID to search in'),
   content: z
     .string()
@@ -420,6 +424,14 @@ export const updateNoteSchema = z.object({
     .boolean()
     .optional()
     .describe('Allow replacing note content with empty/blank text (default: false)'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.filename && !input.title && !input.date && !input.query) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, filename, title, date, or query',
+      path: ['filename'],
+    });
+  }
 });
 
 export const deleteNoteSchema = z.object({
@@ -862,13 +874,15 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
       };
     }
 
-    const existingNote = store.getNote({ filename: params.filename, space: params.space });
-    if (!existingNote) {
+    const noteRef = resolveWritableNoteReference(params);
+    if (!noteRef.note) {
       return {
         success: false,
-        error: 'Note not found',
+        error: noteRef.error || 'Note not found',
+        candidates: noteRef.candidates,
       };
     }
+    const existingNote = noteRef.note;
 
     if (params.allowEmptyContent !== true && params.content.trim().length === 0) {
       return {
@@ -878,16 +892,19 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
       };
     }
 
+    // Use the resolved filename as the confirmation token target for consistency
+    const confirmationTarget = existingNote.filename;
+
     if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
         tool: 'noteplan_update_note',
-        target: params.filename,
+        target: confirmationTarget,
         action: 'full_replace',
       });
       return {
         success: true,
         dryRun: true,
-        message: `Dry run: note ${params.filename} would be fully replaced`,
+        message: `Dry run: note ${existingNote.filename} would be fully replaced`,
         note: {
           id: existingNote.id,
           title: existingNote.title,
@@ -905,7 +922,7 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
 
     const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
       tool: 'noteplan_update_note',
-      target: params.filename,
+      target: confirmationTarget,
       action: 'full_replace',
     });
     if (!confirmation.ok) {
