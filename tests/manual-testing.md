@@ -687,6 +687,57 @@ Take the `id` from the first result and fetch it:
 
 ---
 
+### Test 43: Calendar — list calendars
+
+**Tool:** `noteplan_eventkit`
+
+**Call:**
+```json
+{ "action": "list_calendars" }
+```
+
+**Verify:** Returns a list of calendars with `name` and `id` fields. If access is denied, error message should include the authorization status and host app identity.
+
+---
+
+### Test 44: Calendar — get events for a date
+
+**Tool:** `noteplan_eventkit`
+
+**Call:**
+```json
+{ "action": "get_events", "date": "2026-02-15", "days": 1 }
+```
+
+**Verify:** Returns events array (may be empty if no events on that date). Response includes `success`, `eventCount`, `totalCount`, and pagination fields.
+
+---
+
+### Test 45: Calendar — create and delete an event
+
+**Tool:** `noteplan_eventkit`
+
+**Call (create):**
+```json
+{ "action": "create_event", "title": "MCP Test Event", "startDate": "2026-02-15 10:00", "endDate": "2026-02-15 11:00" }
+```
+
+**Verify create:** Returns `success: true` with an event `id`.
+
+**Call (delete dryRun):**
+```json
+{ "action": "delete_event", "eventId": "<id from create>", "dryRun": true }
+```
+
+**Call (delete confirm):**
+```json
+{ "action": "delete_event", "eventId": "<id from create>", "confirmationToken": "<token from dryRun>" }
+```
+
+**Verify delete:** Event is removed. Fetching events for that date no longer includes "MCP Test Event".
+
+---
+
 ## Results Tracker
 
 | # | Test | Result | Notes |
@@ -733,3 +784,6 @@ Take the `id` from the first result and fetch it:
 | 40 | Remove property using `title` param | | |
 | 41 | Get paragraphs using `date` param | | |
 | 42 | Move note using `title` param | | |
+| 43 | Calendar — list calendars | | |
+| 44 | Calendar — get events for a date | | |
+| 45 | Calendar — create and delete an event | | |

@@ -11,6 +11,43 @@ let semaphore = DispatchSemaphore(value: 0)
 let args = CommandLine.arguments
 let command = args.count > 1 ? args[1] : "list-events"
 
+/// Return a JSON-safe description of the current EventKit authorization status
+func authStatusLabel() -> String {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    switch status {
+    case .notDetermined:   return "notDetermined"
+    case .restricted:      return "restricted"
+    case .denied:          return "denied"
+    case .fullAccess:      return "fullAccess"
+    case .writeOnly:       return "writeOnly"
+    @unknown default:      return "unknown"
+    }
+}
+
+/// Build an informative error message when calendar access is not granted
+func calendarAccessDeniedError() -> String {
+    let status = authStatusLabel()
+    let parentPID = ProcessInfo.processInfo.processIdentifier
+    // The host app that spawns this helper is the one that needs TCC calendar permission
+    let parentApp = ProcessInfo.processInfo.environment["__CFBundleIdentifier"] ?? "the app running noteplan-mcp"
+
+    var msg = "Calendar access denied."
+    msg += " Authorization status: \(status)."
+    msg += " The host process (\(parentApp), PID \(parentPID)) needs Full Calendar Access."
+    msg += " Open System Settings > Privacy & Security > Calendars and enable access for the app that runs the MCP server"
+    msg += " (e.g. Claude, Terminal, iTerm, VS Code — whichever app launched noteplan-mcp)."
+
+    if status == "notDetermined" {
+        msg += " macOS should have shown a permission prompt — if not, try restarting the host app."
+    } else if status == "denied" {
+        msg += " Permission was explicitly denied. Toggle it on in System Settings."
+    } else if status == "restricted" {
+        msg += " Calendar access is restricted by a device management profile."
+    }
+
+    return "{\"error\": \"\(msg)\"}"
+}
+
 func formatDate(_ date: Date) -> String {
     let formatter = ISO8601DateFormatter()
     return formatter.string(from: date)
@@ -32,11 +69,19 @@ func parseDate(_ str: String) -> Date? {
     return dateOnlyFormatter.date(from: str)
 }
 
+// Quick diagnostic command that doesn't require access grant
+if command == "diag" {
+    let status = authStatusLabel()
+    let parentApp = ProcessInfo.processInfo.environment["__CFBundleIdentifier"] ?? "unknown"
+    print("{\"authorizationStatus\": \"\(status)\", \"hostApp\": \"\(parentApp)\", \"pid\": \(ProcessInfo.processInfo.processIdentifier)}")
+    exit(0)
+}
+
 store.requestFullAccessToEvents { granted, error in
     defer { semaphore.signal() }
 
     guard granted else {
-        print("{\"error\": \"Calendar access denied. Grant access in System Preferences > Privacy > Calendars.\"}")
+        print(calendarAccessDeniedError())
         return
     }
 
