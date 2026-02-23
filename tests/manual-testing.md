@@ -698,6 +698,8 @@ Take the `id` from the first result and fetch it:
 
 **Verify:** Returns a list of calendars with `name` and `id` fields. If access is denied, error message should include the authorization status and host app identity.
 
+> **Note:** When NotePlan is running, this uses the AppleScript path (`listCalendars` command via NotePlan), which leverages NotePlan's existing calendar permission. When NotePlan is not running, it falls back to the Swift `calendar-helper` binary. Check MCP stderr for `[noteplan-mcp] listCalendars: using AppleScript via NotePlan` or `falling back to calendar-helper binary` to confirm which path was used.
+
 ---
 
 ### Test 44: Calendar — get events for a date
@@ -710,6 +712,8 @@ Take the `id` from the first result and fetch it:
 ```
 
 **Verify:** Returns events array (may be empty if no events on that date). Response includes `success`, `eventCount`, `totalCount`, and pagination fields.
+
+> **Note:** Same AppleScript-first / Swift-helper-fallback behavior as Test 43. Check MCP stderr for `[noteplan-mcp] getEvents:` log to confirm the active path.
 
 ---
 
@@ -735,6 +739,8 @@ Take the `id` from the first result and fetch it:
 ```
 
 **Verify delete:** Event is removed. Fetching events for that date no longer includes "MCP Test Event".
+
+> **Note:** Both create and delete use the AppleScript-first pattern. When NotePlan is running, operations go through NotePlan's AppleScript commands (`createEvent`, `deleteEvent`). When NotePlan is quit, they fall back to the Swift `calendar-helper` binary. Test both paths by running once with NotePlan open and once with it quit.
 
 ---
 

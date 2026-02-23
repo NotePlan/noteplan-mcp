@@ -1,4 +1,6 @@
 // macOS Calendar events operations via Swift/EventKit
+// Prefers AppleScript via NotePlan (which already has calendar permission),
+// falls back to the Swift calendar-helper binary.
 
 import { z } from 'zod';
 import { execFileSync } from 'child_process';
@@ -9,6 +11,7 @@ import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
 } from '../utils/confirmation-tokens.js';
+import { runAppleScript, escapeAppleScript, APP_NAME } from '../utils/applescript.js';
 
 // Get the directory of this module
 const __filename = fileURLToPath(import.meta.url);
@@ -57,6 +60,22 @@ function runSwiftHelper(args: string[], timeoutMs = 15000): any {
       if (parsed.error) throw new Error(parsed.error);
     } catch {}
     throw new Error(error.stderr || error.message || 'Calendar helper failed');
+  }
+}
+
+/**
+ * Try running a calendar command via AppleScript through NotePlan.
+ * Returns parsed JSON on success, or null if NotePlan isn't running or
+ * the command isn't supported.
+ */
+function tryCalendarAppleScript(command: string): any | null {
+  try {
+    const result = runAppleScript(`tell application "${APP_NAME}" to ${command}`);
+    if (!result) return null;
+    return JSON.parse(result);
+  } catch (err) {
+    console.error(`[noteplan-mcp] AppleScript calendar fallback: ${err instanceof Error ? err.message : err}`);
+    return null;
   }
 }
 
@@ -136,23 +155,42 @@ export function getEvents(params: z.infer<typeof getEventsSchema>) {
     const endDate = new Date(startDate);
     endDate.setDate(endDate.getDate() + days);
 
-    // Format date as YYYY-MM-DD for Swift helper
     const startStr = startDate.toISOString().split('T')[0];
 
-    const args = ['list-events', startStr, String(days)];
+    // Try AppleScript first
+    let allEvents: any[] = [];
+    let usedAppleScript = false;
+    const fromISO = startDate.toISOString();
+    const toISO = endDate.toISOString();
+    let asCmd = `listEvents from date "${fromISO}" to date "${toISO}"`;
     if (input.calendar) {
-      args.push(input.calendar);
+      asCmd += ` in calendar "${escapeAppleScript(input.calendar)}"`;
+    }
+    const asResult = tryCalendarAppleScript(asCmd);
+    if (asResult !== null && Array.isArray(asResult)) {
+      console.error('[noteplan-mcp] getEvents: using AppleScript via NotePlan');
+      allEvents = asResult;
+      usedAppleScript = true;
     }
 
-    const result = runSwiftHelper(args);
-    if (result && !Array.isArray(result)) {
-      // Swift helper returned an error object (e.g. {"error": "Calendar access denied..."})
-      return {
-        success: false,
-        error: result.error || 'Calendar helper returned unexpected data',
-      };
+    // Fall back to Swift helper
+    if (!usedAppleScript) {
+      console.error('[noteplan-mcp] getEvents: falling back to calendar-helper binary');
+      const args = ['list-events', startStr, String(days)];
+      if (input.calendar) {
+        args.push(input.calendar);
+      }
+
+      const result = runSwiftHelper(args);
+      if (result && !Array.isArray(result)) {
+        return {
+          success: false,
+          error: result.error || 'Calendar helper returned unexpected data',
+        };
+      }
+      allEvents = result || [];
     }
-    const allEvents = result || [];
+
     const events = allEvents.slice(offset, offset + limit);
     const hasMore = offset + events.length < allEvents.length;
     const nextCursor = hasMore ? String(offset + events.length) : null;
@@ -203,10 +241,28 @@ export function createEvent(params: z.infer<typeof createEventSchema>) {
       }
     }
 
-    // Format as ISO dates for Swift helper
     const startStr = startDate.toISOString();
     const endStr = endDate.toISOString();
 
+    // Try AppleScript first
+    let asCmd = `createEvent with title "${escapeAppleScript(params.title)}" from date "${startStr}" to date "${endStr}"`;
+    if (params.calendar) asCmd += ` in calendar "${escapeAppleScript(params.calendar)}"`;
+    if (params.location) asCmd += ` at location "${escapeAppleScript(params.location)}"`;
+    if (params.notes) asCmd += ` with notes "${escapeAppleScript(params.notes)}"`;
+    if (isAllDay) asCmd += ' all day true';
+    const asResult = tryCalendarAppleScript(asCmd);
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] createEvent: using AppleScript via NotePlan');
+      if (asResult.error) return { success: false, error: asResult.error };
+      return {
+        success: true,
+        message: `Event "${params.title}" created`,
+        event: { id: asResult.id || '', title: params.title, startDate: startStr, endDate: endStr },
+      };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] createEvent: falling back to calendar-helper binary');
     const args = ['create-event', params.title, startStr, endStr];
     if (params.calendar) {
       args.push(params.calendar);
@@ -260,6 +316,19 @@ export function updateEvent(params: z.infer<typeof updateEventSchema>) {
       return { success: false, error: 'No updates provided' };
     }
 
+    // Try AppleScript first
+    const updatesJson = escapeAppleScript(JSON.stringify(updates));
+    const asResult = tryCalendarAppleScript(
+      `updateEvent with id "${escapeAppleScript(params.eventId)}" with updates "${updatesJson}"`
+    );
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] updateEvent: using AppleScript via NotePlan');
+      if (asResult.error) return { success: false, error: asResult.error };
+      return { success: true, message: 'Event updated' };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] updateEvent: falling back to calendar-helper binary');
     const args = ['update-event', params.eventId, JSON.stringify(updates)];
     const result = runSwiftHelper(args);
 
@@ -318,6 +387,18 @@ export function deleteEvent(params: z.infer<typeof deleteEventSchema>) {
       };
     }
 
+    // Try AppleScript first
+    const asResult = tryCalendarAppleScript(
+      `deleteEvent with id "${escapeAppleScript(params.eventId)}"`
+    );
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] deleteEvent: using AppleScript via NotePlan');
+      if (asResult.error) return { success: false, error: asResult.error };
+      return { success: true, message: 'Event deleted' };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] deleteEvent: falling back to calendar-helper binary');
     const result = runSwiftHelper(['delete-event', params.eventId]);
 
     if (result?.error) {
@@ -341,6 +422,15 @@ export function deleteEvent(params: z.infer<typeof deleteEventSchema>) {
  */
 export function listCalendars(_params: z.infer<typeof listCalendarsSchema>) {
   try {
+    // Try AppleScript first (uses NotePlan's own calendar permission)
+    const asResult = tryCalendarAppleScript('listCalendars');
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] listCalendars: using AppleScript via NotePlan');
+      return { success: true, calendars: Array.isArray(asResult) ? asResult : [] };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] listCalendars: falling back to calendar-helper binary');
     const result = runSwiftHelper(['list-calendars']);
     if (result && !Array.isArray(result)) {
       return {

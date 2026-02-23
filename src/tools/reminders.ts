@@ -1,4 +1,6 @@
 // macOS Reminders operations via Swift/EventKit
+// Prefers AppleScript via NotePlan (which already has reminders permission),
+// falls back to the Swift reminders-helper binary.
 
 import { z } from 'zod';
 import { execFileSync } from 'child_process';
@@ -9,6 +11,7 @@ import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
 } from '../utils/confirmation-tokens.js';
+import { runAppleScript, escapeAppleScript, APP_NAME } from '../utils/applescript.js';
 
 // Get the directory of this module
 const __filename = fileURLToPath(import.meta.url);
@@ -57,6 +60,22 @@ function runSwiftHelper(args: string[], timeoutMs = 30000): any {
       if (parsed.error) throw new Error(parsed.error);
     } catch {}
     throw new Error(error.stderr || error.message || 'Reminders helper failed');
+  }
+}
+
+/**
+ * Try running a reminder command via AppleScript through NotePlan.
+ * Returns parsed JSON on success, or null if NotePlan isn't running or
+ * the command isn't supported.
+ */
+function tryReminderAppleScript(command: string): any | null {
+  try {
+    const result = runAppleScript(`tell application "${APP_NAME}" to ${command}`);
+    if (!result) return null;
+    return JSON.parse(result);
+  } catch (err) {
+    console.error(`[noteplan-mcp] AppleScript reminder fallback: ${err instanceof Error ? err.message : err}`);
+    return null;
   }
 }
 
@@ -115,15 +134,33 @@ export const listReminderListsSchema = z.object({
 export function getReminders(params: z.infer<typeof getRemindersSchema>) {
   try {
     const input = params ?? ({} as z.infer<typeof getRemindersSchema>);
-    const args = ['list-reminders'];
-    if (input.list) {
-      args.push(input.list);
-    } else {
-      args.push('');
-    }
-    args.push(input.includeCompleted === true ? 'true' : 'false');
 
-    const allReminders = runSwiftHelper(args) || [];
+    // Try AppleScript first
+    let allReminders: any[] = [];
+    let usedAppleScript = false;
+    let asCmd = 'listReminders';
+    if (input.list) asCmd += ` in list "${escapeAppleScript(input.list)}"`;
+    if (input.includeCompleted === true) asCmd += ' include completed true';
+    const asResult = tryReminderAppleScript(asCmd);
+    if (asResult !== null && Array.isArray(asResult)) {
+      console.error('[noteplan-mcp] getReminders: using AppleScript via NotePlan');
+      allReminders = asResult;
+      usedAppleScript = true;
+    }
+
+    // Fall back to Swift helper
+    if (!usedAppleScript) {
+      console.error('[noteplan-mcp] getReminders: falling back to reminders-helper binary');
+      const args = ['list-reminders'];
+      if (input.list) {
+        args.push(input.list);
+      } else {
+        args.push('');
+      }
+      args.push(input.includeCompleted === true ? 'true' : 'false');
+      allReminders = runSwiftHelper(args) || [];
+    }
+
     const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
     const filtered = query
       ? allReminders.filter((reminder: any) =>
@@ -161,6 +198,28 @@ export function getReminders(params: z.infer<typeof getRemindersSchema>) {
  */
 export function createReminder(params: z.infer<typeof createReminderSchema>) {
   try {
+    // Try AppleScript first
+    let asCmd = `createReminder with title "${escapeAppleScript(params.title)}"`;
+    if (params.list) asCmd += ` in list "${escapeAppleScript(params.list)}"`;
+    if (params.dueDate) {
+      const dueDate = new Date(params.dueDate.replace(' ', 'T'));
+      asCmd += ` due date "${dueDate.toISOString()}"`;
+    }
+    if (params.notes) asCmd += ` with notes "${escapeAppleScript(params.notes)}"`;
+    if (params.priority !== undefined) asCmd += ` with priority ${params.priority}`;
+    const asResult = tryReminderAppleScript(asCmd);
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] createReminder: using AppleScript via NotePlan');
+      if (asResult.error) return { success: false, error: asResult.error };
+      return {
+        success: true,
+        message: `Reminder "${params.title}" created`,
+        reminder: { id: asResult.id || '', title: params.title },
+      };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] createReminder: falling back to reminders-helper binary');
     const args = ['create-reminder', params.title];
     args.push(params.list || '');
 
@@ -201,6 +260,18 @@ export function createReminder(params: z.infer<typeof createReminderSchema>) {
  */
 export function completeReminder(params: z.infer<typeof completeReminderSchema>) {
   try {
+    // Try AppleScript first
+    const asResult = tryReminderAppleScript(
+      `completeReminder with id "${escapeAppleScript(params.reminderId)}"`
+    );
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] completeReminder: using AppleScript via NotePlan');
+      if (asResult.error) return { success: false, error: asResult.error };
+      return { success: true, message: 'Reminder marked as complete' };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] completeReminder: falling back to reminders-helper binary');
     const result = runSwiftHelper(['complete-reminder', params.reminderId]);
 
     if (result?.error) {
@@ -236,6 +307,19 @@ export function updateReminder(params: z.infer<typeof updateReminderSchema>) {
       return { success: false, error: 'No updates provided' };
     }
 
+    // Try AppleScript first
+    const updatesJson = escapeAppleScript(JSON.stringify(updates));
+    const asResult = tryReminderAppleScript(
+      `updateReminder with id "${escapeAppleScript(params.reminderId)}" with updates "${updatesJson}"`
+    );
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] updateReminder: using AppleScript via NotePlan');
+      if (asResult.error) return { success: false, error: asResult.error };
+      return { success: true, message: 'Reminder updated' };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] updateReminder: falling back to reminders-helper binary');
     const result = runSwiftHelper(['update-reminder', params.reminderId, JSON.stringify(updates)]);
 
     if (result?.error) {
@@ -293,6 +377,18 @@ export function deleteReminder(params: z.infer<typeof deleteReminderSchema>) {
       };
     }
 
+    // Try AppleScript first
+    const asResult = tryReminderAppleScript(
+      `deleteReminder with id "${escapeAppleScript(params.reminderId)}"`
+    );
+    if (asResult !== null) {
+      console.error('[noteplan-mcp] deleteReminder: using AppleScript via NotePlan');
+      if (asResult.error) return { success: false, error: asResult.error };
+      return { success: true, message: 'Reminder deleted' };
+    }
+
+    // Fall back to Swift helper
+    console.error('[noteplan-mcp] deleteReminder: falling back to reminders-helper binary');
     const result = runSwiftHelper(['delete-reminder', params.reminderId]);
 
     if (result?.error) {
@@ -317,10 +413,24 @@ export function deleteReminder(params: z.infer<typeof deleteReminderSchema>) {
 export function listReminderLists(params: z.infer<typeof listReminderListsSchema>) {
   try {
     const input = params ?? ({} as z.infer<typeof listReminderListsSchema>);
-    const allLists = runSwiftHelper(['list-lists']) || [];
+
+    // Try AppleScript first
+    let allLists: any[];
+    const asResult = tryReminderAppleScript('listReminderLists');
+    if (asResult !== null && Array.isArray(asResult)) {
+      console.error('[noteplan-mcp] listReminderLists: using AppleScript via NotePlan');
+      allLists = asResult;
+    } else {
+      console.error('[noteplan-mcp] listReminderLists: falling back to reminders-helper binary');
+      allLists = runSwiftHelper(['list-lists']) || [];
+    }
+
     const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
     const filtered = query
-      ? allLists.filter((list: string) => list.toLowerCase().includes(query))
+      ? allLists.filter((list: any) => {
+          const name = typeof list === 'string' ? list : list.name || '';
+          return name.toLowerCase().includes(query);
+        })
       : allLists;
     const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = toBoundedInt(input.limit, 100, 1, 200);
