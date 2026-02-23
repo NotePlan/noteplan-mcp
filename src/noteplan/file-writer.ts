@@ -227,13 +227,18 @@ function resolveRenamedFilename(
   if (!requested) {
     throw new Error('New filename is required');
   }
+
+  // Only treat .md and .txt as note extensions — path.extname would incorrectly
+  // treat dots in titles (e.g. "21.01 Family") as extension separators.
+  const KNOWN_NOTE_EXTENSIONS = ['.md', '.txt'];
   const requestedExt = path.extname(requested);
-  const requestedBase = path.basename(requested, requestedExt);
+  const hasKnownExt = KNOWN_NOTE_EXTENSIONS.includes(requestedExt.toLowerCase());
+  const requestedBase = hasKnownExt ? path.basename(requested, requestedExt) : requested;
   if (!requestedBase) {
     throw new Error('New filename is invalid');
   }
 
-  if (keepExtension || !requestedExt) {
+  if (keepExtension || !hasKnownExt) {
     return `${requestedBase}${currentExt}`;
   }
   return `${requestedBase}${requestedExt}`;

@@ -214,7 +214,11 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
     };
   }
 
-  const normalizedFolders = (params.folders ?? [])
+  let rawFolders: any = params.folders ?? [];
+  if (typeof rawFolders === 'string') {
+    try { rawFolders = JSON.parse(rawFolders); } catch { rawFolders = [rawFolders]; }
+  }
+  const normalizedFolders = (rawFolders as string[])
     .map((folder) => normalizeFolderFilterInput(folder))
     .filter((folder) => folder.length > 0);
   const searchField = (params.searchField ?? 'content') as
