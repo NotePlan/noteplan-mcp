@@ -57,10 +57,25 @@ function runSwiftHelper(args: string[], timeoutMs = 15000): any {
     // Try to parse error from output
     try {
       const parsed = JSON.parse(error.stdout || '{}');
-      if (parsed.error) throw new Error(parsed.error);
+      if (parsed.error) throw new Error(enhancePermissionError(parsed.error));
     } catch {}
-    throw new Error(error.stderr || error.message || 'Calendar helper failed');
+    throw new Error(enhancePermissionError(error.stderr || error.message || 'Calendar helper failed'));
   }
+}
+
+const NOTEPLAN_PERMISSION_HINT =
+  ' As a workaround, open NotePlan and try again — the MCP server will route through' +
+  " NotePlan's own calendar permission automatically.";
+
+/**
+ * If an error message looks like a permission/access denial, append a hint
+ * telling the agent that opening NotePlan is a workaround.
+ */
+function enhancePermissionError(errorMsg: string): string {
+  if (/access denied|not authorized|permission|not determined/i.test(errorMsg)) {
+    return errorMsg + NOTEPLAN_PERMISSION_HINT;
+  }
+  return errorMsg;
 }
 
 /**
