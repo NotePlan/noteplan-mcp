@@ -29,9 +29,14 @@ let cachedAppName: string | null = null;
 
 /**
  * Returns the AppleScript-resolvable app name discovered during version detection.
- * Falls back to 'NotePlan' if detection hasn't run or found a running app.
+ * If no name was cached yet (e.g. first-run permission timeout), retries AppleScript
+ * detection — by now the user may have granted Automation permission.
  */
 export function getDetectedAppName(): string {
+  if (!cachedAppName) {
+    console.error('[noteplan-mcp] App name not cached yet, retrying AppleScript detection...');
+    detectViaAppleScript(); // Side-effect: sets cachedAppName if successful
+  }
   return cachedAppName ?? 'NotePlan';
 }
 
@@ -50,7 +55,7 @@ function detectViaAppleScript(): NotePlanVersion | null {
       const isRunning = execFileSync('osascript', ['-e', `application "${appName}" is running`], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 3_000,
+        timeout: 5_000,
       }).trim();
       if (isRunning !== 'true') {
         console.error(`[noteplan-mcp] AppleScript: "${appName}" not running, skipping`);
@@ -61,7 +66,7 @@ function detectViaAppleScript(): NotePlanVersion | null {
       const raw = execFileSync('osascript', ['-e', `tell application "${appName}" to getVersion`], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 5_000,
+        timeout: 15_000, // Allow time for first-run Automation permission prompt
       }).trim();
       const parsed = JSON.parse(raw);
       if (typeof parsed.version === 'string' && typeof parsed.build === 'number') {
@@ -71,9 +76,18 @@ function detectViaAppleScript(): NotePlanVersion | null {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[noteplan-mcp] AppleScript detection failed for "${appName}": ${msg}`);
+      const killed = err instanceof Error && 'killed' in err && (err as any).killed;
+      console.error(`[noteplan-mcp] AppleScript detection failed for "${appName}": ${killed ? 'timed out (user may be granting Automation permission)' : msg}`);
+      if (killed) {
+        // Timeout likely means the Automation permission dialog is showing.
+        // Store the app name so calendar/reminder commands can use it once permission is granted.
+        cachedAppName = appName;
+        console.error(`[noteplan-mcp] AppleScript: stored "${appName}" as app name despite timeout`);
+        return null;
+      }
       if (msg.includes('not allowed') || msg.includes('permission') || msg.includes('1743') || msg.includes('assistive')) {
         console.error('[noteplan-mcp] Hint: The parent app (e.g. Claude Desktop, Terminal) may need Automation permission for NotePlan. Check System Settings > Privacy & Security > Automation.');
+        cachedAppName = appName;
         return null; // Permission issue — no point trying other names
       }
     }
