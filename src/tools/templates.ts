@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
-import { runAppleScript, escapeAppleScript, APP_NAME } from '../utils/applescript.js';
+import { runAppleScript, escapeAppleScript, getAppName } from '../utils/applescript.js';
 import { getNotePlanVersion, MIN_BUILD_RENDER_TEMPLATE } from '../utils/version.js';
 import { tryEmbedQuery, searchTemplateDocs, textSearchTemplateDocs, getDocChunk } from '../noteplan/template-docs.js';
 
@@ -134,9 +134,9 @@ export function renderTemplate(params: z.infer<typeof templatesSchema>) {
   try {
     let script: string;
     if (content) {
-      script = `tell application "${APP_NAME}" to renderTemplate with content "${escapeAppleScript(content)}"`;
+      script = `tell application "${getAppName()}" to renderTemplate with content "${escapeAppleScript(content)}"`;
     } else {
-      script = `tell application "${APP_NAME}" to renderTemplate with title "${escapeAppleScript(templateTitle!)}"`;
+      script = `tell application "${getAppName()}" to renderTemplate with title "${escapeAppleScript(templateTitle!)}"`;
     }
 
     const raw = runAppleScript(script);

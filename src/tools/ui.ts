@@ -1,7 +1,7 @@
 // AppleScript-based UI control tools for NotePlan
 
 import { z } from 'zod';
-import { escapeAppleScript, runAppleScript, APP_NAME } from '../utils/applescript.js';
+import { escapeAppleScript, runAppleScript, getAppName } from '../utils/applescript.js';
 
 // --- Schemas ---
 
@@ -63,20 +63,20 @@ export function openNote(args: z.infer<typeof openNoteSchema>): { success: boole
   }
   params += ' in background true';
 
-  const script = `tell application "${APP_NAME}" to showNote${params}`;
+  const script = `tell application "${getAppName()}" to showNote${params}`;
   runAppleScript(script);
   return { success: true, message: `Opened note${title ? ` "${title}"` : ` (${filename})`}` };
 }
 
 export function openToday(_args: z.infer<typeof openTodaySchema>): { success: boolean; message: string } {
-  const script = `tell application "${APP_NAME}" to openToday`;
+  const script = `tell application "${getAppName()}" to openToday`;
   runAppleScript(script);
   return { success: true, message: "Opened today's note" };
 }
 
 export function searchNotes(args: z.infer<typeof searchNotesSchema>): { success: boolean; message: string } {
   const { query } = searchNotesSchema.parse(args);
-  const script = `tell application "${APP_NAME}" to searchNotes for "${escapeAppleScript(query)}" in background true`;
+  const script = `tell application "${getAppName()}" to searchNotes for "${escapeAppleScript(query)}" in background true`;
   runAppleScript(script);
   return { success: true, message: `Searching for "${query}"` };
 }
@@ -90,26 +90,26 @@ export function runPlugin(args: z.infer<typeof runPluginSchema>): { success: boo
     params += ` with arguments "${escapeAppleScript(pluginArgs)}"`;
   }
 
-  const script = `tell application "${APP_NAME}" to executePlugin ${params}`;
+  const script = `tell application "${getAppName()}" to executePlugin ${params}`;
   runAppleScript(script);
   return { success: true, message: `Ran plugin ${pluginId} command "${command}"` };
 }
 
 export function reloadPlugins(_args: z.infer<typeof reloadPluginsSchema>): { success: boolean; message: string } {
-  const script = `tell application "${APP_NAME}" to reloadPlugins`;
+  const script = `tell application "${getAppName()}" to reloadPlugins`;
   runAppleScript(script);
   return { success: true, message: 'Plugins reloaded' };
 }
 
 export function openView(args: z.infer<typeof openViewSchema>): { success: boolean; message: string } {
   const { name } = openViewSchema.parse(args);
-  const script = `tell application "${APP_NAME}" to openView named "${escapeAppleScript(name)}"`;
+  const script = `tell application "${getAppName()}" to openView named "${escapeAppleScript(name)}"`;
   runAppleScript(script);
   return { success: true, message: `Opened view "${name}"` };
 }
 
 export function toggleSidebar(_args: z.infer<typeof toggleSidebarSchema>): { success: boolean; message: string } {
-  const script = `tell application "${APP_NAME}" to toggleSidebar`;
+  const script = `tell application "${getAppName()}" to toggleSidebar`;
   runAppleScript(script);
   return { success: true, message: 'Sidebar toggled' };
 }
@@ -124,7 +124,7 @@ export function closePluginWindow(args: z.infer<typeof closePluginWindowSchema>)
     params = ` titled "${escapeAppleScript(title)}"`;
   }
 
-  const script = `tell application "${APP_NAME}" to closePluginWindow${params}`;
+  const script = `tell application "${getAppName()}" to closePluginWindow${params}`;
   const result = runAppleScript(script);
 
   // NotePlan currently returns "true" regardless of whether a window was closed.
@@ -147,7 +147,7 @@ export const createBackupSchema = z.object({});
 export function createBackup(_args: z.infer<typeof createBackupSchema>): Record<string, unknown> {
   let raw: string;
   try {
-    raw = runAppleScript(`tell application "${APP_NAME}" to createBackup`, 120_000);
+    raw = runAppleScript(`tell application "${getAppName()}" to createBackup`, 120_000);
   } catch (e: any) {
     return { success: false, error: `Failed to create backup: ${e.message}` };
   }
@@ -172,7 +172,7 @@ export function createBackup(_args: z.infer<typeof createBackupSchema>): Record<
 export function listPluginWindows(_args: z.infer<typeof listPluginWindowsSchema>): Record<string, unknown> {
   let raw: string;
   try {
-    raw = runAppleScript(`tell application "${APP_NAME}" to listPluginWindows`, 15_000);
+    raw = runAppleScript(`tell application "${getAppName()}" to listPluginWindows`, 15_000);
   } catch (e: any) {
     return { success: false, error: `Failed to list plugin windows: ${e.message}` };
   }

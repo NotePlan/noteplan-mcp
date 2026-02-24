@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as zlib from 'zlib';
 import { isSqliteAvailable, SqliteDatabase } from './sqlite-loader.js';
 import { cosineSimilarity, fetchEmbeddings, ensureEmbeddingsApiConfigured } from './embeddings.js';
-import { runAppleScript, escapeAppleScript, APP_NAME } from '../utils/applescript.js';
+import { runAppleScript, escapeAppleScript, getAppName } from '../utils/applescript.js';
 import { getNotePlanVersion, MIN_BUILD_EMBED_TEXT } from '../utils/version.js';
 
 // ── Database ──
@@ -231,7 +231,7 @@ export function textSearchTemplateDocs(
 // ── Embedding via AppleScript ──
 
 export function embedViaAppleScript(text: string): number[] {
-  const script = `tell application "${APP_NAME}" to embedText for "${escapeAppleScript(text)}"`;
+  const script = `tell application "${getAppName()}" to embedText for "${escapeAppleScript(text)}"`;
   const raw = runAppleScript(script);
   const parsed = JSON.parse(raw);
   if (parsed.success === true && Array.isArray(parsed.embedding)) {

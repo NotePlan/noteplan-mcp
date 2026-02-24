@@ -1,8 +1,18 @@
 // Shared AppleScript utilities for NotePlan MCP tools
 
 import { execFileSync } from 'child_process';
+import { getDetectedAppName } from './version.js';
 
 export const APPLESCRIPT_TIMEOUT_MS = 15_000;
+/**
+ * Returns the correct AppleScript app name (e.g. "NotePlan", "NotePlan Beta", "NotePlan 3").
+ * Uses the name discovered during version detection at startup.
+ */
+export function getAppName(): string {
+  return getDetectedAppName();
+}
+
+/** @deprecated Use getAppName() instead — this doesn't resolve "NotePlan Beta" etc. */
 export const APP_NAME = 'NotePlan';
 
 export function escapeAppleScript(str: string): string {

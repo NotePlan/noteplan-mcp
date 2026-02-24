@@ -11,7 +11,7 @@ import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
 } from '../utils/confirmation-tokens.js';
-import { runAppleScript, escapeAppleScript, APP_NAME } from '../utils/applescript.js';
+import { runAppleScript, escapeAppleScript, getAppName } from '../utils/applescript.js';
 
 // Get the directory of this module
 const __filename = fileURLToPath(import.meta.url);
@@ -84,12 +84,14 @@ function enhancePermissionError(errorMsg: string): string {
  * the command isn't supported.
  */
 function tryReminderAppleScript(command: string): any | null {
+  const appName = getAppName();
   try {
-    const result = runAppleScript(`tell application "${APP_NAME}" to ${command}`);
+    console.error(`[noteplan-mcp] reminders: trying AppleScript via "${appName}" — ${command}`);
+    const result = runAppleScript(`tell application "${appName}" to ${command}`);
     if (!result) return null;
     return JSON.parse(result);
   } catch (err) {
-    console.error(`[noteplan-mcp] AppleScript reminder fallback: ${err instanceof Error ? err.message : err}`);
+    console.error(`[noteplan-mcp] reminders: AppleScript failed for "${appName}": ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }

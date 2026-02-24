@@ -10,7 +10,7 @@ import {
   validateAndConsumeConfirmationToken,
 } from '../utils/confirmation-tokens.js';
 import { reloadPlugins, runPlugin } from './ui.js';
-import { escapeAppleScript, runAppleScript, APP_NAME } from '../utils/applescript.js';
+import { escapeAppleScript, runAppleScript, getAppName } from '../utils/applescript.js';
 
 function getPluginsPath(): string {
   return path.join(getNotePlanPath(), 'Plugins');
@@ -109,7 +109,7 @@ export function listPlugins(args: z.infer<typeof listPluginsSchema>): Record<str
 
   let raw: string;
   try {
-    raw = runAppleScript(`tell application "${APP_NAME}" to listInstalledPlugins`, 30_000);
+    raw = runAppleScript(`tell application "${getAppName()}" to listInstalledPlugins`, 30_000);
   } catch (e: any) {
     return { success: false, error: `Failed to list installed plugins: ${e.message}` };
   }
@@ -312,9 +312,9 @@ export function deletePlugin(args: z.infer<typeof deletePluginSchema>): Record<s
 export function listAvailablePlugins(args: unknown): Record<string, unknown> {
   const { query, includeBeta } = listAvailablePluginsSchema.parse(args ?? {});
 
-  let script = `tell application "${APP_NAME}" to listAvailablePlugins`;
+  let script = `tell application "${getAppName()}" to listAvailablePlugins`;
   if (includeBeta) {
-    script = `tell application "${APP_NAME}" to listAvailablePlugins include beta true`;
+    script = `tell application "${getAppName()}" to listAvailablePlugins include beta true`;
   }
 
   let raw: string;
@@ -380,7 +380,7 @@ export function installPlugin(args: unknown): Record<string, unknown> {
   }
 
   try {
-    const script = `tell application "${APP_NAME}" to installPlugin with id "${escapeAppleScript(pluginId)}"`;
+    const script = `tell application "${getAppName()}" to installPlugin with id "${escapeAppleScript(pluginId)}"`;
     const result = runAppleScript(script, 30_000);
     if (result === 'false') {
       return { success: false, error: `Failed to install plugin "${pluginId}"` };
@@ -872,7 +872,7 @@ export function screenshotPlugin(args: unknown): Record<string, unknown> {
   // Ask NotePlan to capture the plugin's WebView
   let appleScriptResult = '';
   try {
-    const script = `tell application "${APP_NAME}" to screenshotPlugin with id "${escapeAppleScript(pluginId)}"`;
+    const script = `tell application "${getAppName()}" to screenshotPlugin with id "${escapeAppleScript(pluginId)}"`;
     appleScriptResult = runAppleScript(script, 15_000);
   } catch (e: any) {
     return { success: false, error: `AppleScript error: ${e.message}` };

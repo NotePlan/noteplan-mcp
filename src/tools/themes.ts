@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { getNotePlanPath } from '../noteplan/file-reader.js';
-import { escapeAppleScript, runAppleScript, APP_NAME } from '../utils/applescript.js';
+import { escapeAppleScript, runAppleScript, getAppName } from '../utils/applescript.js';
 
 function themesPath(): string {
   return path.join(getNotePlanPath(), 'Themes');
@@ -246,7 +246,7 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
   // Activate the theme if requested
   if (setActive) {
     const mode = parsedMode || (theme.style === 'Light' ? 'light' : 'dark');
-    const script = `tell application "${APP_NAME}" to setTheme to "${escapeAppleScript(filename)}" for mode "${escapeAppleScript(mode)}"`;
+    const script = `tell application "${getAppName()}" to setTheme to "${escapeAppleScript(filename)}" for mode "${escapeAppleScript(mode)}"`;
     try {
       runAppleScript(script);
     } catch (err: any) {
@@ -318,7 +318,7 @@ export function setTheme(args: z.infer<typeof setThemeSchema>): Record<string, u
   }
 
   const resolvedMode = mode ?? 'auto';
-  const script = `tell application "${APP_NAME}" to setTheme to "${escapeAppleScript(resolvedName)}" for mode "${escapeAppleScript(resolvedMode)}"`;
+  const script = `tell application "${getAppName()}" to setTheme to "${escapeAppleScript(resolvedName)}" for mode "${escapeAppleScript(resolvedMode)}"`;
   runAppleScript(script);
 
   const result: Record<string, unknown> = {

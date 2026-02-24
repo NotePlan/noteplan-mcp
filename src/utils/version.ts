@@ -25,6 +25,15 @@ export const MIN_BUILD_CREATE_BACKUP = 1492;
 const CACHE_TTL_MS = 60_000;
 let cachedVersion: NotePlanVersion | null = null;
 let cachedAt = 0;
+let cachedAppName: string | null = null;
+
+/**
+ * Returns the AppleScript-resolvable app name discovered during version detection.
+ * Falls back to 'NotePlan' if detection hasn't run or found a running app.
+ */
+export function getDetectedAppName(): string {
+  return cachedAppName ?? 'NotePlan';
+}
 
 // AppleScript may resolve the app by CFBundleName or by .app filename depending on macOS version.
 // MAS installs can use the store marketing name as the .app folder name, so we try multiple names.
@@ -57,6 +66,7 @@ function detectViaAppleScript(): NotePlanVersion | null {
       const parsed = JSON.parse(raw);
       if (typeof parsed.version === 'string' && typeof parsed.build === 'number') {
         console.error(`[noteplan-mcp] AppleScript: detected "${appName}" v${parsed.version} build ${parsed.build}`);
+        cachedAppName = appName;
         return { version: parsed.version, build: parsed.build, source: 'applescript' };
       }
     } catch (err: unknown) {
