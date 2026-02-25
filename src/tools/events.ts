@@ -31,9 +31,11 @@ function toBoundedInt(value: unknown, defaultValue: number, min: number, max: nu
 function runSwiftHelper(args: string[], timeoutMs = 15000): any {
   try {
     let result: string;
+    console.error(`[noteplan-mcp] calendar-helper: args=${JSON.stringify(args)}`);
 
     // Use compiled binary if it exists
     if (fs.existsSync(COMPILED_HELPER)) {
+      console.error(`[noteplan-mcp] calendar-helper: using compiled binary at ${COMPILED_HELPER}`);
       result = execFileSync(COMPILED_HELPER, args, {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -41,6 +43,7 @@ function runSwiftHelper(args: string[], timeoutMs = 15000): any {
       }).trim();
     } else {
       // Fall back to swift interpreter
+      console.error(`[noteplan-mcp] calendar-helper: compiled binary not found, falling back to swift interpreter: ${SWIFT_HELPER}`);
       result = execFileSync('swift', [SWIFT_HELPER, ...args], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -85,13 +88,26 @@ function enhancePermissionError(errorMsg: string): string {
  */
 function tryCalendarAppleScript(command: string): any | null {
   const appName = getAppName();
+  const fullScript = `tell application "${appName}" to ${command}`;
   try {
     console.error(`[noteplan-mcp] calendar: trying AppleScript via "${appName}" — ${command}`);
-    const result = runAppleScript(`tell application "${appName}" to ${command}`);
-    if (!result) return null;
-    return JSON.parse(result);
+    console.error(`[noteplan-mcp] calendar: full script: ${fullScript}`);
+    const result = runAppleScript(fullScript);
+    if (!result) {
+      console.error(`[noteplan-mcp] calendar: AppleScript via "${appName}" returned empty result, falling back`);
+      return null;
+    }
+    const parsed = JSON.parse(result);
+    if (parsed?.error) {
+      console.error(`[noteplan-mcp] calendar: AppleScript via "${appName}" returned error: ${parsed.error}`);
+    } else {
+      const count = Array.isArray(parsed) ? parsed.length : 1;
+      console.error(`[noteplan-mcp] calendar: AppleScript via "${appName}" succeeded (${count} result(s))`);
+    }
+    return parsed;
   } catch (err) {
     console.error(`[noteplan-mcp] calendar: AppleScript failed for "${appName}": ${err instanceof Error ? err.message : err}`);
+    console.error(`[noteplan-mcp] calendar: failed script was: ${fullScript}`);
     return null;
   }
 }
@@ -443,7 +459,14 @@ export function listCalendars(_params: z.infer<typeof listCalendarsSchema>) {
     const asResult = tryCalendarAppleScript('listCalendars');
     if (asResult !== null) {
       console.error('[noteplan-mcp] listCalendars: using AppleScript via NotePlan');
-      return { success: true, calendars: Array.isArray(asResult) ? asResult : [] };
+      if (asResult.error) {
+        return { success: false, error: asResult.error };
+      }
+      if (Array.isArray(asResult)) {
+        return { success: true, calendars: asResult };
+      }
+      // Unexpected shape — fall through to Swift helper
+      console.error(`[noteplan-mcp] listCalendars: AppleScript returned unexpected shape, falling back`);
     }
 
     // Fall back to Swift helper

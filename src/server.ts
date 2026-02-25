@@ -2535,6 +2535,9 @@ export function createServer(): Server {
     const includeTiming = isDebugTimingsEnabled(args);
     const startTime = Date.now();
 
+    const actionLabel = (args as any)?.action ? `${normalizedName}(${(args as any).action})` : normalizedName;
+    console.error(`[noteplan-mcp] Tool call: ${actionLabel}`);
+
     try {
       let result;
 
@@ -2821,6 +2824,14 @@ export function createServer(): Server {
       const resultWithSuggestions = withSuggestedNextTools(enrichedResult, normalizedName, registeredToolNameSet);
       const resultWithMemory = withMemoryHints(resultWithSuggestions, normalizedName);
       const resultWithDuration = withDuration(resultWithMemory, Date.now() - startTime, includeTiming);
+
+      // Log non-throwing errors (success: false returned without an exception)
+      if (resultWithDuration && typeof resultWithDuration === 'object' && (resultWithDuration as any).success === false) {
+        const duration = Date.now() - startTime;
+        const errMsg = (resultWithDuration as any).error || 'unknown';
+        console.error(`[noteplan-mcp] Tool failed: ${actionLabel} (${duration}ms): ${errMsg}`);
+      }
+
       const hasOutputSchema = Boolean(toolDefinitionByName.get(normalizedName)?.outputSchema);
 
       // If the result contains image data, return it as an MCP image content block
@@ -2855,7 +2866,9 @@ export function createServer(): Server {
         ...(hasOutputSchema ? { structuredContent: resultWithDuration } : {}),
       };
     } catch (error) {
+      const duration = Date.now() - startTime;
       let errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[noteplan-mcp] Tool error: ${actionLabel} (${duration}ms): ${errorMessage}`);
       // Append list_actions hint for unknown action errors
       if (errorMessage.includes('Unknown action') && TOOL_ACTIONS[normalizedName]) {
         const validActions = TOOL_ACTIONS[normalizedName].map(a => a.action).join(', ');
