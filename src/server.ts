@@ -9,6 +9,7 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -915,20 +916,22 @@ function withDuration(result: unknown, durationMs: number, includeTiming: boolea
   };
 }
 
+const SERVER_VERSION = '1.1.15';
+
 // Create the server
 export function createServer(): Server {
   const server = new Server(
     {
       name: 'NotePlan',
-      version: '1.1.15',
+      version: SERVER_VERSION,
     },
     {
       capabilities: {
-        tools: {},
+        tools: { listChanged: true },
         resources: {},
       },
       instructions: [
-        'You have access to NotePlan — a markdown-based note-taking and task management app for macOS/iOS.',
+        `You have access to NotePlan — a markdown-based note-taking and task management app for macOS/iOS. (MCP server v${SERVER_VERSION})`,
         'All tools use action-based dispatch: one tool per domain, with an `action` parameter to select the operation.',
         '',
         '## Workflow',
@@ -2909,4 +2912,25 @@ export async function startServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('[noteplan-mcp] Server running on stdio');
+
+  // Nudge the client to re-fetch tools once after a version upgrade.
+  // We store the last-seen version in a tiny file so the notification
+  // only fires on the first connect after an update, not every time.
+  try {
+    const versionFile = path.join(os.homedir(), '.noteplan-mcp-last-version');
+    const lastVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf-8').trim() : '';
+    const currentVersion = getMcpServerVersion();
+    if (lastVersion !== currentVersion) {
+      fs.writeFileSync(versionFile, currentVersion, 'utf-8');
+      if (lastVersion) {
+        // Only notify on upgrade, not on first-ever run
+        console.error(`[noteplan-mcp] Version changed (${lastVersion} → ${currentVersion}), notifying client to refresh tools`);
+        setTimeout(() => {
+          server.sendToolListChanged().catch(() => {});
+        }, 1000);
+      }
+    }
+  } catch {
+    // Non-critical — don't let version tracking break the server
+  }
 }
