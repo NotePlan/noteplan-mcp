@@ -920,7 +920,7 @@ export function createServer(): Server {
   const server = new Server(
     {
       name: 'NotePlan',
-      version: '1.1.7',
+      version: '1.1.15',
     },
     {
       capabilities: {

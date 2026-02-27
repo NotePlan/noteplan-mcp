@@ -54,19 +54,35 @@ func formatDate(_ date: Date) -> String {
 }
 
 func parseDate(_ str: String) -> Date? {
-    // Try full ISO8601 with time first
-    let fullFormatter = ISO8601DateFormatter()
-    fullFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = fullFormatter.date(from: str) { return date }
+    let trimmed = str.trimmingCharacters(in: .whitespaces)
+    if trimmed.isEmpty { return nil }
 
-    // Try without fractional seconds
-    fullFormatter.formatOptions = [.withInternetDateTime]
-    if let date = fullFormatter.date(from: str) { return date }
+    // Full ISO 8601 with fractional seconds (2026-02-23T14:00:00.000Z)
+    let isoFrac = ISO8601DateFormatter()
+    isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = isoFrac.date(from: trimmed) { return date }
 
-    // Try date only
-    let dateOnlyFormatter = ISO8601DateFormatter()
-    dateOnlyFormatter.formatOptions = [.withFullDate]
-    return dateOnlyFormatter.date(from: str)
+    // Full ISO 8601 without fractional seconds (2026-02-23T14:00:00Z or +00:00)
+    let iso = ISO8601DateFormatter()
+    if let date = iso.date(from: trimmed) { return date }
+
+    // Local datetime variants (no timezone — treat as local)
+    let localFormatter = DateFormatter()
+    localFormatter.locale = Locale(identifier: "en_US_POSIX")
+    for fmt in [
+        "yyyy-MM-dd'T'HH:mm:ss.SSS",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd'T'HH:mm",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm",
+    ] {
+        localFormatter.dateFormat = fmt
+        if let date = localFormatter.date(from: trimmed) { return date }
+    }
+
+    // Date-only (2026-02-23) — midnight local
+    localFormatter.dateFormat = "yyyy-MM-dd"
+    return localFormatter.date(from: trimmed)
 }
 
 // Quick diagnostic command that doesn't require access grant

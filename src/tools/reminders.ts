@@ -13,6 +13,11 @@ import {
 } from '../utils/confirmation-tokens.js';
 import { runAppleScript, escapeAppleScript, getAppName } from '../utils/applescript.js';
 
+/** Strip milliseconds + Z from ISO string — some NotePlan builds reject them. */
+function toAppleScriptDate(d: Date): string {
+  return d.toISOString().replace(/\.\d{3}Z$/, '');
+}
+
 // Get the directory of this module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -220,7 +225,7 @@ export function createReminder(params: z.infer<typeof createReminderSchema>) {
     if (params.list) asCmd += ` in list "${escapeAppleScript(params.list)}"`;
     if (params.dueDate) {
       const dueDate = new Date(params.dueDate.replace(' ', 'T'));
-      asCmd += ` due date "${dueDate.toISOString()}"`;
+      asCmd += ` due date "${toAppleScriptDate(dueDate)}"`;
     }
     if (params.notes) asCmd += ` with notes "${escapeAppleScript(params.notes)}"`;
     if (params.priority !== undefined) asCmd += ` with priority ${params.priority}`;
@@ -242,7 +247,7 @@ export function createReminder(params: z.infer<typeof createReminderSchema>) {
 
     if (params.dueDate) {
       const dueDate = new Date(params.dueDate.replace(' ', 'T'));
-      args.push(dueDate.toISOString());
+      args.push(toAppleScriptDate(dueDate));
     } else {
       args.push('');
     }
@@ -315,7 +320,7 @@ export function updateReminder(params: z.infer<typeof updateReminderSchema>) {
     const updates: Record<string, any> = {};
     if (params.title) updates.title = params.title;
     if (params.dueDate) {
-      updates.dueDate = new Date(params.dueDate.replace(' ', 'T')).toISOString();
+      updates.dueDate = toAppleScriptDate(new Date(params.dueDate.replace(' ', 'T')));
     }
     if (params.notes !== undefined) updates.notes = params.notes;
     if (params.priority !== undefined) updates.priority = params.priority;

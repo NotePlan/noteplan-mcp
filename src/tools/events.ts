@@ -19,6 +19,15 @@ const __dirname = path.dirname(__filename);
 const COMPILED_HELPER = path.join(__dirname, '../../scripts/calendar-helper');
 const SWIFT_HELPER = path.join(__dirname, '../../scripts/calendar-helper.swift');
 
+/**
+ * Format a Date for AppleScript commands. Uses YYYY-MM-DDTHH:MM:SS without
+ * milliseconds or trailing "Z" — some NotePlan builds reject the full
+ * `.toISOString()` output (e.g. "2026-02-27T07:00:00.000Z").
+ */
+function toAppleScriptDate(d: Date): string {
+  return d.toISOString().replace(/\.\d{3}Z$/, '');
+}
+
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return defaultValue;
@@ -189,13 +198,13 @@ export function getEvents(params: z.infer<typeof getEventsSchema>) {
     endDate.setDate(endDate.getDate() + days);
 
     const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
 
-    // Try AppleScript first
+    // Try AppleScript first — use YYYY-MM-DD format (some NotePlan builds
+    // reject full ISO 8601 with milliseconds like "2026-02-27T07:00:00.000Z")
     let allEvents: any[] = [];
     let usedAppleScript = false;
-    const fromISO = startDate.toISOString();
-    const toISO = endDate.toISOString();
-    let asCmd = `listEvents from date "${fromISO}" to date "${toISO}"`;
+    let asCmd = `listEvents from date "${startStr}" to date "${endStr}"`;
     if (input.calendar) {
       asCmd += ` in calendar "${escapeAppleScript(input.calendar)}"`;
     }
@@ -231,7 +240,7 @@ export function getEvents(params: z.infer<typeof getEventsSchema>) {
     return {
       success: true,
       startDate: startStr,
-      endDate: endDate.toISOString().split('T')[0],
+      endDate: endStr,
       eventCount: events.length,
       totalCount: allEvents.length,
       offset,
@@ -274,8 +283,8 @@ export function createEvent(params: z.infer<typeof createEventSchema>) {
       }
     }
 
-    const startStr = startDate.toISOString();
-    const endStr = endDate.toISOString();
+    const startStr = toAppleScriptDate(startDate);
+    const endStr = toAppleScriptDate(endDate);
 
     // Try AppleScript first
     let asCmd = `createEvent with title "${escapeAppleScript(params.title)}" from date "${startStr}" to date "${endStr}"`;
@@ -340,8 +349,8 @@ export function updateEvent(params: z.infer<typeof updateEventSchema>) {
     // Build JSON payload for updates
     const updates: Record<string, string> = {};
     if (params.title) updates.title = params.title;
-    if (params.startDate) updates.startDate = new Date(params.startDate.replace(' ', 'T')).toISOString();
-    if (params.endDate) updates.endDate = new Date(params.endDate.replace(' ', 'T')).toISOString();
+    if (params.startDate) updates.startDate = toAppleScriptDate(new Date(params.startDate.replace(' ', 'T')));
+    if (params.endDate) updates.endDate = toAppleScriptDate(new Date(params.endDate.replace(' ', 'T')));
     if (params.location !== undefined) updates.location = params.location;
     if (params.notes !== undefined) updates.notes = params.notes;
 
