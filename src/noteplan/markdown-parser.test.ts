@@ -277,6 +277,25 @@ describe('extractTitle', () => {
     const content = '---\ntitle: \ntags: test\n---\n# Real Title';
     expect(extractTitle(content)).toBe('Real Title');
   });
+
+  it('uses name property from frontmatter as title alias', () => {
+    const content = '---\nname: My Note Name\ntags: test\n---\n# Heading';
+    expect(extractTitle(content)).toBe('My Note Name');
+  });
+
+  it('prefers title over name in frontmatter', () => {
+    const content = '---\ntitle: Title Value\nname: Name Value\n---\n# Heading';
+    expect(extractTitle(content)).toBe('Title Value');
+  });
+
+  it('falls back to name when title is empty in frontmatter', () => {
+    const content = '---\ntitle: \nname: Name Value\n---\n# Heading';
+    expect(extractTitle(content)).toBe('Name Value');
+  });
+
+  it('skips leading blank lines when no frontmatter', () => {
+    expect(extractTitle('\n\n# My Title\nBody')).toBe('My Title');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -231,17 +231,23 @@ export function extractTitle(content: string): string {
   const parsed = parseNoteContent(content);
 
   if (parsed.hasFrontmatter) {
-    // Use explicit title property from frontmatter if present
-    if (parsed.frontmatter?.title) {
-      return parsed.frontmatter.title.trim();
+    // Use explicit title or name property from frontmatter if present
+    // (matches Swift TemplateHelper.validTitle which checks both keys)
+    const fmTitle = parsed.frontmatter?.title || parsed.frontmatter?.name;
+    if (fmTitle?.trim()) {
+      return fmTitle.trim();
     }
     // Otherwise use the first non-empty line of the body (after frontmatter)
-    const firstBodyLine = parsed.body.split('\n').find(line => line.trim() !== '') || '';
-    return firstBodyLine.replace(/^#{1,6}\s*/, '').trim() || 'Untitled';
+    return titleFromFirstLine(parsed.body) || 'Untitled';
   }
 
-  const firstLine = content.split('\n')[0] || '';
-  return firstLine.replace(/^#{1,6}\s*/, '').trim() || 'Untitled';
+  return titleFromFirstLine(content) || 'Untitled';
+}
+
+/** Find the first non-empty line and strip heading markers. */
+function titleFromFirstLine(text: string): string {
+  const line = text.split('\n').find(l => l.trim() !== '') || '';
+  return line.replace(/^#{1,6}\s*/, '').trim();
 }
 
 /**
