@@ -235,8 +235,8 @@ export function extractTitle(content: string): string {
     if (parsed.frontmatter?.title) {
       return parsed.frontmatter.title.trim();
     }
-    // Otherwise use the first line of the body (after frontmatter)
-    const firstBodyLine = parsed.body.split('\n')[0] || '';
+    // Otherwise use the first non-empty line of the body (after frontmatter)
+    const firstBodyLine = parsed.body.split('\n').find(line => line.trim() !== '') || '';
     return firstBodyLine.replace(/^#{1,6}\s*/, '').trim() || 'Untitled';
   }
 

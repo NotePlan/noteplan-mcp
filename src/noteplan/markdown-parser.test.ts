@@ -267,6 +267,16 @@ describe('extractTitle', () => {
     const content = '---\nkey: value\n---\n## Second Level Heading';
     expect(extractTitle(content)).toBe('Second Level Heading');
   });
+
+  it('skips blank lines between frontmatter and heading', () => {
+    const content = '---\ntags: test\n---\n\n# My Title';
+    expect(extractTitle(content)).toBe('My Title');
+  });
+
+  it('ignores empty title property in frontmatter and uses heading', () => {
+    const content = '---\ntitle: \ntags: test\n---\n# Real Title';
+    expect(extractTitle(content)).toBe('Real Title');
+  });
 });
 
 // ---------------------------------------------------------------------------
