@@ -9,8 +9,8 @@ import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
 } from '../utils/confirmation-tokens.js';
-import { parseParagraphLine, buildParagraphLine, stripRawMarkers } from '../noteplan/markdown-parser.js';
-import { NoteType, ParagraphType, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
+import { parseParagraphLine, parseAllParagraphLines, buildParagraphLine, stripRawMarkers } from '../noteplan/markdown-parser.js';
+import { NoteType, ParagraphType, ParagraphMetadata, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -1384,6 +1384,14 @@ export const getParagraphsSchema = z.object({
   space: z.string().optional().describe('Space name or ID to search in'),
   startLine: z.number().min(1).optional().describe('First line to include (1-indexed, inclusive)'),
   endLine: z.number().min(1).optional().describe('Last line to include (1-indexed, inclusive)'),
+  types: z.array(z.enum([
+    // Base paragraph types (no status)
+    'title', 'heading', 'bullet', 'quote', 'separator', 'empty', 'text', 'code', 'table',
+    // Task types by status
+    'task', 'open-task', 'done-task', 'cancelled-task', 'scheduled-task',
+    // Checklist types by status
+    'checklist', 'open-checklist', 'done-checklist', 'cancelled-checklist', 'scheduled-checklist',
+  ])).optional().describe('Filter to only these paragraph types. Use "task"/"checklist" for all statuses, or prefix with status like "open-task", "done-checklist"'),
   limit: z.number().min(1).max(1000).optional().default(200).describe('Maximum lines to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset within selected range'),
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
@@ -1429,6 +1437,42 @@ export const searchParagraphsSchema = z.object({
   }
 });
 
+/**
+ * Check whether a parsed paragraph matches any of the requested type filters.
+ * Filters like "task" / "checklist" match all statuses for that base type.
+ * Filters like "open-task" / "done-checklist" require both type and status to match.
+ * Plain types like "heading", "text", etc. match directly on ParagraphType.
+ */
+function matchesTypeFilter(
+  meta: { type: ParagraphType; taskStatus?: ParagraphTaskStatus },
+  filters: Set<string>,
+): boolean {
+  // Plain type match (heading, text, bullet, quote, separator, empty, title)
+  if (filters.has(meta.type)) return true;
+  // Status-qualified match (e.g. "open-task", "done-checklist")
+  if (meta.taskStatus && filters.has(`${meta.taskStatus}-${meta.type}`)) return true;
+  return false;
+}
+
+function annotateFromMeta(
+  lineObj: { line: number; lineIndex: number; content: string },
+  meta: ParagraphMetadata,
+) {
+  return {
+    ...lineObj,
+    type: meta.type,
+    indentLevel: meta.indentLevel,
+    ...(meta.headingLevel !== undefined && { headingLevel: meta.headingLevel }),
+    ...(meta.taskStatus !== undefined && { taskStatus: meta.taskStatus }),
+    ...(meta.priority !== undefined && { priority: meta.priority }),
+    ...(meta.marker !== undefined && { marker: meta.marker }),
+    ...(meta.hasCheckbox !== undefined && { hasCheckbox: meta.hasCheckbox }),
+    ...(meta.tags.length > 0 && { tags: meta.tags }),
+    ...(meta.mentions.length > 0 && { mentions: meta.mentions }),
+    ...(meta.scheduledDate !== undefined && { scheduledDate: meta.scheduledDate }),
+  };
+}
+
 export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
   const noteRef = resolveWritableNoteReference(params);
   if (!noteRef.note) {
@@ -1439,8 +1483,54 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
     };
   }
   const note = noteRef.note;
+  const typeFilters = params.types ? new Set(params.types) : null;
 
   const allLines = note.content.split('\n');
+  const totalLineCount = allLines.length;
+
+  // --- Filtered path: parse all lines (need full scan for filtering), then paginate ---
+  if (typeFilters) {
+    const allMeta = parseAllParagraphLines(allLines);
+    const requestedStartLine = Math.max(1, Math.min(params.startLine ?? 1, totalLineCount));
+    const requestedEndLine = Math.max(requestedStartLine, Math.min(params.endLine ?? totalLineCount, totalLineCount));
+    const rangeStartIndex = requestedStartLine - 1;
+
+    const filtered: ReturnType<typeof annotateFromMeta>[] = [];
+    for (let i = rangeStartIndex; i < requestedEndLine; i++) {
+      const lineObj = { line: i + 1, lineIndex: i, content: allLines[i] };
+      const annotated = annotateFromMeta(lineObj, allMeta[i]);
+      if (matchesTypeFilter(allMeta[i], typeFilters)) {
+        filtered.push(annotated);
+      }
+    }
+
+    const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = toBoundedInt(params.limit, 200, 1, 1000);
+    const page = filtered.slice(offset, offset + limit);
+    const hasMore = offset + page.length < filtered.length;
+    const nextCursor = hasMore ? String(offset + page.length) : null;
+
+    const result: Record<string, unknown> = {
+      success: true,
+      note: { title: note.title, filename: note.filename },
+      lineCount: totalLineCount,
+      filteredCount: filtered.length,
+      returnedLineCount: page.length,
+      offset,
+      limit,
+      hasMore,
+      nextCursor,
+      types: params.types,
+      lines: page,
+    };
+
+    if (hasMore) {
+      result.performanceHints = [NEXT_CURSOR_HINT];
+    }
+    return result;
+  }
+
+  // --- Unfiltered path: paginate first, then annotate with pre-parsed metadata ---
   const lineWindow = buildLineWindow(allLines, {
     startLine: params.startLine,
     endLine: params.endLine,
@@ -1450,6 +1540,12 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
     defaultLimit: 200,
     maxLimit: 1000,
   });
+
+  // Parse statefully from start up to the last line we need (not the entire note)
+  const lastNeededIndex = lineWindow.lines.length > 0
+    ? lineWindow.lines[lineWindow.lines.length - 1].lineIndex + 1
+    : 0;
+  const windowMeta = parseAllParagraphLines(allLines.slice(0, lastNeededIndex));
 
   const result: Record<string, unknown> = {
     success: true,
@@ -1468,20 +1564,7 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
     nextCursor: lineWindow.nextCursor,
     content: lineWindow.content,
     lines: lineWindow.lines.map((lineObj) => {
-      const meta = parseParagraphLine(lineObj.content, lineObj.lineIndex, lineObj.lineIndex === 0);
-      return {
-        ...lineObj,
-        type: meta.type,
-        indentLevel: meta.indentLevel,
-        ...(meta.headingLevel !== undefined && { headingLevel: meta.headingLevel }),
-        ...(meta.taskStatus !== undefined && { taskStatus: meta.taskStatus }),
-        ...(meta.priority !== undefined && { priority: meta.priority }),
-        ...(meta.marker !== undefined && { marker: meta.marker }),
-        ...(meta.hasCheckbox !== undefined && { hasCheckbox: meta.hasCheckbox }),
-        ...(meta.tags.length > 0 && { tags: meta.tags }),
-        ...(meta.mentions.length > 0 && { mentions: meta.mentions }),
-        ...(meta.scheduledDate !== undefined && { scheduledDate: meta.scheduledDate }),
-      };
+      return annotateFromMeta(lineObj, windowMeta[lineObj.lineIndex]);
     }),
   };
 

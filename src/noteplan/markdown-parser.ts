@@ -402,8 +402,12 @@ export function parseParagraphLine(line: string, lineIndex: number, isFirstLine:
     return { type: 'empty', indentLevel: 0, tags: [], mentions: [] };
   }
 
-  // 2. Separator (---, ***, ___)
-  if (/^(?:---+|\*\*\*+|___+)$/.test(trimmed)) {
+  // 2. Separator — matches Swift's NPHorizontalSeparator regex:
+  //    [\-\_]{3,}     → 3+ dashes or underscores (---, ___,  ----, etc.)
+  //    \*\*\*         → exactly *** (with optional trailing space)
+  //    (-(\s|$)){3,}  → spaced dashes like "- - -"
+  //    \*{5,}         → 5+ asterisks (*****)
+  if (/^(?:[-_]{3,}|\*{3}(?:\s.*)?|(?:-[\t ]*){3,}|\*{5,})$/.test(trimmed)) {
     return { type: 'separator', indentLevel: 0, tags: [], mentions: [] };
   }
 
@@ -513,6 +517,86 @@ export function parseParagraphLine(line: string, lineIndex: number, isFirstLine:
     indentLevel: countIndentLevel(line),
     ...contentMeta(trimmed),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Code fence & table detection (stateful, matching Swift's TodoHelper+Parse)
+// ---------------------------------------------------------------------------
+
+/** Check if a line is a code fence (``` with optional leading whitespace and trailing language tag). */
+export function isCodeFenceLine(line: string): boolean {
+  // Match Swift: 3+ backticks with optional leading whitespace/tabs
+  return /^\s*`{3,}/.test(line);
+}
+
+/** Check if a line is a table separator like | --- | --- | */
+export function isTableSeparator(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return false;
+  if (!trimmed.includes('-')) return false;
+  // Only allowed characters: |, -, :, and spaces
+  return /^[|\-: ]+$/.test(trimmed);
+}
+
+/** Check if a line looks like a table row (starts and ends with |, at least 2 pipes). */
+export function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return false;
+  return (trimmed.match(/\|/g) || []).length >= 2;
+}
+
+/**
+ * Parse all lines of a note with stateful code-fence and table tracking.
+ * This matches Swift's parseTodos() behavior where lines inside code fences
+ * are classified as 'code' and lines inside tables as 'table', regardless
+ * of their content.
+ */
+export function parseAllParagraphLines(lines: string[]): ParagraphMetadata[] {
+  let isInCodeFence = false;
+  let isInTable = false;
+  const codeMeta: ParagraphMetadata = { type: 'code', indentLevel: 0, tags: [], mentions: [] };
+  const tableMeta: ParagraphMetadata = { type: 'table', indentLevel: 0, tags: [], mentions: [] };
+  const results: ParagraphMetadata[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isFirstLine = i === 0;
+
+    // --- Code fence toggle (matches Swift's stateful toggle) ---
+    if (isCodeFenceLine(line)) {
+      isInCodeFence = !isInCodeFence;
+      results.push(codeMeta);
+      continue;
+    }
+    if (isInCodeFence) {
+      results.push(codeMeta);
+      continue;
+    }
+
+    // --- Table tracking (matches Swift's isInTable logic) ---
+    if (isTableSeparator(line)) {
+      isInTable = true;
+      // Look-back: reclassify the previous line as table (it's the header row)
+      if (i > 0 && isTableRow(lines[i - 1])) {
+        results[i - 1] = tableMeta;
+      }
+      results.push(tableMeta);
+      continue;
+    }
+    if (isInTable) {
+      if (isTableRow(line)) {
+        results.push(tableMeta);
+        continue;
+      }
+      // Exited the table
+      isInTable = false;
+    }
+
+    // --- Normal line parsing ---
+    results.push(parseParagraphLine(line, i, isFirstLine));
+  }
+
+  return results;
 }
 
 /**

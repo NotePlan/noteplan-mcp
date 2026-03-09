@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { parseParagraphLine, parseAllParagraphLines, isCodeFenceLine, isTableSeparator, isTableRow } from '../noteplan/markdown-parser.js';
+import type { ParagraphType, TaskStatus } from '../noteplan/types.js';
 
 // ---------------------------------------------------------------------------
 // Copies of private helper functions from notes.ts
@@ -1823,4 +1825,718 @@ describe('searchParagraphsGlobal – frontmatter text matching (issue #3 verific
 //
 // CLEANUP:
 //   noteplan_manage_note(action="delete", filename="...")
-//
+
+// ---------------------------------------------------------------------------
+// matchesTypeFilter – copy of private function from notes.ts
+// ---------------------------------------------------------------------------
+
+function matchesTypeFilter(
+  meta: { type: ParagraphType; taskStatus?: TaskStatus },
+  filters: Set<string>,
+): boolean {
+  if (filters.has(meta.type)) return true;
+  if (meta.taskStatus && filters.has(`${meta.taskStatus}-${meta.type}`)) return true;
+  return false;
+}
+
+describe('matchesTypeFilter', () => {
+  it('matches plain paragraph types (heading, text, bullet, etc.)', () => {
+    expect(matchesTypeFilter({ type: 'heading' }, new Set(['heading']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'text' }, new Set(['text']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'bullet' }, new Set(['bullet']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'quote' }, new Set(['quote']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'separator' }, new Set(['separator']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'empty' }, new Set(['empty']))).toBe(true);
+  });
+
+  it('does not match plain types against wrong filter', () => {
+    expect(matchesTypeFilter({ type: 'heading' }, new Set(['text']))).toBe(false);
+    expect(matchesTypeFilter({ type: 'bullet' }, new Set(['task']))).toBe(false);
+  });
+
+  it('"task" filter matches tasks of any status', () => {
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'open' }, new Set(['task']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'done' }, new Set(['task']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'cancelled' }, new Set(['task']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'scheduled' }, new Set(['task']))).toBe(true);
+  });
+
+  it('"checklist" filter matches checklists of any status', () => {
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'open' }, new Set(['checklist']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'done' }, new Set(['checklist']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'cancelled' }, new Set(['checklist']))).toBe(true);
+  });
+
+  it('status-qualified filter matches only the specific status', () => {
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'open' }, new Set(['open-task']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'done' }, new Set(['open-task']))).toBe(false);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'done' }, new Set(['done-task']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'cancelled' }, new Set(['cancelled-task']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'scheduled' }, new Set(['scheduled-task']))).toBe(true);
+  });
+
+  it('status-qualified filter for checklists', () => {
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'open' }, new Set(['open-checklist']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'done' }, new Set(['done-checklist']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'cancelled' }, new Set(['cancelled-checklist']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'scheduled' }, new Set(['scheduled-checklist']))).toBe(true);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'open' }, new Set(['done-checklist']))).toBe(false);
+  });
+
+  it('does not cross-match task vs checklist', () => {
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'open' }, new Set(['open-checklist']))).toBe(false);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'open' }, new Set(['open-task']))).toBe(false);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'done' }, new Set(['checklist']))).toBe(false);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'done' }, new Set(['task']))).toBe(false);
+  });
+
+  it('matches with multiple filters (OR logic)', () => {
+    const filters = new Set(['open-task', 'open-checklist', 'heading']);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'open' }, filters)).toBe(true);
+    expect(matchesTypeFilter({ type: 'checklist', taskStatus: 'open' }, filters)).toBe(true);
+    expect(matchesTypeFilter({ type: 'heading' }, filters)).toBe(true);
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'done' }, filters)).toBe(false);
+    expect(matchesTypeFilter({ type: 'text' }, filters)).toBe(false);
+  });
+
+  it('does not match when filters set is empty', () => {
+    expect(matchesTypeFilter({ type: 'task', taskStatus: 'open' }, new Set())).toBe(false);
+    expect(matchesTypeFilter({ type: 'heading' }, new Set())).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getParagraphs type filtering – integration tests using parseParagraphLine
+// ---------------------------------------------------------------------------
+
+/**
+ * Simulate the filtered path of getParagraphs: parse lines, filter, paginate.
+ * This mirrors the actual implementation without needing a mocked note store.
+ */
+function simulateFilteredGetParagraphs(
+  noteContent: string,
+  types: string[],
+  options?: { limit?: number; offset?: number; startLine?: number; endLine?: number },
+) {
+  const allLines = noteContent.split('\n');
+  const totalLineCount = allLines.length;
+  const startLine = Math.max(1, Math.min(options?.startLine ?? 1, totalLineCount));
+  const endLine = Math.max(startLine, Math.min(options?.endLine ?? totalLineCount, totalLineCount));
+  const rangeStartIndex = startLine - 1;
+  const typeFilters = new Set(types);
+
+  const filtered: Array<{
+    line: number;
+    lineIndex: number;
+    content: string;
+    type: ParagraphType;
+    taskStatus?: TaskStatus;
+  }> = [];
+
+  // Use stateful parser (matches actual getParagraphs implementation)
+  const allMeta = parseAllParagraphLines(allLines);
+
+  for (let i = rangeStartIndex; i < endLine; i++) {
+    const meta = allMeta[i];
+    if (matchesTypeFilter(meta, typeFilters)) {
+      filtered.push({
+        line: i + 1,
+        lineIndex: i,
+        content: allLines[i],
+        type: meta.type,
+        ...(meta.taskStatus && { taskStatus: meta.taskStatus }),
+      });
+    }
+  }
+
+  const offset = options?.offset ?? 0;
+  const limit = options?.limit ?? 200;
+  const page = filtered.slice(offset, offset + limit);
+  const hasMore = offset + page.length < filtered.length;
+
+  return {
+    filteredCount: filtered.length,
+    returnedLineCount: page.length,
+    hasMore,
+    offset,
+    limit,
+    lines: page,
+  };
+}
+
+describe('getParagraphs type filtering (integration)', () => {
+  const sampleNote = [
+    '# My Note',                    // line 1 - title
+    '',                              // line 2 - empty
+    '## Tasks Section',              // line 3 - heading
+    '* [ ] Buy groceries',           // line 4 - open task
+    '* [x] Call dentist',            // line 5 - done task
+    '* [-] Old cancelled thing',     // line 6 - cancelled task
+    '* [>] Deferred meeting',        // line 7 - scheduled task
+    '',                              // line 8 - empty
+    '## Checklist',                  // line 9 - heading
+    '+ [ ] Pack bags',               // line 10 - open checklist
+    '+ [x] Book hotel',              // line 11 - done checklist
+    '+ [-] Cancelled flight',        // line 12 - cancelled checklist
+    '+ [>] Scheduled pickup',        // line 13 - scheduled checklist
+    '',                              // line 14 - empty
+    'Some regular text',             // line 15 - text
+    '- A bullet point',              // line 16 - bullet
+    '> A quote',                     // line 17 - quote
+  ].join('\n');
+
+  it('filters open tasks only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['open-task']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('* [ ] Buy groceries');
+    expect(result.lines[0].taskStatus).toBe('open');
+    expect(result.lines[0].type).toBe('task');
+  });
+
+  it('filters done tasks only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['done-task']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('* [x] Call dentist');
+  });
+
+  it('filters cancelled tasks only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['cancelled-task']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('* [-] Old cancelled thing');
+  });
+
+  it('filters scheduled tasks only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['scheduled-task']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('* [>] Deferred meeting');
+  });
+
+  it('"task" matches all task statuses', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['task']);
+    expect(result.filteredCount).toBe(4);
+    expect(result.lines.map(l => l.taskStatus)).toEqual(['open', 'done', 'cancelled', 'scheduled']);
+  });
+
+  it('filters open checklists only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['open-checklist']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('+ [ ] Pack bags');
+    expect(result.lines[0].type).toBe('checklist');
+  });
+
+  it('filters done checklists only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['done-checklist']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('+ [x] Book hotel');
+  });
+
+  it('filters cancelled checklists only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['cancelled-checklist']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('+ [-] Cancelled flight');
+  });
+
+  it('"checklist" matches all checklist statuses', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['checklist']);
+    expect(result.filteredCount).toBe(4);
+    expect(result.lines.every(l => l.type === 'checklist')).toBe(true);
+  });
+
+  it('combines open tasks and open checklists', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['open-task', 'open-checklist']);
+    expect(result.filteredCount).toBe(2);
+    expect(result.lines.map(l => l.content)).toEqual([
+      '* [ ] Buy groceries',
+      '+ [ ] Pack bags',
+    ]);
+  });
+
+  it('filters headings only', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['heading']);
+    expect(result.filteredCount).toBe(2);
+    expect(result.lines.map(l => l.content)).toEqual([
+      '## Tasks Section',
+      '## Checklist',
+    ]);
+  });
+
+  it('filters text paragraphs', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['text']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('Some regular text');
+  });
+
+  it('filters bullets', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['bullet']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('- A bullet point');
+  });
+
+  it('filters quotes', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['quote']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('> A quote');
+  });
+
+  it('filters empty lines', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['empty']);
+    expect(result.filteredCount).toBe(3); // lines 2, 8, 14
+    expect(result.lines.every(l => l.content === '')).toBe(true);
+  });
+
+  it('filters title', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['title']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('# My Note');
+    expect(result.lines[0].line).toBe(1);
+  });
+
+  it('combines multiple different types', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['heading', 'quote', 'bullet']);
+    expect(result.filteredCount).toBe(4); // 2 headings + 1 bullet + 1 quote
+  });
+
+  it('preserves original line numbers in filtered results', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['open-task', 'open-checklist']);
+    expect(result.lines[0].line).toBe(4);      // * [ ] Buy groceries
+    expect(result.lines[0].lineIndex).toBe(3);
+    expect(result.lines[1].line).toBe(10);     // + [ ] Pack bags
+    expect(result.lines[1].lineIndex).toBe(9);
+  });
+
+  it('pagination works on filtered results', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['task'], { limit: 2, offset: 0 });
+    expect(result.filteredCount).toBe(4);
+    expect(result.returnedLineCount).toBe(2);
+    expect(result.hasMore).toBe(true);
+    expect(result.lines.map(l => l.taskStatus)).toEqual(['open', 'done']);
+
+    const page2 = simulateFilteredGetParagraphs(sampleNote, ['task'], { limit: 2, offset: 2 });
+    expect(page2.returnedLineCount).toBe(2);
+    expect(page2.hasMore).toBe(false);
+    expect(page2.lines.map(l => l.taskStatus)).toEqual(['cancelled', 'scheduled']);
+  });
+
+  it('startLine/endLine restricts range before filtering', () => {
+    // Only look at lines 4-7 (the tasks section)
+    const result = simulateFilteredGetParagraphs(sampleNote, ['checklist'], { startLine: 4, endLine: 7 });
+    expect(result.filteredCount).toBe(0); // no checklists in lines 4-7
+
+    const result2 = simulateFilteredGetParagraphs(sampleNote, ['task'], { startLine: 4, endLine: 7 });
+    expect(result2.filteredCount).toBe(4);
+  });
+
+  it('returns empty when no lines match the filter', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['separator']);
+    expect(result.filteredCount).toBe(0);
+    expect(result.lines).toEqual([]);
+    expect(result.hasMore).toBe(false);
+  });
+
+  it('all done items across tasks and checklists', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['done-task', 'done-checklist']);
+    expect(result.filteredCount).toBe(2);
+    expect(result.lines.map(l => l.content)).toEqual([
+      '* [x] Call dentist',
+      '+ [x] Book hotel',
+    ]);
+  });
+
+  it('all cancelled items across tasks and checklists', () => {
+    const result = simulateFilteredGetParagraphs(sampleNote, ['cancelled-task', 'cancelled-checklist']);
+    expect(result.filteredCount).toBe(2);
+    expect(result.lines.map(l => l.content)).toEqual([
+      '* [-] Old cancelled thing',
+      '+ [-] Cancelled flight',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Swift parity edge cases — ensuring MCP matches Swift app behavior
+// ---------------------------------------------------------------------------
+
+describe('Swift parity: checkbox parsing edge cases', () => {
+  it('uppercase [X] is treated as done (case-insensitive, matching Swift)', () => {
+    const meta = parseParagraphLine('* [X] Completed task', 1, false);
+    expect(meta.type).toBe('task');
+    expect(meta.taskStatus).toBe('done');
+  });
+
+  it('uppercase [X] checklist is treated as done', () => {
+    const meta = parseParagraphLine('+ [X] Completed checklist', 1, false);
+    expect(meta.type).toBe('checklist');
+    expect(meta.taskStatus).toBe('done');
+  });
+
+  it('[x] lowercase still works as done', () => {
+    const meta = parseParagraphLine('* [x] Done task', 1, false);
+    expect(meta.type).toBe('task');
+    expect(meta.taskStatus).toBe('done');
+  });
+
+  it('[ ] is open', () => {
+    const meta = parseParagraphLine('* [ ] Open task', 1, false);
+    expect(meta.taskStatus).toBe('open');
+  });
+
+  it('[-] is cancelled', () => {
+    const meta = parseParagraphLine('* [-] Cancelled', 1, false);
+    expect(meta.taskStatus).toBe('cancelled');
+  });
+
+  it('[>] is scheduled', () => {
+    const meta = parseParagraphLine('* [>] Scheduled', 1, false);
+    expect(meta.taskStatus).toBe('scheduled');
+  });
+
+  it('unrecognized checkbox char gets no taskStatus (matches Swift returning nil)', () => {
+    const meta = parseParagraphLine('* [~] Weird marker', 1, false);
+    expect(meta.type).toBe('task');
+    expect(meta.taskStatus).toBeUndefined();
+  });
+});
+
+describe('Swift parity: uppercase [X] in type filtering', () => {
+  const noteWithUppercaseX = [
+    '# Test Note',
+    '* [X] Done with uppercase',
+    '* [x] Done with lowercase',
+    '* [ ] Still open',
+    '+ [X] Checklist done uppercase',
+  ].join('\n');
+
+  it('done-task filter catches both [x] and [X]', () => {
+    const result = simulateFilteredGetParagraphs(noteWithUppercaseX, ['done-task']);
+    expect(result.filteredCount).toBe(2);
+    expect(result.lines.map(l => l.content)).toEqual([
+      '* [X] Done with uppercase',
+      '* [x] Done with lowercase',
+    ]);
+  });
+
+  it('done-checklist filter catches [X] checklist', () => {
+    const result = simulateFilteredGetParagraphs(noteWithUppercaseX, ['done-checklist']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('+ [X] Checklist done uppercase');
+  });
+
+  it('"task" filter includes uppercase [X] tasks', () => {
+    const result = simulateFilteredGetParagraphs(noteWithUppercaseX, ['task']);
+    expect(result.filteredCount).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Code fence detection
+// ---------------------------------------------------------------------------
+
+describe('isCodeFenceLine', () => {
+  it('detects triple backticks', () => {
+    expect(isCodeFenceLine('```')).toBe(true);
+  });
+
+  it('detects backticks with language tag', () => {
+    expect(isCodeFenceLine('```javascript')).toBe(true);
+    expect(isCodeFenceLine('```swift')).toBe(true);
+  });
+
+  it('detects backticks with leading whitespace', () => {
+    expect(isCodeFenceLine('  ```')).toBe(true);
+    expect(isCodeFenceLine('\t```')).toBe(true);
+  });
+
+  it('detects 4+ backticks', () => {
+    expect(isCodeFenceLine('````')).toBe(true);
+  });
+
+  it('does not match inline backticks', () => {
+    expect(isCodeFenceLine('some `code` here')).toBe(false);
+    expect(isCodeFenceLine('``not a fence')).toBe(false);
+  });
+
+  it('does not match plain text', () => {
+    expect(isCodeFenceLine('hello world')).toBe(false);
+  });
+});
+
+describe('parseAllParagraphLines: code fence tracking', () => {
+  it('classifies lines inside code fences as "code"', () => {
+    const lines = [
+      '# Title',
+      '```',
+      'const x = 1;',
+      'const y = 2;',
+      '```',
+      'Normal text',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[0].type).toBe('title');
+    expect(result[1].type).toBe('code');  // opening fence
+    expect(result[2].type).toBe('code');  // inside
+    expect(result[3].type).toBe('code');  // inside
+    expect(result[4].type).toBe('code');  // closing fence
+    expect(result[5].type).toBe('text');  // after fence
+  });
+
+  it('does not classify tasks inside code fences as tasks', () => {
+    const lines = [
+      'Note title',
+      '```',
+      '* [ ] This is not a task',
+      '+ [x] This is not a checklist',
+      '```',
+      '* [ ] This IS a task',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[2].type).toBe('code');
+    expect(result[3].type).toBe('code');
+    expect(result[5].type).toBe('task');
+    expect(result[5].taskStatus).toBe('open');
+  });
+
+  it('handles code fences with language tags', () => {
+    const lines = [
+      'Title',
+      '```python',
+      'print("hello")',
+      '```',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[1].type).toBe('code');
+    expect(result[2].type).toBe('code');
+    expect(result[3].type).toBe('code');
+  });
+
+  it('handles multiple code blocks', () => {
+    const lines = [
+      'Title',
+      '```',
+      'first block',
+      '```',
+      'between blocks',
+      '```',
+      'second block',
+      '```',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[1].type).toBe('code');
+    expect(result[2].type).toBe('code');
+    expect(result[3].type).toBe('code');
+    expect(result[4].type).toBe('text');
+    expect(result[5].type).toBe('code');
+    expect(result[6].type).toBe('code');
+    expect(result[7].type).toBe('code');
+  });
+
+  it('unclosed code fence marks remaining lines as code', () => {
+    const lines = [
+      'Title',
+      '```',
+      'never closed',
+      '* [ ] not a task',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[2].type).toBe('code');
+    expect(result[3].type).toBe('code');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Table detection
+// ---------------------------------------------------------------------------
+
+describe('isTableSeparator', () => {
+  it('detects standard separator', () => {
+    expect(isTableSeparator('| --- | --- |')).toBe(true);
+    expect(isTableSeparator('|---|---|')).toBe(true);
+  });
+
+  it('detects separator with alignment colons', () => {
+    expect(isTableSeparator('| :--- | :---: | ---: |')).toBe(true);
+  });
+
+  it('rejects lines without pipe boundaries', () => {
+    expect(isTableSeparator('--- | ---')).toBe(false);
+    expect(isTableSeparator('| ---')).toBe(false);
+  });
+
+  it('rejects lines without dashes', () => {
+    expect(isTableSeparator('| ::: |')).toBe(false);
+  });
+
+  it('rejects lines with content characters', () => {
+    expect(isTableSeparator('| abc | def |')).toBe(false);
+  });
+});
+
+describe('isTableRow', () => {
+  it('detects standard rows', () => {
+    expect(isTableRow('| Cell A | Cell B |')).toBe(true);
+  });
+
+  it('requires at least 2 pipes', () => {
+    expect(isTableRow('|single|')).toBe(true);  // 2 pipes
+    expect(isTableRow('|')).toBe(false);         // 1 pipe
+  });
+
+  it('rejects lines not starting/ending with pipe', () => {
+    expect(isTableRow('Cell | Cell')).toBe(false);
+  });
+});
+
+describe('parseAllParagraphLines: table tracking', () => {
+  it('classifies table lines as "table" including header row (look-back)', () => {
+    const lines = [
+      'Title',
+      '| Header 1 | Header 2 |',
+      '| --- | --- |',
+      '| Cell A | Cell B |',
+      '| Cell C | Cell D |',
+      'Normal text after',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[0].type).toBe('title');
+    // Line 1 (header row): reclassified as table via look-back when separator is found
+    expect(result[1].type).toBe('table');
+    // Line 2 (separator): triggers isInTable = true → table
+    expect(result[2].type).toBe('table');
+    // Lines 3-4: inside table
+    expect(result[3].type).toBe('table');
+    expect(result[4].type).toBe('table');
+    // Line 5: not a table row → exits table
+    expect(result[5].type).toBe('text');
+  });
+
+  it('does not classify tasks inside tables as tasks', () => {
+    const lines = [
+      'Title',
+      '| Task | Status |',
+      '| --- | --- |',
+      '| * [ ] Buy milk | Open |',
+      '| * [x] Call vet | Done |',
+      'After table',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[3].type).toBe('table');
+    expect(result[4].type).toBe('table');
+    expect(result[5].type).toBe('text');
+  });
+
+  it('handles table followed by code block', () => {
+    const lines = [
+      'Title',
+      '| A | B |',
+      '| - | - |',
+      '| 1 | 2 |',
+      '```',
+      'code here',
+      '```',
+    ];
+    const result = parseAllParagraphLines(lines);
+    expect(result[1].type).toBe('table');  // header (look-back)
+    expect(result[2].type).toBe('table');  // separator
+    expect(result[3].type).toBe('table');  // data row
+    expect(result[4].type).toBe('code');
+    expect(result[5].type).toBe('code');
+    expect(result[6].type).toBe('code');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Separator regex (Swift parity)
+// ---------------------------------------------------------------------------
+
+describe('Swift parity: separator patterns', () => {
+  it('detects standard --- separator', () => {
+    const meta = parseParagraphLine('---', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('detects *** separator', () => {
+    const meta = parseParagraphLine('***', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('detects ___ separator', () => {
+    const meta = parseParagraphLine('___', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('detects long dashes ----', () => {
+    const meta = parseParagraphLine('----', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('detects spaced dashes - - -', () => {
+    const meta = parseParagraphLine('- - -', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('detects spaced dashes with tabs -\t-\t-', () => {
+    const meta = parseParagraphLine('-\t-\t-', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('detects 5+ asterisks *****', () => {
+    const meta = parseParagraphLine('*****', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('detects mixed dashes and underscores -_-', () => {
+    const meta = parseParagraphLine('-_-', 1, false);
+    expect(meta.type).toBe('separator');
+  });
+
+  it('does not match single dash', () => {
+    const meta = parseParagraphLine('-', 1, false);
+    expect(meta.type).not.toBe('separator');
+  });
+
+  it('does not match two dashes', () => {
+    const meta = parseParagraphLine('--', 1, false);
+    expect(meta.type).not.toBe('separator');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Type filtering with code/table types
+// ---------------------------------------------------------------------------
+
+describe('type filtering with code and table', () => {
+  const noteWithCodeAndTable = [
+    '# Note with code and table',       // line 1 - title
+    '* [ ] A real task',                 // line 2 - open task
+    '```javascript',                     // line 3 - code
+    'const x = 1;',                      // line 4 - code
+    '* [ ] fake task in code',           // line 5 - code (not task!)
+    '```',                               // line 6 - code
+    '| Name | Value |',                  // line 7 - text (header before separator)
+    '| --- | --- |',                     // line 8 - table
+    '| foo | bar |',                     // line 9 - table
+    'After table text',                  // line 10 - text
+  ].join('\n');
+
+  it('filters code lines only', () => {
+    const result = simulateFilteredGetParagraphs(noteWithCodeAndTable, ['code']);
+    expect(result.filteredCount).toBe(4); // lines 3-6
+    expect(result.lines.every(l => l.type === 'code')).toBe(true);
+  });
+
+  it('filters table lines only', () => {
+    const result = simulateFilteredGetParagraphs(noteWithCodeAndTable, ['table']);
+    expect(result.filteredCount).toBe(3); // lines 7-9 (header look-back + separator + data row)
+    expect(result.lines.every(l => l.type === 'table')).toBe(true);
+  });
+
+  it('fake task inside code block is NOT returned by task filter', () => {
+    const result = simulateFilteredGetParagraphs(noteWithCodeAndTable, ['open-task']);
+    expect(result.filteredCount).toBe(1);
+    expect(result.lines[0].content).toBe('* [ ] A real task');
+  });
+
+  it('combines code + task filters', () => {
+    const result = simulateFilteredGetParagraphs(noteWithCodeAndTable, ['code', 'open-task']);
+    expect(result.filteredCount).toBe(5); // 4 code + 1 task
+  });
+});

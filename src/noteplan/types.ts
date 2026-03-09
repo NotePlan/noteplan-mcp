@@ -101,6 +101,7 @@ export const TASK_MARKERS = {
 export const TASK_STATUS_MAP: Record<string, TaskStatus> = {
   '[ ]': 'open',
   '[x]': 'done',
+  '[X]': 'done',
   '[-]': 'cancelled',
   '[>]': 'scheduled',
 };
@@ -114,7 +115,8 @@ export const STATUS_TO_MARKER: Record<TaskStatus, string> = {
 
 export type ParagraphType =
   | 'title' | 'heading' | 'task' | 'checklist'
-  | 'bullet' | 'quote' | 'separator' | 'empty' | 'text';
+  | 'bullet' | 'quote' | 'separator' | 'empty' | 'text'
+  | 'code' | 'table';
 
 export interface ParagraphMetadata {
   type: ParagraphType;
