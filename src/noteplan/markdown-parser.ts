@@ -2,7 +2,7 @@
 
 import { Task, TaskStatus, TASK_STATUS_MAP, STATUS_TO_MARKER, ParagraphType, ParagraphMetadata } from './types.js';
 import { getTaskPrefix, getTaskMarkerConfigCached } from './preferences.js';
-import { insertContentAtPosition } from './frontmatter-parser.js';
+import { insertContentAtPosition, parseNoteContent } from './frontmatter-parser.js';
 
 /**
  * Parse a note's content to extract tasks
@@ -222,11 +222,25 @@ export function extractPriority(content: string): number | undefined {
 }
 
 /**
- * Extract title from note content (first line, strips # if heading)
+ * Extract title from note content.
+ * If the note has frontmatter, check for a `title` property first,
+ * then use the first line of the body (after frontmatter).
+ * Otherwise, use the first line of the content.
  */
 export function extractTitle(content: string): string {
+  const parsed = parseNoteContent(content);
+
+  if (parsed.hasFrontmatter) {
+    // Use explicit title property from frontmatter if present
+    if (parsed.frontmatter?.title) {
+      return parsed.frontmatter.title.trim();
+    }
+    // Otherwise use the first line of the body (after frontmatter)
+    const firstBodyLine = parsed.body.split('\n')[0] || '';
+    return firstBodyLine.replace(/^#{1,6}\s*/, '').trim() || 'Untitled';
+  }
+
   const firstLine = content.split('\n')[0] || '';
-  // Remove heading markers
   return firstLine.replace(/^#{1,6}\s*/, '').trim() || 'Untitled';
 }
 

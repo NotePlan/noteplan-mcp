@@ -237,6 +237,36 @@ describe('extractTitle', () => {
   it('returns Untitled for empty content', () => {
     expect(extractTitle('')).toBe('Untitled');
   });
+
+  it('skips frontmatter and uses H1 heading after it', () => {
+    const content = '---\ntags: test\n---\n# My Real Title\nBody text';
+    expect(extractTitle(content)).toBe('My Real Title');
+  });
+
+  it('skips frontmatter and uses plain text first body line', () => {
+    const content = '---\ntags: test\n---\nPlain Title\nBody text';
+    expect(extractTitle(content)).toBe('Plain Title');
+  });
+
+  it('uses title property from frontmatter when present', () => {
+    const content = '---\ntitle: FM Title\ntags: test\n---\n# Heading Title\nBody';
+    expect(extractTitle(content)).toBe('FM Title');
+  });
+
+  it('does not return --- as title when frontmatter has no title key', () => {
+    const content = '---\ntags: journal\ntype: note\n---\n# Actual Title';
+    expect(extractTitle(content)).toBe('Actual Title');
+  });
+
+  it('returns Untitled when frontmatter present but body is empty', () => {
+    const content = '---\ntags: test\n---\n';
+    expect(extractTitle(content)).toBe('Untitled');
+  });
+
+  it('handles frontmatter with only closing delimiter on next line', () => {
+    const content = '---\nkey: value\n---\n## Second Level Heading';
+    expect(extractTitle(content)).toBe('Second Level Heading');
+  });
 });
 
 // ---------------------------------------------------------------------------
