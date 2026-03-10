@@ -145,6 +145,14 @@ export const createEventSchema = z.object({
   location: z.string().optional().describe('Event location'),
   notes: z.string().optional().describe('Event notes'),
   allDay: z.boolean().optional().describe('Whether this is an all-day event'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview what would be created without actually creating the event (default: false)'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun to proceed with creation'),
 });
 
 export const updateEventSchema = z.object({
@@ -268,6 +276,48 @@ export function getEvents(params: z.infer<typeof getEventsSchema>) {
  */
 export function createEvent(params: z.infer<typeof createEventSchema>) {
   try {
+    // Dry-run: preview what would be created
+    if (params.dryRun === true) {
+      const isAllDay = params.allDay || !params.startDate.includes(':');
+      const token = issueConfirmationToken({
+        tool: 'calendar_create_event',
+        target: params.title,
+        action: 'create_event',
+      });
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: event "${params.title}" would be created`,
+        preview: {
+          title: params.title,
+          startDate: params.startDate,
+          endDate: params.endDate || (isAllDay ? '(end of day)' : '(1 hour after start)'),
+          calendar: params.calendar || '(default)',
+          location: params.location || '(none)',
+          notes: params.notes || '(none)',
+          allDay: isAllDay,
+        },
+        ...token,
+      };
+    }
+
+    // Require confirmation token if provided (from a previous dryRun)
+    if (params.confirmationToken) {
+      const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+        tool: 'calendar_create_event',
+        target: params.title,
+        action: 'create_event',
+      });
+      if (!confirmation.ok) {
+        const refreshHint = 'Call create_event with dryRun=true to get a new confirmationToken.';
+        const message =
+          confirmation.reason === 'expired'
+            ? `Confirmation token is expired. ${refreshHint}`
+            : `Confirmation token is invalid. ${refreshHint}`;
+        return { success: false, error: message };
+      }
+    }
+
     const isAllDay = params.allDay || !params.startDate.includes(':');
     let startDate: Date;
     let endDate: Date;

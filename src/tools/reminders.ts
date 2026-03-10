@@ -127,6 +127,14 @@ export const createReminderSchema = z.object({
   dueDate: z.string().optional().describe('Due date (YYYY-MM-DD or YYYY-MM-DD HH:MM)'),
   notes: z.string().optional().describe('Reminder notes'),
   priority: z.number().optional().describe('Priority: 0 (none), 1 (high), 5 (medium), 9 (low)'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview what would be created without actually creating the reminder (default: false)'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun to proceed with creation'),
 });
 
 export const completeReminderSchema = z.object({
@@ -230,6 +238,45 @@ export function getReminders(params: z.infer<typeof getRemindersSchema>) {
  */
 export function createReminder(params: z.infer<typeof createReminderSchema>) {
   try {
+    // Dry-run: preview what would be created
+    if (params.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'reminders_create',
+        target: params.title,
+        action: 'create_reminder',
+      });
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: reminder "${params.title}" would be created`,
+        preview: {
+          title: params.title,
+          list: params.list || '(default)',
+          dueDate: params.dueDate || '(none)',
+          notes: params.notes || '(none)',
+          priority: params.priority ?? 0,
+        },
+        ...token,
+      };
+    }
+
+    // Require confirmation token if provided (from a previous dryRun)
+    if (params.confirmationToken) {
+      const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+        tool: 'reminders_create',
+        target: params.title,
+        action: 'create_reminder',
+      });
+      if (!confirmation.ok) {
+        const refreshHint = 'Call create with dryRun=true to get a new confirmationToken.';
+        const message =
+          confirmation.reason === 'expired'
+            ? `Confirmation token is expired. ${refreshHint}`
+            : `Confirmation token is invalid. ${refreshHint}`;
+        return { success: false, error: message };
+      }
+    }
+
     // Try AppleScript first
     let asCmd = `createReminder with title "${escapeAppleScript(params.title)}"`;
     if (params.list) asCmd += ` in list "${escapeAppleScript(params.list)}"`;
