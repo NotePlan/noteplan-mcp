@@ -13,9 +13,19 @@ import {
 } from '../utils/confirmation-tokens.js';
 import { runAppleScript, escapeAppleScript, getAppName } from '../utils/applescript.js';
 
-/** Strip milliseconds + Z from ISO string — some NotePlan builds reject them. */
-function toAppleScriptDate(d: Date): string {
-  return d.toISOString().replace(/\.\d{3}Z$/, '');
+/**
+ * Format a Date as a local-time ISO-like string (YYYY-MM-DDTHH:MM:SS).
+ * Unlike toISOString() which always returns UTC, this preserves the user's
+ * local timezone so that AppleScript/Swift interpret the time correctly.
+ */
+function toLocalDateString(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const seconds = String(d.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
 // Get the directory of this module
@@ -225,7 +235,7 @@ export function createReminder(params: z.infer<typeof createReminderSchema>) {
     if (params.list) asCmd += ` in list "${escapeAppleScript(params.list)}"`;
     if (params.dueDate) {
       const dueDate = new Date(params.dueDate.replace(' ', 'T'));
-      asCmd += ` due date "${toAppleScriptDate(dueDate)}"`;
+      asCmd += ` due date "${toLocalDateString(dueDate)}"`;
     }
     if (params.notes) asCmd += ` with notes "${escapeAppleScript(params.notes)}"`;
     if (params.priority !== undefined) asCmd += ` with priority ${params.priority}`;
@@ -247,7 +257,7 @@ export function createReminder(params: z.infer<typeof createReminderSchema>) {
 
     if (params.dueDate) {
       const dueDate = new Date(params.dueDate.replace(' ', 'T'));
-      args.push(toAppleScriptDate(dueDate));
+      args.push(toLocalDateString(dueDate));
     } else {
       args.push('');
     }
@@ -320,7 +330,7 @@ export function updateReminder(params: z.infer<typeof updateReminderSchema>) {
     const updates: Record<string, any> = {};
     if (params.title) updates.title = params.title;
     if (params.dueDate) {
-      updates.dueDate = toAppleScriptDate(new Date(params.dueDate.replace(' ', 'T')));
+      updates.dueDate = toLocalDateString(new Date(params.dueDate.replace(' ', 'T')));
     }
     if (params.notes !== undefined) updates.notes = params.notes;
     if (params.priority !== undefined) updates.priority = params.priority;

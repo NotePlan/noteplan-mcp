@@ -20,12 +20,18 @@ const COMPILED_HELPER = path.join(__dirname, '../../scripts/calendar-helper');
 const SWIFT_HELPER = path.join(__dirname, '../../scripts/calendar-helper.swift');
 
 /**
- * Format a Date for AppleScript commands. Uses YYYY-MM-DDTHH:MM:SS without
- * milliseconds or trailing "Z" — some NotePlan builds reject the full
- * `.toISOString()` output (e.g. "2026-02-27T07:00:00.000Z").
+ * Format a Date as a local-time ISO-like string (YYYY-MM-DDTHH:MM:SS).
+ * Unlike toISOString() which always returns UTC, this preserves the user's
+ * local timezone so that AppleScript/Swift interpret the time correctly.
  */
-function toAppleScriptDate(d: Date): string {
-  return d.toISOString().replace(/\.\d{3}Z$/, '');
+function toLocalDateString(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const seconds = String(d.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
@@ -283,8 +289,8 @@ export function createEvent(params: z.infer<typeof createEventSchema>) {
       }
     }
 
-    const startStr = toAppleScriptDate(startDate);
-    const endStr = toAppleScriptDate(endDate);
+    const startStr = toLocalDateString(startDate);
+    const endStr = toLocalDateString(endDate);
 
     // Try AppleScript first
     let asCmd = `createEvent with title "${escapeAppleScript(params.title)}" from date "${startStr}" to date "${endStr}"`;
@@ -349,8 +355,8 @@ export function updateEvent(params: z.infer<typeof updateEventSchema>) {
     // Build JSON payload for updates
     const updates: Record<string, string> = {};
     if (params.title) updates.title = params.title;
-    if (params.startDate) updates.startDate = toAppleScriptDate(new Date(params.startDate.replace(' ', 'T')));
-    if (params.endDate) updates.endDate = toAppleScriptDate(new Date(params.endDate.replace(' ', 'T')));
+    if (params.startDate) updates.startDate = toLocalDateString(new Date(params.startDate.replace(' ', 'T')));
+    if (params.endDate) updates.endDate = toLocalDateString(new Date(params.endDate.replace(' ', 'T')));
     if (params.location !== undefined) updates.location = params.location;
     if (params.notes !== undefined) updates.notes = params.notes;
 

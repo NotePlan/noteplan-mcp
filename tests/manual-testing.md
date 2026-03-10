@@ -744,6 +744,58 @@ Take the `id` from the first result and fetch it:
 
 ---
 
+### Test 46: Reminder — timezone preserved
+
+**Tool:** `noteplan_eventkit`
+
+**Call:**
+```json
+{ "action": "create_reminder", "title": "TZ Test Reminder", "dueDate": "2026-03-15 14:30" }
+```
+
+**Verify:** Open macOS Reminders and find "TZ Test Reminder". Its due time should be **14:30 local time**, NOT shifted by the UTC offset. For example, if you're in EET (UTC+2), it should NOT show 12:30.
+
+**Teardown:** Delete the reminder after verification.
+
+---
+
+### Test 47: Calendar event — timezone preserved
+
+**Tool:** `noteplan_eventkit`
+
+**Call:**
+```json
+{ "action": "create_event", "title": "TZ Test Event", "startDate": "2026-03-15 10:00", "endDate": "2026-03-15 11:00" }
+```
+
+**Verify:** Open macOS Calendar and find "TZ Test Event". It should start at **10:00 local time** and end at **11:00 local time**, NOT shifted by the UTC offset.
+
+**Teardown:** Delete the event after verification.
+
+---
+
+### Test 48: Reminder — update timezone preserved
+
+**Tool:** `noteplan_eventkit`
+
+**Setup:** Create a reminder first, then update its dueDate.
+
+**Call (create):**
+```json
+{ "action": "create_reminder", "title": "TZ Update Test", "dueDate": "2026-03-15 09:00" }
+```
+
+**Call (update):**
+```json
+{ "action": "update_reminder", "reminderId": "<id from create>", "dueDate": "2026-03-15 16:45" }
+```
+
+**Verify:** Open macOS Reminders. "TZ Update Test" should have due time **16:45 local time**, NOT shifted.
+
+**Teardown:** Delete the reminder after verification.
+
+---
+
 ## Results Tracker
 
 | # | Test | Result | Notes |
@@ -793,3 +845,6 @@ Take the `id` from the first result and fetch it:
 | 43 | Calendar — list calendars | | |
 | 44 | Calendar — get events for a date | | |
 | 45 | Calendar — create and delete an event | | |
+| 46 | Reminder — timezone preserved | | |
+| 47 | Calendar event — timezone preserved | | |
+| 48 | Reminder — update timezone preserved | | |
