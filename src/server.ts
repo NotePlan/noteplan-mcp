@@ -43,6 +43,7 @@ type ToolDefinition = {
 };
 
 type ToolAnnotations = {
+  title: string;
   readOnlyHint: boolean;
   destructiveHint: boolean;
   idempotentHint: boolean;
@@ -410,6 +411,24 @@ function compactToolDefinition(tool: ToolDefinition, maxDescLength = 120): ToolD
 }
 
 function getToolAnnotations(toolName: string): ToolAnnotations {
+  const toolTitles: Record<string, string> = {
+    noteplan_get_notes: 'Get Notes',
+    noteplan_manage_note: 'Manage Note',
+    noteplan_edit_content: 'Edit Content',
+    noteplan_paragraphs: 'Paragraphs & Tasks',
+    noteplan_search: 'Search',
+    noteplan_folders: 'Folders & Spaces',
+    noteplan_filters: 'Filters',
+    noteplan_eventkit: 'Calendar & Reminders',
+    noteplan_memory: 'Memory',
+    noteplan_ui: 'UI Control',
+    noteplan_plugins: 'Plugins',
+    noteplan_themes: 'Themes',
+    noteplan_embeddings: 'Embeddings',
+    noteplan_templates: 'Templates',
+    noteplan_attachments: 'Attachments',
+  };
+
   // Read-only tools
   const readOnlyTools = new Set([
     'noteplan_get_notes',
@@ -455,6 +474,7 @@ function getToolAnnotations(toolName: string): ToolAnnotations {
   ]);
 
   return {
+    title: toolTitles[toolName] || toolName,
     readOnlyHint: readOnlyTools.has(toolName),
     destructiveHint: destructiveTools.has(toolName),
     idempotentHint: !nonIdempotentTools.has(toolName),
