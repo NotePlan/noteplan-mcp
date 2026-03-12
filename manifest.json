@@ -1,0 +1,84 @@
+{
+  "manifest_version": "0.3",
+  "name": "NotePlan",
+  "version": "1.1.18",
+  "description": "MCP server for interacting with the NotePlan app on macOS",
+  "long_description": "Read, create, and edit notes and tasks in NotePlan. Manage calendar events and reminders via native macOS integration. Search across all notes with full-text and property filters. Control plugins, themes, and templates. Organize folders, spaces, and tags. All operations run locally on your device.",
+  "privacy_policies": [
+    "https://noteplan.co/privacy"
+  ],
+  "author": {
+    "name": "NotePlan LLC",
+    "email": "hello@noteplan.co",
+    "url": "https://github.com/NotePlan"
+  },
+  "homepage": "https://noteplan.co",
+  "documentation": "https://github.com/NotePlan/noteplan-mcp#readme",
+  "support": "https://help.noteplan.co",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "noteplan_get_notes"
+    },
+    {
+      "name": "noteplan_manage_note"
+    },
+    {
+      "name": "noteplan_edit_content"
+    },
+    {
+      "name": "noteplan_paragraphs"
+    },
+    {
+      "name": "noteplan_search"
+    },
+    {
+      "name": "noteplan_folders"
+    },
+    {
+      "name": "noteplan_filters"
+    },
+    {
+      "name": "noteplan_eventkit"
+    },
+    {
+      "name": "noteplan_memory"
+    },
+    {
+      "name": "noteplan_ui"
+    },
+    {
+      "name": "noteplan_plugins"
+    },
+    {
+      "name": "noteplan_themes"
+    }
+  ],
+  "tools_generated": true,
+  "keywords": [
+    "noteplan",
+    "notes",
+    "tasks",
+    "to-do list",
+    "reminders",
+    "calendar",
+    "events",
+    "markdown"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NotePlan/noteplan-mcp"
+  }
+}

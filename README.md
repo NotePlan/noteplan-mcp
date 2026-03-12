@@ -245,6 +245,50 @@ The server automatically detects NotePlan's storage location. Supported paths (i
 - **Calendar & Reminders**: Native macOS access via compiled Swift helpers using EventKit
 - **UI control & Plugins**: AppleScript bridge to the running NotePlan app
 
+## Examples
+
+### Example 1: Review today's schedule and tasks
+
+**Prompt:** "What's on my plate today?"
+
+**Tool calls:** `noteplan_get_notes` fetches today's daily note, then `noteplan_eventkit` retrieves calendar events for the day.
+
+**Output:** Claude combines your daily note content (tasks, meeting prep, notes) with your calendar events into a unified overview of your day.
+
+### Example 2: Search and complete a task
+
+**Prompt:** "Mark the 'Submit quarterly report' task as done"
+
+**Tool calls:** `noteplan_paragraphs` with `action: "search_global"` finds the task across all notes. Then `noteplan_paragraphs` with `action: "complete"` marks it done using your configured task marker style.
+
+**Output:** The server returns the filename where the task was found, the original line, and the updated line with the completion marker applied.
+
+### Example 3: Create a meeting note with a calendar event
+
+**Prompt:** "Create a note called 'Design Review' in my Meetings folder and add a calendar event for Friday at 2pm"
+
+**Tool calls:** `noteplan_manage_note` with `action: "create"` creates the note in the specified folder. Then `noteplan_eventkit` with `source: "calendar"` and `action: "create_event"` creates the event.
+
+**Output:** The server confirms the note was created (returning filename, title, and folder) and the calendar event was added (returning event ID, title, start/end times, and calendar name).
+
+### Example 4: Bulk search with filters
+
+**Prompt:** "Find all notes tagged #project in my Work folder from the last month"
+
+**Tool calls:** `noteplan_search` with `query: "#project"`, `folder: "Work"`, and date-based `propertyFilters`.
+
+**Output:** The server returns matching notes with filenames, titles, modification dates, and content snippets showing the matched lines.
+
+## Privacy Policy
+
+The MCP server runs entirely on your machine. Your notes, tasks, and calendar data never leave your device. No telemetry or analytics are collected. If you enable optional semantic search, selected content is sent to a third-party embedding API that you configure. See the full privacy policy at [noteplan.co/privacy](https://noteplan.co/privacy).
+
+## Support
+
+- **Issues & bug reports**: [github.com/NotePlan/noteplan-mcp/issues](https://github.com/NotePlan/noteplan-mcp/issues)
+- **NotePlan community**: [discord.gg/noteplan](https://discord.gg/noteplan)
+- **Email**: [hello@noteplan.co](mailto:hello@noteplan.co)
+
 ## License
 
 MIT
