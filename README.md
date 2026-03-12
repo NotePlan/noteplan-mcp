@@ -286,7 +286,7 @@ The MCP server runs entirely on your machine. Your notes, tasks, and calendar da
 ## Support
 
 - **Issues & bug reports**: [github.com/NotePlan/noteplan-mcp/issues](https://github.com/NotePlan/noteplan-mcp/issues)
-- **NotePlan community**: [discord.gg/noteplan](https://discord.gg/noteplan)
+- **NotePlan community**: [discord.gg/D4268MT](https://discord.gg/D4268MT)
 - **Email**: [hello@noteplan.co](mailto:hello@noteplan.co)
 
 ## License
