@@ -3,9 +3,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { execFileSync } from 'child_process';
 import { Note, NoteType, Folder } from './types.js';
 import { extractTitle, extractTagsFromContent } from './markdown-parser.js';
 import { extractDateFromFilename } from '../utils/date-utils.js';
+import { getDetectedAppName } from '../utils/version.js';
 
 /** Valid note file extensions in NotePlan */
 const VALID_NOTE_EXTENSIONS = ['.md', '.txt'];
@@ -163,21 +165,47 @@ function isValidNotePlanPath(storagePath: string): boolean {
 }
 
 /**
+ * Ask the running NotePlan app for its storage path via AppleScript.
+ * Returns the path if successful, null otherwise.
+ */
+function detectStoragePathViaAppleScript(): string | null {
+  try {
+    const appName = getDetectedAppName();
+    const result = execFileSync('osascript', ['-e', `tell application "${appName}" to getStoragePath`], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5_000,
+    }).trim();
+    if (result && fs.existsSync(result)) {
+      console.error(`[noteplan-mcp] Storage path from app: ${result}`);
+      return result;
+    }
+  } catch {
+    console.error('[noteplan-mcp] Could not get storage path from NotePlan, falling back to filesystem detection');
+  }
+  return null;
+}
+
+/**
  * Detect and cache NotePlan configuration
  */
 function detectConfig(): NotePlanConfig {
   if (cachedConfig) return cachedConfig;
 
-  // Find the best storage path by scoring each one
-  let bestPath: string | null = null;
-  let bestScore = -1;
+  // First, ask the running app directly
+  let bestPath: string | null = detectStoragePathViaAppleScript();
 
-  for (const storagePath of POSSIBLE_PATHS) {
-    if (isValidNotePlanPath(storagePath)) {
-      const score = scoreStoragePath(storagePath);
-      if (score > bestScore) {
-        bestScore = score;
-        bestPath = storagePath;
+  // Fall back to filesystem scoring
+  if (!bestPath) {
+    let bestScore = -1;
+
+    for (const storagePath of POSSIBLE_PATHS) {
+      if (isValidNotePlanPath(storagePath)) {
+        const score = scoreStoragePath(storagePath);
+        if (score > bestScore) {
+          bestScore = score;
+          bestPath = storagePath;
+        }
       }
     }
   }
