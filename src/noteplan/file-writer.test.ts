@@ -181,6 +181,12 @@ describe('createProjectNote', () => {
     expect(result).toBe(path.join('Notes', 'Work', 'Note.md'));
   });
 
+  it('strips Notes/ prefix from folder to avoid double-nesting', () => {
+    mockFs.existsSync.mockReturnValue(false);
+    const result = createProjectNote('Note', '', 'Notes/Work');
+    expect(result).toBe(path.join('Notes', 'Work', 'Note.md'));
+  });
+
   it('throws if note already exists with same extension', () => {
     mockFs.existsSync.mockImplementation((p) => {
       return String(p) === '/np/Notes/Dup.md';

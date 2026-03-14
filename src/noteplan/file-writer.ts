@@ -310,7 +310,9 @@ export function writeNoteFile(filePath: string, content: string): void {
 export function createProjectNote(title: string, content: string = '', folder?: string): string {
   // Sanitize title for filename
   const safeTitle = sanitizeFilename(title);
-  const folderPath = folder ? path.join('Notes', folder) : 'Notes';
+  // Strip Notes/ prefix if present to avoid double-nesting (Notes/Notes/...)
+  const cleanFolder = folder?.replace(/^Notes\//, '');
+  const folderPath = cleanFolder ? path.join('Notes', cleanFolder) : 'Notes';
   const ext = getFileExtension(); // Use detected extension
 
   const filePath = path.join(folderPath, `${safeTitle}${ext}`);

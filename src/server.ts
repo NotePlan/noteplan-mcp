@@ -1220,7 +1220,7 @@ export function createServer(): Server {
               },
               folder: {
                 type: 'string',
-                description: 'Folder path — used by create (smart matching built in)',
+                description: 'Folder name or path without Notes/ prefix (e.g. "Projects" or "Work/Active") — used by create. Smart matching built in.',
               },
               create_new_folder: {
                 type: 'boolean',
