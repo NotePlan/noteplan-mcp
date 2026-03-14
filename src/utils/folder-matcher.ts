@@ -179,6 +179,17 @@ export function matchFolder(query: string, folders: Folder[]): FolderMatchResult
         ambiguous: false,
       };
     }
+
+    // Path-like queries that don't match exactly should not fuzzy-match.
+    // A multi-level path like "A/B/C" is specific enough that fuzzy-matching
+    // it to a different folder (e.g. "X/B") would be incorrect.
+    return {
+      matched: false,
+      folder: null,
+      score: 0,
+      alternatives: [],
+      ambiguous: false,
+    };
   }
 
   // Short queries (1-2 chars) need higher threshold
