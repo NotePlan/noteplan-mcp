@@ -11,6 +11,7 @@ import {
 } from '../utils/confirmation-tokens.js';
 import { parseParagraphLine, parseAllParagraphLines, buildParagraphLine, stripRawMarkers } from '../noteplan/markdown-parser.js';
 import { NoteType, ParagraphType, ParagraphMetadata, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
+import { normalizeFilename } from '../utils/filename-normalize.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -64,10 +65,11 @@ function resolveNoteTarget(
   filename?: string,
   space?: string
 ): { identifier: string; note: ReturnType<typeof store.getNote> } {
-  const identifier = (id && id.trim().length > 0 ? id : filename)?.trim();
-  if (!identifier) {
+  const raw = (id && id.trim().length > 0 ? id : filename)?.trim();
+  if (!raw) {
     return { identifier: '', note: null };
   }
+  const identifier = normalizeFilename(raw);
 
   const note = id
     ? store.getNote({ id: identifier, space }) ?? store.getNote({ filename: identifier, space })
@@ -93,12 +95,14 @@ export function resolveWritableNoteReference(input: WritableNoteReferenceInput):
   candidates?: Array<{ id: string; title: string; filename: string; score: number }>;
 } {
   if (input.id && input.id.trim().length > 0) {
-    const note = store.getNote({ id: input.id.trim(), space: input.space?.trim() });
+    const normalizedId = normalizeFilename(input.id.trim());
+    const note = store.getNote({ id: normalizedId, space: input.space?.trim() });
     return { note, error: note ? undefined : 'Note not found' };
   }
 
   if (input.filename && input.filename.trim().length > 0) {
-    const note = store.getNote({ filename: input.filename.trim(), space: input.space?.trim() });
+    const normalizedFn = normalizeFilename(input.filename.trim());
+    const note = store.getNote({ filename: normalizedFn, space: input.space?.trim() });
     return { note, error: note ? undefined : 'Note not found' };
   }
 
@@ -681,7 +685,7 @@ function noteMatchScore(
   query: string,
   queryDateToken: string | null
 ): number {
-  const queryLower = query.toLowerCase();
+  const queryLower = normalizeFilename(query).toLowerCase();
   const idLower = (note.id || '').toLowerCase();
   const titleLower = (note.title || '').toLowerCase();
   const filenameLower = (note.filename || '').toLowerCase();

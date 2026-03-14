@@ -243,6 +243,20 @@ export function createSpaceNote(
     throw new Error('Space database not available');
   }
 
+  // Check for existing note with the same title in the same parent
+  const effectiveParent = parent || spaceId;
+  const existing = database
+    .prepare(
+      `SELECT filename FROM notes
+       WHERE title = ? AND parent = ? AND note_type = ? AND is_dir = 0
+       LIMIT 1`
+    )
+    .get(title, effectiveParent, SQLITE_NOTE_TYPES.TEAMSPACE_NOTE) as { filename: string } | undefined;
+
+  if (existing) {
+    throw new Error(`Note already exists: ${title}`);
+  }
+
   const noteId = generateNoteId();
   const filename = `%%NotePlanCloud%%/${spaceId}/${noteId}`;
   const now = currentSqliteTimestamp();

@@ -7,7 +7,7 @@ function makeFolder(folderPath: string): Folder {
   return {
     name: segments[segments.length - 1],
     path: folderPath,
-    children: [],
+    source: 'local' as const,
   };
 }
 
