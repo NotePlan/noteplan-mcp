@@ -8,6 +8,7 @@ import { Note, NoteType, Folder } from './types.js';
 import { extractTitle, extractTagsFromContent } from './markdown-parser.js';
 import { extractDateFromFilename } from '../utils/date-utils.js';
 import { getDetectedAppName } from '../utils/version.js';
+import { normalizeFilename } from '../utils/filename-normalize.js';
 
 /** Valid note file extensions in NotePlan */
 const VALID_NOTE_EXTENSIONS = ['.md', '.txt'];
@@ -308,23 +309,56 @@ export function readNoteFile(filePath: string): Note | null {
       return null;
     }
 
-    if (!fs.existsSync(fullPath)) {
+    let resolvedPath = fullPath;
+
+    if (!fs.existsSync(resolvedPath)) {
+      // Try Unicode-normalized form (NFC) — handles NFD/NFC mismatches on macOS
+      const nfcPath = normalizeFilename(resolvedPath);
+      if (nfcPath !== resolvedPath && fs.existsSync(nfcPath)) {
+        resolvedPath = nfcPath;
+      } else {
+        // Last resort: scan the parent directory for a Unicode-equivalent match
+        const dir = path.dirname(fullPath);
+        const targetBase = normalizeFilename(path.basename(fullPath));
+        if (fs.existsSync(dir)) {
+          try {
+            const entries = fs.readdirSync(dir);
+            const match = entries.find(
+              (e) => e.normalize('NFC') === targetBase
+            );
+            if (match) {
+              resolvedPath = path.join(dir, match);
+            } else {
+              return null;
+            }
+          } catch {
+            return null;
+          }
+        } else {
+          return null;
+        }
+      }
+    }
+
+    // Re-check that the resolved path is still within the NotePlan data directory
+    const resolvedFinal = path.resolve(resolvedPath);
+    if (resolvedFinal !== resolvedRoot && !resolvedFinal.startsWith(`${resolvedRoot}${path.sep}`)) {
       return null;
     }
 
-    const stats = fs.statSync(fullPath);
+    const stats = fs.statSync(resolvedPath);
     if (stats.isDirectory()) {
       return null;
     }
 
     // Only read files with valid note extensions (.md, .txt)
-    if (!isValidNoteExtension(path.basename(fullPath))) {
+    if (!isValidNoteExtension(path.basename(resolvedPath))) {
       return null;
     }
 
-    const content = fs.readFileSync(fullPath, 'utf-8');
-    const relativePath = path.relative(getNotePlanPath(), fullPath);
-    const filename = path.basename(fullPath);
+    const content = fs.readFileSync(resolvedPath, 'utf-8');
+    const relativePath = path.relative(getNotePlanPath(), resolvedPath);
+    const filename = path.basename(resolvedPath);
 
     // Determine note type
     let type: NoteType = 'note';

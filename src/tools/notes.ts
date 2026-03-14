@@ -686,9 +686,9 @@ function noteMatchScore(
   queryDateToken: string | null
 ): number {
   const queryLower = normalizeFilename(query).toLowerCase();
-  const idLower = (note.id || '').toLowerCase();
-  const titleLower = (note.title || '').toLowerCase();
-  const filenameLower = (note.filename || '').toLowerCase();
+  const idLower = (note.id || '').normalize('NFC').toLowerCase();
+  const titleLower = (note.title || '').normalize('NFC').toLowerCase();
+  const filenameLower = (note.filename || '').normalize('NFC').toLowerCase();
   const basenameLower = path.basename(filenameLower, path.extname(filenameLower));
   const noteDateToken = normalizeDateToken(note.date);
 

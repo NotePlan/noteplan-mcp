@@ -796,6 +796,60 @@ Take the `id` from the first result and fetch it:
 
 ---
 
+### Test 49: Set property on note with curly quotes in filename
+
+**Tool:** `noteplan_manage_note`
+
+**Setup:** Create a note titled "The \u2018Law Code\u2019 of Hammurabi \u2013 Tyndale House" (with Unicode curly quotes and en-dash).
+
+**Call:**
+```json
+{ "action": "set_property", "filename": "Notes/The \u2018Law Code\u2019 of Hammurabi \u2013 Tyndale House.md", "key": "tags", "value": "#archaeology, #history" }
+```
+
+**Verify:** Property is set successfully (not ERR_NOT_FOUND). Read the note and confirm `tags: #archaeology, #history` appears in frontmatter.
+
+**Teardown:** Delete the test note.
+
+---
+
+### Test 50: Get note with bullet character in title
+
+**Tool:** `noteplan_get_notes`
+
+**Setup:** Create a note titled "\u2022 Bullet List Note" (with Unicode bullet character).
+
+**Call:**
+```json
+{ "action": "get", "filename": "Notes/\u2022 Bullet List Note.md" }
+```
+
+**Verify:** Note is returned successfully (not ERR_NOT_FOUND). Content matches what was created.
+
+**Teardown:** Delete the test note.
+
+---
+
+### Test 51: Search and fetch note with special Unicode characters
+
+**Tool:** `noteplan_search`, then `noteplan_get_notes`
+
+**Setup:** Ensure the note from Test 49 exists ("The \u2018Law Code\u2019 of Hammurabi \u2013 Tyndale House").
+
+**Call (step 1 — search):**
+```json
+{ "action": "search", "query": "Law Code", "searchField": "title" }
+```
+
+**Call (step 2 — fetch by filename from result):**
+```json
+{ "action": "get", "filename": "<filename from search result>" }
+```
+
+**Verify:** Step 1 finds the note. Step 2 successfully fetches it using the filename returned by search. The round-trip works even though the filename contains curly quotes and en-dash.
+
+---
+
 ## Results Tracker
 
 | # | Test | Result | Notes |
@@ -848,3 +902,6 @@ Take the `id` from the first result and fetch it:
 | 46 | Reminder — timezone preserved | | |
 | 47 | Calendar event — timezone preserved | | |
 | 48 | Reminder — update timezone preserved | | |
+| 49 | Set property on note with curly quotes in filename | | |
+| 50 | Get note with bullet character in title | | |
+| 51 | Search and fetch note with special Unicode chars | | |

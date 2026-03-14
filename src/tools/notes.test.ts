@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parseParagraphLine, parseAllParagraphLines, isCodeFenceLine, isTableSeparator, isTableRow } from '../noteplan/markdown-parser.js';
 import type { ParagraphType, TaskStatus } from '../noteplan/types.js';
+import { normalizeFilename } from '../utils/filename-normalize.js';
 
 // ---------------------------------------------------------------------------
 // Copies of private helper functions from notes.ts
@@ -157,10 +158,10 @@ function noteMatchScore(
   query: string,
   queryDateToken: string | null
 ): number {
-  const queryLower = query.toLowerCase();
-  const idLower = (note.id || '').toLowerCase();
-  const titleLower = (note.title || '').toLowerCase();
-  const filenameLower = (note.filename || '').toLowerCase();
+  const queryLower = normalizeFilename(query).toLowerCase();
+  const idLower = (note.id || '').normalize('NFC').toLowerCase();
+  const titleLower = (note.title || '').normalize('NFC').toLowerCase();
+  const filenameLower = (note.filename || '').normalize('NFC').toLowerCase();
   const path_basename = filenameLower.split('/').pop() || '';
   const path_extname_idx = path_basename.lastIndexOf('.');
   const basenameLower =
@@ -695,6 +696,57 @@ describe('noteMatchScore', () => {
   it('returns 0 for no match', () => {
     const note = { id: 'xyz', title: 'Something', filename: 'folder/note.md' };
     expect(noteMatchScore(note, 'completely-unrelated-query', null)).toBe(0);
+  });
+
+  // Regression: escaped Unicode in filename queries (GH issue — curly quotes, bullets, dashes)
+  it('matches filename when query contains escaped curly quotes (\\u2018/\\u2019)', () => {
+    const note = {
+      id: 'xyz',
+      title: 'The \u2018Law Code\u2019 of Hammurabi',
+      filename: 'Notes/The \u2018Law Code\u2019 of Hammurabi \u2013 Tyndale House.md',
+    };
+    const escapedQuery = 'Notes/The \\u2018Law Code\\u2019 of Hammurabi \\u2013 Tyndale House.md';
+    expect(noteMatchScore(note, escapedQuery, null)).toBe(0.99);
+  });
+
+  it('matches filename when query contains escaped bullet (\\u2022)', () => {
+    const note = {
+      id: 'xyz',
+      title: '\u2022 My List',
+      filename: 'Notes/\u2022 My List.md',
+    };
+    const escapedQuery = 'Notes/\\u2022 My List.md';
+    expect(noteMatchScore(note, escapedQuery, null)).toBe(0.99);
+  });
+
+  it('matches filename when query contains escaped em-dash (\\u2014)', () => {
+    const note = {
+      id: 'xyz',
+      title: 'A \u2014 B',
+      filename: 'Notes/A \u2014 B.md',
+    };
+    const escapedQuery = 'Notes/A \\u2014 B.md';
+    expect(noteMatchScore(note, escapedQuery, null)).toBe(0.99);
+  });
+
+  it('matches when query is NFD and note is NFC', () => {
+    const note = {
+      id: 'xyz',
+      title: 'Caf\u00e9',  // NFC
+      filename: 'Notes/Caf\u00e9.md',
+    };
+    const nfdQuery = 'Caf\u0065\u0301'; // NFD
+    expect(noteMatchScore(note, nfdQuery, null)).toBeGreaterThanOrEqual(0.96);
+  });
+
+  it('matches when note filename is NFD and query is NFC', () => {
+    const note = {
+      id: 'xyz',
+      title: 'Caf\u0065\u0301',  // NFD — as macOS filesystem might return
+      filename: 'Notes/Caf\u0065\u0301.md',
+    };
+    const nfcQuery = 'Notes/Caf\u00e9.md'; // NFC
+    expect(noteMatchScore(note, nfcQuery, null)).toBe(0.99);
   });
 });
 

@@ -12,6 +12,7 @@ import { matchFolder, FolderMatchResult } from '../utils/folder-matcher.js';
 import { searchWithRipgrep, isRipgrepAvailable, RipgrepMatch } from './ripgrep-search.js';
 import { fuzzySearch } from './fuzzy-search.js';
 import { parseFlexibleDateFilter, isDateInRange } from '../utils/date-filters.js';
+import { normalizeFilename } from '../utils/filename-normalize.js';
 
 // Cache ripgrep availability check
 let ripgrepAvailable: boolean | null = null;
@@ -167,10 +168,11 @@ export function getNote(options: {
 
   // If ID is specified, get directly (best for space notes)
   if (id) {
-    const spaceNote = sqliteReader.getSpaceNote(id);
+    const normalizedId = normalizeFilename(id);
+    const spaceNote = sqliteReader.getSpaceNote(normalizedId);
     if (spaceNote) return spaceNote;
     // Fallback: for local notes, id === filename
-    const localNote = fileReader.readNoteFile(id);
+    const localNote = fileReader.readNoteFile(normalizedId);
     if (localNote) return localNote;
     return null;
   }
@@ -186,7 +188,7 @@ export function getNote(options: {
 
   // If filename is specified, try to get directly
   if (filename) {
-    const normalizedFilename = filename.trim();
+    const normalizedFilename = normalizeFilename(filename.trim());
 
     if (space) {
       const directSpaceNote = sqliteReader.getSpaceNote(normalizedFilename);
