@@ -1258,7 +1258,7 @@ export function createServer(): Server {
               },
               destinationFolder: {
                 type: 'string',
-                description: 'Target folder — used by move, restore',
+                description: 'Target folder without Notes/ prefix (e.g. "Projects" or "Work/Active") — used by move, restore',
               },
               newFilename: {
                 type: 'string',
@@ -1287,7 +1287,7 @@ export function createServer(): Server {
         {
           name: 'noteplan_edit_content',
           description:
-            'Edit note content. IMPORTANT: action values use snake_case.\n\nValid actions (exactly these strings):\n- "insert": Insert at position. Combine any position with heading="Section Name" to scope insertion to that section. position="start" + heading inserts right after the heading. position="end" + heading appends at end of the heading\'s section. position="after-heading" inserts right after a heading. position="in-section" appends at end of a heading\'s section. position="start" (no heading) inserts after frontmatter. position="at-line" inserts at a specific line number. position="end" (no heading) appends to note.\n- "append": Shorthand for insert at end. Supports heading="Section Name" to append at end of that section. Use date="today" to append to today\'s daily note.\n- "delete_lines": Delete a line range. Requires startLine + endLine (1-indexed). Use dryRun=true first, then confirmationToken to execute.\n- "edit_line": Edit a single line. Requires line (1-indexed) + content. Set content="" to clear a line.\n- "replace_lines": Replace a line range. Requires startLine + endLine + content. Use dryRun=true first, then confirmationToken to execute.\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet. Always use tab characters for indentation.\n\nAdding tasks: When inserting a task, set type="task" and pass only the task text as content (e.g. content="Buy groceries", type="task"). Do NOT include raw markers like "* [ ]" or "- [ ]" in content — the type parameter handles formatting to match the user\'s configured style. For checklists use type="checklist". For task lifecycle (complete, update, search), use noteplan_paragraphs instead.\n\nSchedule tasks with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id).\n\nUse scheduleDate to auto-append >YYYY-MM-DD to content.',
+            'Edit note content. IMPORTANT: action values use snake_case.\n\nValid actions (exactly these strings):\n- "insert": Insert at position. Combine any position with heading="Section Name" to scope insertion to that section. position="start" + heading inserts right after the heading. position="end" + heading appends at end of the heading\'s section. position="after-heading" inserts right after a heading. position="in-section" appends at end of a heading\'s section. position="start" (no heading) inserts after frontmatter. position="at-line" inserts at a specific line number. position="end" (no heading) appends to note.\n- "append": Shorthand for insert at end. Supports heading="Section Name" to append at end of that section. Use date="today" to append to today\'s daily note.\n- "delete_lines": Delete a line range. Requires startLine + endLine (1-indexed). Use dryRun=true first, then confirmationToken to execute.\n- "edit_line": Edit a single line. Requires line (1-indexed) + content. Set content="" to clear a line.\n- "replace_lines": Replace a line range. Requires startLine + endLine + content. Use dryRun=true first, then confirmationToken to execute.\n\nTarget note via id, filename, title, date, or query. Calendar notes (date param) are auto-created if they don\'t exist yet. Always use tab characters for indentation.\n\nAdding tasks: When inserting a task, set type="task" and pass only the task text as content (e.g. content="Buy groceries", type="task"). Do NOT include raw markers like "* [ ]" or "- [ ]" in content — the type parameter handles formatting to match the user\'s configured style. For checklists use type="checklist". For task lifecycle (complete, update, search), use noteplan_paragraphs instead.\n\nSchedule tasks with >YYYY-MM-DD. Link to notes with [[Note Name]]. Never add block IDs (^id).\n\nUse scheduleDate to auto-append >YYYY-MM-DD to content.\n\nTo replace ALL note content at once, use noteplan_manage_note(action: "update", fullReplace=true) instead.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2445,7 +2445,7 @@ export function createServer(): Server {
       { action: 'create', description: 'Create a project note (requires title). No dryRun needed — creates immediately' },
       { action: 'update', description: 'Replace note content (requires filename, content, fullReplace + confirmationToken)' },
       { action: 'delete', description: 'Delete a note (requires dryRun/confirmationToken)' },
-      { action: 'move', description: 'Move a note to another folder (requires dryRun/confirmationToken)' },
+      { action: 'move', description: 'Move a note to another folder (requires destinationFolder + dryRun/confirmationToken). Find the note first via id, filename, or title' },
       { action: 'restore', description: 'Restore a trashed note (requires dryRun/confirmationToken)' },
       { action: 'rename', description: 'Rename a note (requires newTitle)' },
       { action: 'set_property', description: 'Set a frontmatter property (requires key + value)' },
@@ -2457,6 +2457,7 @@ export function createServer(): Server {
       { action: 'delete_lines', description: 'Delete a line range (requires startLine + endLine, 1-indexed)' },
       { action: 'edit_line', description: 'Edit a single line (requires line + content)' },
       { action: 'replace_lines', description: 'Replace a line range (requires startLine + endLine + content)' },
+      { action: '(full replace)', description: 'To replace ALL content, use noteplan_manage_note(action: "update") with fullReplace=true instead' },
     ],
     noteplan_paragraphs: [
       { action: 'get', description: 'Get note lines with metadata (requires filename). Use types param to filter by paragraph type (e.g. open-task, done-checklist, heading)' },
