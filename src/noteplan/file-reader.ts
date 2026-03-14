@@ -172,6 +172,17 @@ function isValidNotePlanPath(storagePath: string): boolean {
 function detectStoragePathViaAppleScript(): string | null {
   try {
     const appName = getDetectedAppName();
+
+    // Check if NotePlan is running first — avoid launching the app via AppleScript
+    const isRunning = execFileSync('osascript', ['-e', `application "${appName}" is running`], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 3_000,
+    }).trim();
+    if (isRunning !== 'true') {
+      return null;
+    }
+
     const result = execFileSync('osascript', ['-e', `tell application "${appName}" to getStoragePath`], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
