@@ -850,6 +850,62 @@ Take the `id` from the first result and fetch it:
 
 ---
 
+### Test 52: Create note in non-existent multi-level folder path
+
+**Tool:** `noteplan_manage_note`
+
+**Setup:** Ensure the folder `98 - Testing/Sub A/Sub B` does NOT exist, but a folder like `99 Test and Temporary/Test Sub-folder` DOES exist.
+
+**Call:**
+```json
+{ "action": "create", "title": "Deep Folder Test", "folder": "98 - Testing/Sub A/Sub B", "create_new_folder": true }
+```
+
+**Verify:** The note is created in `98 - Testing/Sub A/Sub B` — NOT fuzzy-matched to a different existing folder like `99 Test and Temporary/Test Sub-folder`. The folder hierarchy is created as specified.
+
+**Teardown:** Delete the note and the `98 - Testing` folder tree.
+
+---
+
+### Test 53: Create note in space — no duplicate on second call
+
+**Tool:** `noteplan_manage_note`
+
+**Setup:** Requires at least one space (TeamSpace) to be available.
+
+**Call (first create):**
+```json
+{ "action": "create", "title": "Duplicate Guard Test", "space": "<space name>" }
+```
+
+**Verify first:** Note is created successfully.
+
+**Call (second create with same title):**
+```json
+{ "action": "create", "title": "Duplicate Guard Test", "space": "<space name>" }
+```
+
+**Verify second:** Returns an error `"Note already exists: Duplicate Guard Test"` — does NOT create a second note with the same title.
+
+**Teardown:** Delete "Duplicate Guard Test" from the space.
+
+---
+
+### Test 54: Create note does not require dryRun
+
+**Tool:** `noteplan_manage_note`
+
+**Call:**
+```json
+{ "action": "create", "title": "No DryRun Needed" }
+```
+
+**Verify:** Note is created immediately in a single call — no dryRun/confirmationToken flow required. The response includes `success: true` and the note details.
+
+**Teardown:** Delete "No DryRun Needed".
+
+---
+
 ## Results Tracker
 
 | # | Test | Result | Notes |
@@ -905,3 +961,6 @@ Take the `id` from the first result and fetch it:
 | 49 | Set property on note with curly quotes in filename | | |
 | 50 | Get note with bullet character in title | | |
 | 51 | Search and fetch note with special Unicode chars | | |
+| 52 | Create note in non-existent multi-level folder | | |
+| 53 | Create note in space — no duplicate on second call | | |
+| 54 | Create note does not require dryRun | | |
