@@ -102,6 +102,12 @@ export const updatePluginHtmlSchema = z.object({
   autoLaunch: z.boolean().optional().default(true).describe('Reload plugins and run after patching (default: true)'),
 });
 
+export const updatePluginJsonSchema = z.object({
+  pluginId: z.string().describe('Plugin ID (e.g., "mcp.dashboard")'),
+  updates: z.record(z.unknown()).describe('Key-value pairs to set in plugin.json (e.g., {"plugin.author": "John", "plugin.version": "1.2.0"})'),
+  autoLaunch: z.boolean().optional().default(false).describe('Reload plugins after updating (default: false)'),
+});
+
 // --- Implementations ---
 
 export function listPlugins(args: z.infer<typeof listPluginsSchema>): Record<string, unknown> {
@@ -841,6 +847,62 @@ export function updatePluginHtml(args: unknown): Record<string, unknown> {
     } catch (error: any) {
       result.launched = false;
       result.launchError = error.message;
+    }
+  }
+
+  return result;
+}
+
+export function updatePluginJson(args: unknown): Record<string, unknown> {
+  const { pluginId, updates, autoLaunch } = updatePluginJsonSchema.parse(args);
+
+  const idError = validatePluginId(pluginId);
+  if (idError) {
+    return { success: false, error: idError };
+  }
+
+  const pluginsPath = getPluginsPath();
+  const pluginDir = path.join(pluginsPath, pluginId);
+
+  if (!fs.existsSync(pluginDir)) {
+    return { success: false, error: `Plugin "${pluginId}" not found` };
+  }
+
+  const manifestPath = path.join(pluginDir, 'plugin.json');
+  if (!fs.existsSync(manifestPath)) {
+    return { success: false, error: `plugin.json not found in plugin folder "${pluginId}"` };
+  }
+
+  let manifest: Record<string, unknown>;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch (error: any) {
+    return { success: false, error: `Failed to parse plugin.json: ${error.message}` };
+  }
+
+  // Apply updates
+  const updatedKeys: string[] = [];
+  for (const [key, value] of Object.entries(updates)) {
+    manifest[key] = value;
+    updatedKeys.push(key);
+  }
+
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+
+  const result: Record<string, unknown> = {
+    success: true,
+    pluginId,
+    updatedKeys,
+    message: `Updated ${updatedKeys.length} key(s) in plugin.json`,
+  };
+
+  if (autoLaunch) {
+    try {
+      reloadPlugins({});
+      result.reloaded = true;
+    } catch (error: any) {
+      result.reloaded = false;
+      result.reloadError = error.message;
     }
   }
 

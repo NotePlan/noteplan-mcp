@@ -2139,12 +2139,12 @@ export function createServer(): Server {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'list_available', 'create', 'delete', 'install', 'log', 'source', 'update_html', 'screenshot', 'list_actions'],
-              description: 'Action: list | list_available | create | delete | install | log | source | update_html | screenshot | list_actions (discover all actions)',
+              enum: ['list', 'list_available', 'create', 'delete', 'install', 'log', 'source', 'update_html', 'update_json', 'screenshot', 'list_actions'],
+              description: 'Action: list | list_available | create | delete | install | log | source | update_html | update_json | screenshot | list_actions (discover all actions)',
             },
             pluginId: {
               type: 'string',
-              description: 'Plugin ID — used by create, delete, install, log, source, update_html, screenshot',
+              description: 'Plugin ID — used by create, delete, install, log, source, update_html, update_json, screenshot',
             },
             pluginName: {
               type: 'string',
@@ -2173,7 +2173,7 @@ export function createServer(): Server {
             },
             autoLaunch: {
               type: 'boolean',
-              description: 'Auto-reload and run — used by create, update_html',
+              description: 'Auto-reload and run — used by create, update_html, update_json',
             },
             patches: {
               type: 'array',
@@ -2186,6 +2186,10 @@ export function createServer(): Server {
                 required: ['find', 'replace'],
               },
               description: 'Find/replace patches — used by update_html',
+            },
+            updates: {
+              type: 'object',
+              description: 'Key-value pairs to set in plugin.json — used by update_json (e.g., {"plugin.author": "John", "plugin.version": "1.2.0"})',
             },
             query: {
               type: 'string',
@@ -2524,6 +2528,7 @@ export function createServer(): Server {
       { action: 'log', description: 'Read plugin console log (requires pluginId)' },
       { action: 'source', description: 'Read plugin source (requires pluginId)' },
       { action: 'update_html', description: 'Apply find/replace patches (requires pluginId + patches)' },
+      { action: 'update_json', description: 'Update plugin.json metadata (requires pluginId + updates)' },
       { action: 'screenshot', description: 'Capture plugin WebView screenshot (requires pluginId)' },
     ],
     noteplan_themes: [
@@ -2789,6 +2794,7 @@ export function createServer(): Server {
             case 'log': result = pluginTools.getPluginLog(args as any); break;
             case 'source': result = pluginTools.getPluginSource(args as any); break;
             case 'update_html': result = pluginTools.updatePluginHtml(args as any); break;
+            case 'update_json': result = pluginTools.updatePluginJson(args as any); break;
             case 'screenshot': result = pluginTools.screenshotPlugin(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }

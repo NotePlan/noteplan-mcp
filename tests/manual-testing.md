@@ -5,20 +5,19 @@ automatically by an AI agent (e.g. Claude Code) that has the MCP tools loaded.
 
 ## Automated Test Procedure
 
-> **Test date:** All tests use the daily note for **2026-02-15** (not today).
-> This avoids interfering with the user's real daily note while tests run.
+> **Test date:** All tests use the daily note for **4000-01-01**.
+> This far-future date ensures no conflict with real daily notes.
 
 When running these tests, follow this procedure exactly:
 
-1. **Back up the test-date note** — read and store the current content of the 2026-02-15 daily note (if it exists).
-2. **Set up fixtures** — replace the 2026-02-15 daily note content with the test fixture below, and create the "MCP Test Note" project note.
-3. **Run all tests** — execute every test case sequentially. If a test fails, record the failure and continue to the next test. Do NOT stop on failure.
-4. **Tear down** — restore the 2026-02-15 daily note from the backup (or delete it if it didn't exist before), delete any notes created during testing that still exist (e.g. "Weekly Review", "Q1 Goals", "MCP Test Note", "MCP Verified Note").
+1. **Set up fixtures** — create the 4000-01-01 daily note with the test fixture below, and create the "MCP Test Note" project note.
+2. **Run all tests** — execute every test case sequentially. If a test fails, record the failure and continue to the next test. Do NOT stop on failure.
+3. **Tear down** — delete the 4000-01-01 daily note and any notes created during testing (e.g. "Weekly Review", "Q1 Goals", "MCP Test Note", "MCP Verified Note").
 5. **Report** — write a complete results table into the chat showing pass/fail for each test, with notes on any failures.
 
 ### Important
 
-- All references to "today's note" in test cases below mean the **2026-02-15 daily note**. When calling tools, use `date: "2026-02-15"` instead of `date: "today"`.
+- All references to "today's note" in test cases below mean the **4000-01-01 daily note**. When calling tools, use `date: "4000-01-01"` instead of `date: "today"`.
 - Each test that modifies the test-date note should **reset** it to the fixture content before running, so tests are independent.
 - Tests 22-24 form a chain (rename → move → delete) and should run in order without resetting the project note between them.
 - Test 20 requires a special broken-frontmatter fixture — set it up inline before that test.
@@ -27,7 +26,7 @@ When running these tests, follow this procedure exactly:
 
 ## Test Fixtures
 
-### Test-date daily note (2026-02-15)
+### Test-date daily note (4000-01-01)
 
 ```
 ---
@@ -70,7 +69,7 @@ Some notes at the bottom.
 ### 1. Add task at TOP of a heading section
 
 **Prompt:**
-> Add a demo task "Buy groceries" at the top of the Tasks section in the 2026-02-15 daily note
+> Add a demo task "Buy groceries" at the top of the Tasks section in the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `add`)
@@ -78,141 +77,141 @@ Some notes at the bottom.
 - Task marker matches user config (e.g. `* Buy groceries`, not `* [ ] Buy groceries`)
 - No raw markdown written — tool uses auto-formatting
 
-**Verify:** Read the 2026-02-15 daily note. The line immediately after `## Tasks` should be `* Buy groceries`.
+**Verify:** Read the 4000-01-01 daily note. The line immediately after `## Tasks` should be `* Buy groceries`.
 
 ---
 
 ### 2. Add task at BOTTOM of a heading section
 
 **Prompt:**
-> Add a task "Review PR" at the end of the NotePlan section in the 2026-02-15 daily note
+> Add a task "Review PR" at the end of the NotePlan section in the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `add`)
 - "Review PR" appears as the LAST item under `## NotePlan`, BEFORE `## Journal`
 - Does NOT appear at the very bottom of the note
 
-**Verify:** Read the 2026-02-15 daily note. "Review PR" should be between "Existing NP item" and `## Journal`.
+**Verify:** Read the 4000-01-01 daily note. "Review PR" should be between "Existing NP item" and `## Journal`.
 
 ---
 
-### 3. Add task to the 2026-02-15 daily note (default — bottom of note)
+### 3. Add task to the 4000-01-01 daily note (default — bottom of note)
 
 **Prompt:**
-> Add a task "End of day review" to the 2026-02-15 daily note
+> Add a task "End of day review" to the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `add`)
 - "End of day review" appears at the bottom of the note
 - Task marker matches user config
 
-**Verify:** Read the 2026-02-15 daily note. Last line should contain "End of day review".
+**Verify:** Read the 4000-01-01 daily note. Last line should contain "End of day review".
 
 ---
 
-### 4. Add task at the very top of the 2026-02-15 daily note (after frontmatter)
+### 4. Add task at the very top of the 4000-01-01 daily note (after frontmatter)
 
 **Prompt:**
-> Add a task "Morning standup" at the very start of the 2026-02-15 daily note
+> Add a task "Morning standup" at the very start of the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `add`) with position: `start`
 - "Morning standup" appears right after the `---` frontmatter closer, BEFORE `# Daily Note`
 
-**Verify:** Read the 2026-02-15 daily note. First content line after frontmatter should be the task.
+**Verify:** Read the 4000-01-01 daily note. First content line after frontmatter should be the task.
 
 ---
 
 ### 5. Insert text content after a heading
 
 **Prompt:**
-> Add the text "Focus: ship MCP fixes" right under the Journal heading in the 2026-02-15 daily note
+> Add the text "Focus: ship MCP fixes" right under the Journal heading in the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_edit_content` (action: `insert`, position: `after-heading`, heading: `Journal`)
 - Text appears as the first line after `## Journal`, before "Had a good morning."
 
-**Verify:** Read the 2026-02-15 daily note. Line after `## Journal` should be "Focus: ship MCP fixes".
+**Verify:** Read the 4000-01-01 daily note. Line after `## Journal` should be "Focus: ship MCP fixes".
 
 ---
 
 ### 6. Append content at end of a section
 
 **Prompt:**
-> Append "Wrapped up testing" at the end of the Journal section in the 2026-02-15 daily note
+> Append "Wrapped up testing" at the end of the Journal section in the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_edit_content` (action: `append` or `insert` with position: `end`/`in-section`, heading: `Journal`)
 - Text appears at the end of the Journal section
 - Since `## Journal` is the last heading, the section extends to the end of the note (thematic breaks `---` and text below them are part of the section, not a boundary)
 
-**Verify:** Read the 2026-02-15 daily note. "Wrapped up testing" should be the last line of the note.
+**Verify:** Read the 4000-01-01 daily note. "Wrapped up testing" should be the last line of the note.
 
 ---
 
 ### 7. Append content to end of note (no heading)
 
 **Prompt:**
-> Append "-- End of notes --" to the 2026-02-15 daily note
+> Append "-- End of notes --" to the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_edit_content` (action: `append`)
 - Text appears at the very bottom of the note
 
-**Verify:** Read the 2026-02-15 daily note. Last line should be "-- End of notes --".
+**Verify:** Read the 4000-01-01 daily note. Last line should be "-- End of notes --".
 
 ---
 
 ### 8. Insert at a specific line number
 
 **Prompt:**
-> Insert the text "IMPORTANT NOTICE" at line 5 of the 2026-02-15 daily note
+> Insert the text "IMPORTANT NOTICE" at line 5 of the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_edit_content` (action: `insert`, position: `at-line`, line: 5)
 - Text appears at line 5, pushing existing content down
 
-**Verify:** Read the 2026-02-15 daily note. Line 5 (1-indexed, after frontmatter) should be "IMPORTANT NOTICE".
+**Verify:** Read the 4000-01-01 daily note. Line 5 (1-indexed, after frontmatter) should be "IMPORTANT NOTICE".
 
 ---
 
 ### 9. Edit a specific line
 
 **Prompt:**
-> Change line 1 of the 2026-02-15 daily note to "# Updated Title"
+> Change line 1 of the 4000-01-01 daily note to "# Updated Title"
 
 **Expected outcome:**
 - Tool used: `noteplan_edit_content` (action: `edit_line`, line: 1)
 - The first line (after frontmatter) changes to "# Updated Title"
 
-**Verify:** Read the 2026-02-15 daily note. First content line should be "# Updated Title".
+**Verify:** Read the 4000-01-01 daily note. First content line should be "# Updated Title".
 
 ---
 
 ### 10. Delete lines from a note
 
 **Prompt:**
-> Delete lines 6 through 8 from the 2026-02-15 daily note
+> Delete lines 6 through 8 from the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_edit_content` (action: `delete_lines`)
 - Should first do a dryRun showing what will be deleted
 - After confirmation, those lines are removed
 
-**Verify:** Read the 2026-02-15 daily note. The lines that were at positions 6-8 should be gone.
+**Verify:** Read the 4000-01-01 daily note. The lines that were at positions 6-8 should be gone.
 
 ---
 
 ### 11. Complete a task
 
 **Prompt:**
-> Mark the task "Existing task 1" as done in the 2026-02-15 daily note
+> Mark the task "Existing task 1" as done in the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `complete`)
 - "Existing task 1" gets marked as done (checkbox changes to `[x]` or marker changes)
 
-**Verify:** Read the 2026-02-15 daily note. Task should show as completed.
+**Verify:** Read the 4000-01-01 daily note. Task should show as completed.
 
 ---
 
@@ -272,11 +271,11 @@ Some notes at the bottom.
 ### 16. Get the test-date note
 
 **Prompt:**
-> Show me the 2026-02-15 daily note
+> Show me the 4000-01-01 daily note
 
 **Expected outcome:**
-- Tool used: `noteplan_get_notes` (date: `2026-02-15`, includeContent: true)
-- Returns the full content of the 2026-02-15 daily note
+- Tool used: `noteplan_get_notes` (date: `4000-01-01`, includeContent: true)
+- Returns the full content of the 4000-01-01 daily note
 
 **Verify:** Returned content matches the fixture.
 
@@ -298,58 +297,58 @@ Some notes at the bottom.
 ### 18. Add a task with a scheduled date
 
 **Prompt:**
-> Add a task "Submit report" to the 2026-02-15 daily note under Tasks, scheduled for tomorrow
+> Add a task "Submit report" to the 4000-01-01 daily note under Tasks, scheduled for tomorrow
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `add`, scheduleDate: tomorrow's date)
 - Task content includes `>YYYY-MM-DD` with tomorrow's date
 - Task is under the Tasks heading
 
-**Verify:** Read the 2026-02-15 daily note. Task under Tasks should contain tomorrow's date.
+**Verify:** Read the 4000-01-01 daily note. Task under Tasks should contain tomorrow's date.
 
 ---
 
 ### 19. Add a task with priority
 
 **Prompt:**
-> Add a high-priority task "Fix critical bug" to the 2026-02-15 daily note under Tasks
+> Add a high-priority task "Fix critical bug" to the 4000-01-01 daily note under Tasks
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `add`, priority: 3)
 - Task includes `!!!` priority marker
 - Task is under the Tasks heading
 
-**Verify:** Read the 2026-02-15 daily note. Task under Tasks should contain `!!!`.
+**Verify:** Read the 4000-01-01 daily note. Task under Tasks should contain `!!!`.
 
 ---
 
 ### 20. Broken frontmatter resilience
 
-**Setup:** Before this test, replace the 2026-02-15 daily note content with a version where the closing `---` of frontmatter is removed, but a thematic break `---` remains later in the note.
+**Setup:** Before this test, replace the 4000-01-01 daily note content with a version where the closing `---` of frontmatter is removed, but a thematic break `---` remains later in the note.
 
 **Prompt:**
-> Add a task "Resilience test" at the start of the 2026-02-15 daily note
+> Add a task "Resilience test" at the start of the 4000-01-01 daily note
 
 **Expected outcome:**
 - Tool used: `noteplan_paragraphs` (action: `add`, position: `start`)
 - Task appears at the very top of the note (since frontmatter is broken/unclosed)
 - Does NOT appear after the thematic break `---` deeper in the note
 
-**Verify:** Read the 2026-02-15 daily note. Task should be at the top, not misplaced after the thematic break.
+**Verify:** Read the 4000-01-01 daily note. Task should be at the top, not misplaced after the thematic break.
 
 ---
 
 ### 21. Multiple tasks in one request
 
 **Prompt:**
-> Add these tasks to the 2026-02-15 daily note under Tasks: "Write docs", "Run tests", "Deploy to staging"
+> Add these tasks to the 4000-01-01 daily note under Tasks: "Write docs", "Run tests", "Deploy to staging"
 
 **Expected outcome:**
 - All three tasks appear under `## Tasks`
 - Each is a separate task with proper formatting
 - Order matches the request
 
-**Verify:** Read the 2026-02-15 daily note. All three tasks present under Tasks heading in order.
+**Verify:** Read the 4000-01-01 daily note. All three tasks present under Tasks heading in order.
 
 ---
 
@@ -429,19 +428,19 @@ Some notes at the bottom.
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has the fixture content with `* Existing task 1` under `## Tasks`.
+**Setup:** Ensure the 4000-01-01 daily note has the fixture content with `* Existing task 1` under `## Tasks`.
 
 **Call (step 1 — add a checkbox task):**
 ```json
-{ "action": "add", "content": "Marker test task", "heading": "Tasks", "date": "2026-02-15" }
+{ "action": "add", "content": "Marker test task", "heading": "Tasks", "date": "4000-01-01" }
 ```
 
 **Call (step 2 — update it with content that includes a marker):**
 ```json
-{ "action": "update", "content": "- [ ] Marker test updated", "lineIndex": "<line of task>", "date": "2026-02-15" }
+{ "action": "update", "content": "- [ ] Marker test updated", "lineIndex": "<line of task>", "date": "4000-01-01" }
 ```
 
-**Verify:** Read the 2026-02-15 daily note. The task should be a single `* Marker test updated` (or `* [ ] Marker test updated` depending on config) — NOT `* [ ] - [ ] Marker test updated` or any double-marker variant.
+**Verify:** Read the 4000-01-01 daily note. The task should be a single `* Marker test updated` (or `* [ ] Marker test updated` depending on config) — NOT `* [ ] - [ ] Marker test updated` or any double-marker variant.
 
 ---
 
@@ -449,11 +448,11 @@ Some notes at the bottom.
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has a task line like `- [ ] Some task` (dash-style).
+**Setup:** Ensure the 4000-01-01 daily note has a task line like `- [ ] Some task` (dash-style).
 
 **Call:**
 ```json
-{ "action": "update", "content": "* [ ] Changed text", "lineIndex": "<line of task>", "date": "2026-02-15" }
+{ "action": "update", "content": "* [ ] Changed text", "lineIndex": "<line of task>", "date": "4000-01-01" }
 ```
 
 **Verify:** The result should be `- [ ] Changed text` — preserving the original dash marker, NOT `- [ ] * [ ] Changed text`.
@@ -464,11 +463,11 @@ Some notes at the bottom.
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has a task under `## Tasks`.
+**Setup:** Ensure the 4000-01-01 daily note has a task under `## Tasks`.
 
 **Call:**
 ```json
-{ "action": "update", "content": "Clean content no markers", "lineIndex": "<line of task>", "date": "2026-02-15" }
+{ "action": "update", "content": "Clean content no markers", "lineIndex": "<line of task>", "date": "4000-01-01" }
 ```
 
 **Verify:** Task text is updated to "Clean content no markers" with its original marker preserved.
@@ -479,11 +478,11 @@ Some notes at the bottom.
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has an open task `* [ ] Some task`.
+**Setup:** Ensure the 4000-01-01 daily note has an open task `* [ ] Some task`.
 
 **Call:**
 ```json
-{ "action": "update", "content": "- [x] Should not duplicate", "lineIndex": "<line of task>", "date": "2026-02-15" }
+{ "action": "update", "content": "- [x] Should not duplicate", "lineIndex": "<line of task>", "date": "4000-01-01" }
 ```
 
 **Verify:** The result should be `* [ ] Should not duplicate` — the `- [x]` from the content is stripped, and the original `* [ ]` open status is preserved.
@@ -494,11 +493,11 @@ Some notes at the bottom.
 
 **Tool:** `noteplan_edit_content`
 
-**Setup:** Ensure the 2026-02-15 daily note has a task `* Existing task 1` at a known line.
+**Setup:** Ensure the 4000-01-01 daily note has a task `* Existing task 1` at a known line.
 
 **Call:**
 ```json
-{ "action": "edit_line", "line": "<line number>", "content": "* [ ] Rewritten task", "date": "2026-02-15" }
+{ "action": "edit_line", "line": "<line number>", "content": "* [ ] Rewritten task", "date": "4000-01-01" }
 ```
 
 **Verify:** The line should be exactly `* [ ] Rewritten task` — a straight replacement. Note: `edit_line` does raw line replacement, so the full line content is expected. This test confirms no extra formatting is applied on top.
@@ -566,11 +565,11 @@ Take the `id` from the first result and fetch it:
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has the fixture content with `* Existing task 1` under `## Tasks`.
+**Setup:** Ensure the 4000-01-01 daily note has the fixture content with `* Existing task 1` under `## Tasks`.
 
 **Call:**
 ```json
-{ "action": "complete", "date": "2026-02-15", "taskQuery": "Existing task 1" }
+{ "action": "complete", "date": "4000-01-01", "taskQuery": "Existing task 1" }
 ```
 
 **Verify:** Task is completed successfully using `date` + `taskQuery` without needing to resolve the filename or line number first. The response should include `success: true`.
@@ -581,11 +580,11 @@ Take the `id` from the first result and fetch it:
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has the fixture content with `* Existing task 2` under `## Tasks`.
+**Setup:** Ensure the 4000-01-01 daily note has the fixture content with `* Existing task 2` under `## Tasks`.
 
 **Call:**
 ```json
-{ "action": "complete", "date": "2026-02-15", "taskQuery": "Existing task 2" }
+{ "action": "complete", "date": "4000-01-01", "taskQuery": "Existing task 2" }
 ```
 
 **Verify:** "Existing task 2" is marked as done. No lineIndex or line was needed — the task was found by content text.
@@ -596,11 +595,11 @@ Take the `id` from the first result and fetch it:
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has the fixture content with tasks under `## Tasks`. First call `noteplan_paragraphs(action: "get", date: "2026-02-15")` to discover the actual lineIndex of "Existing task 1".
+**Setup:** Ensure the 4000-01-01 daily note has the fixture content with tasks under `## Tasks`. First call `noteplan_paragraphs(action: "get", date: "4000-01-01")` to discover the actual lineIndex of "Existing task 1".
 
 **Call:**
 ```json
-{ "action": "update", "date": "2026-02-15", "lineIndex": "<lineIndex from get>", "content": "Updated via date param" }
+{ "action": "update", "date": "4000-01-01", "lineIndex": "<lineIndex from get>", "content": "Updated via date param" }
 ```
 
 **Verify:** Task content is updated successfully using `date` instead of `filename`. Note: use the lineIndex from the `get` call — line numbers are absolute and include frontmatter.
@@ -626,14 +625,14 @@ Take the `id` from the first result and fetch it:
 
 **Tool:** `noteplan_manage_note`
 
-**Setup:** Ensure the 2026-02-15 daily note exists.
+**Setup:** Ensure the 4000-01-01 daily note exists.
 
 **Call:**
 ```json
-{ "action": "set_property", "date": "2026-02-15", "key": "test-run", "value": "true" }
+{ "action": "set_property", "date": "4000-01-01", "key": "test-run", "value": "true" }
 ```
 
-**Verify:** Property `test-run: true` is set on the 2026-02-15 daily note. No filename resolution needed.
+**Verify:** Property `test-run: true` is set on the 4000-01-01 daily note. No filename resolution needed.
 
 ---
 
@@ -656,14 +655,14 @@ Take the `id` from the first result and fetch it:
 
 **Tool:** `noteplan_paragraphs`
 
-**Setup:** Ensure the 2026-02-15 daily note has the fixture content.
+**Setup:** Ensure the 4000-01-01 daily note has the fixture content.
 
 **Call:**
 ```json
-{ "action": "get", "date": "2026-02-15" }
+{ "action": "get", "date": "4000-01-01" }
 ```
 
-**Verify:** Returns paragraph data for the 2026-02-15 daily note without needing to resolve the filename first. Each line should include lineIndex, content, and type metadata.
+**Verify:** Returns paragraph data for the 4000-01-01 daily note without needing to resolve the filename first. Each line should include lineIndex, content, and type metadata.
 
 ---
 
@@ -708,7 +707,7 @@ Take the `id` from the first result and fetch it:
 
 **Call:**
 ```json
-{ "action": "get_events", "date": "2026-02-15", "days": 1 }
+{ "action": "get_events", "date": "4000-01-01", "days": 1 }
 ```
 
 **Verify:** Returns events array (may be empty if no events on that date). Response includes `success`, `eventCount`, `totalCount`, and pagination fields.
@@ -723,7 +722,7 @@ Take the `id` from the first result and fetch it:
 
 **Call (create):**
 ```json
-{ "action": "create_event", "title": "MCP Test Event", "startDate": "2026-02-15 10:00", "endDate": "2026-02-15 11:00" }
+{ "action": "create_event", "title": "MCP Test Event", "startDate": "4000-01-01 10:00", "endDate": "4000-01-01 11:00" }
 ```
 
 **Verify create:** Returns `success: true` with an event `id`.
