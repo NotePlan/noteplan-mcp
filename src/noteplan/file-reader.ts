@@ -34,10 +34,6 @@ const POSSIBLE_PATHS = [
   path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan/Documents'),
   // NotePlan Setapp iCloud
   path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan-setapp/Documents'),
-  // Legacy local container paths
-  path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan3/Data/Documents'),
-  path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan/Data/Documents'),
-  path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan-setapp/Data/Documents'),
 ];
 
 // Cached configuration
