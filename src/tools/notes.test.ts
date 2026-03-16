@@ -1,4 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock preferences before importing markdown-parser (which reads UserDefaults at runtime)
+vi.mock('../noteplan/preferences.js', () => ({
+  getTaskMarkerConfigCached: vi.fn(() => ({
+    isAsteriskTodo: true,
+    isDashTodo: false,
+    defaultTodoCharacter: '*',
+    useCheckbox: true,
+    taskPrefix: '* [ ] ',
+  })),
+  getTaskPrefix: vi.fn(() => '* [ ] '),
+}));
+
 import { parseParagraphLine, parseAllParagraphLines, isCodeFenceLine, isTableSeparator, isTableRow } from '../noteplan/markdown-parser.js';
 import type { ParagraphType, TaskStatus } from '../noteplan/types.js';
 import { normalizeFilename } from '../utils/filename-normalize.js';
