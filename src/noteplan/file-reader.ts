@@ -199,6 +199,52 @@ function detectStoragePathViaAppleScript(): string | null {
 }
 
 /**
+ * CloudKit (container) paths — used when isUsingCloudKit is true
+ */
+const CLOUDKIT_PATHS = [
+  path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan3/Data/Library/Application Support/co.noteplan.NotePlan3'),
+  path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan-setapp/Data/Library/Application Support/co.noteplan.NotePlan-setapp'),
+];
+
+/**
+ * iCloud Drive paths — used when isUsingCloudKit is false
+ */
+const ICLOUD_DRIVE_PATHS = [
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~Today/Documents'),
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan3/Documents'),
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan/Documents'),
+  path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan-setapp/Documents'),
+];
+
+/**
+ * Read the sync method from NotePlan's UserDefaults and return the matching storage path.
+ * More reliable than filesystem scoring since it reads the actual user preference.
+ * Returns null if the preference can't be read or no valid path is found.
+ */
+function detectStoragePathViaUserDefaults(): string | null {
+  try {
+    const result = execFileSync('defaults', ['read', 'co.noteplan.NotePlan3', 'isUsingCloudKit'], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 3_000,
+    }).trim();
+
+    const isCloudKit = result === '1';
+    const candidates = isCloudKit ? CLOUDKIT_PATHS : ICLOUD_DRIVE_PATHS;
+
+    for (const candidate of candidates) {
+      if (isValidNotePlanPath(candidate)) {
+        console.error(`[noteplan-mcp] Storage path from UserDefaults (${isCloudKit ? 'CloudKit' : 'iCloud Drive'}): ${candidate}`);
+        return candidate;
+      }
+    }
+  } catch {
+    // Preference not set or defaults command failed — fall through
+  }
+  return null;
+}
+
+/**
  * Detect and cache NotePlan configuration
  */
 function detectConfig(): NotePlanConfig {
@@ -207,7 +253,12 @@ function detectConfig(): NotePlanConfig {
   // First, ask the running app directly
   let bestPath: string | null = detectStoragePathViaAppleScript();
 
-  // Fall back to filesystem scoring
+  // Try UserDefaults to determine sync method before falling back to filesystem scoring
+  if (!bestPath) {
+    bestPath = detectStoragePathViaUserDefaults();
+  }
+
+  // Last resort: filesystem scoring (least reliable — can pick wrong folder)
   if (!bestPath) {
     let bestScore = -1;
 
