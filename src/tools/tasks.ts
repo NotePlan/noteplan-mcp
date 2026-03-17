@@ -13,6 +13,7 @@ import {
 
 import { TaskStatus, NoteType } from '../noteplan/types.js';
 import { resolveWritableNoteReference, getWritableIdentifier } from './notes.js';
+import { parseFlexibleDate } from '../utils/date-utils.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -814,6 +815,222 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to update task',
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Recurring task deletion
+// ---------------------------------------------------------------------------
+
+/**
+ * Regex matching `@repeat(...)` tags — mirrors Swift DataStore.tag stripping.
+ * Captures the full `@repeat(X/Y)` including optional whitespace before it.
+ */
+const REPEAT_TAG_REGEX = /\s*@repeat\([^)]*\)/g;
+
+/**
+ * Strip all `@repeat(...)` tags from a line, then trim.
+ * This produces the "base content" used for equality comparison,
+ * mirroring Swift's `line.replace(regex: tag, with: "")`.
+ */
+export function stripRepeatTags(line: string): string {
+  return line.replace(REPEAT_TAG_REGEX, '').trim();
+}
+
+/**
+ * Check whether a line contains a `@repeat(...)` tag.
+ */
+export function hasRepeatTag(line: string): boolean {
+  return /@repeat\([^)]*\)/.test(line);
+}
+
+export const deleteRecurringTaskSchema = z.object({
+  id: z.string().optional().describe('Note ID (preferred for space notes)'),
+  filename: z.string().optional().describe('Filename/path of the note'),
+  title: z.string().optional().describe('Note title to search for'),
+  date: z.string().optional().describe('Date for calendar notes (YYYYMMDD, YYYY-MM-DD, today, tomorrow, yesterday)'),
+  query: z.string().optional().describe('Fuzzy note query'),
+  lineIndex: z.number().optional().describe('Line index of the task (0-based)'),
+  line: z.number().optional().describe('Line number of the task (1-based)'),
+  taskQuery: z.string().optional().describe('Find task by content text instead of line number'),
+  space: z.string().optional().describe('Space name or ID to search in'),
+  deleteSource: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Also delete the task from the source note (default: true)'),
+}).superRefine((input, ctx) => {
+  if (!input.id && !input.filename && !input.title && !input.date && !input.query) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide one note reference: id, filename, title, date, or query',
+      path: ['filename'],
+    });
+  }
+  if (input.lineIndex === undefined && input.line === undefined && !input.taskQuery) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Provide lineIndex (0-based), line (1-based), or taskQuery to find the task',
+      path: ['lineIndex'],
+    });
+  }
+});
+
+/**
+ * Delete a recurring task and all its future occurrences in calendar notes.
+ *
+ * Mirrors the Swift logic in CalendarHelper.deleteRepeatedTodos:
+ * 1. Find the task line in the source note
+ * 2. Verify it has an `@repeat(...)` tag
+ * 3. Strip the repeat tag to get the base content
+ * 4. Find all future calendar notes containing the same base content
+ * 5. Delete those matching lines from future notes
+ * 6. Optionally delete the line from the source note
+ */
+export function deleteRecurringTask(params: z.infer<typeof deleteRecurringTaskSchema>) {
+  try {
+    // Resolve the source note
+    const noteRef = resolveWritableNoteReference({
+      id: params.id,
+      filename: params.filename,
+      title: params.title,
+      date: params.date,
+      query: params.query,
+      space: params.space,
+    });
+
+    if (!noteRef.note) {
+      return {
+        success: false,
+        error: noteRef.error || 'Note not found',
+        candidates: noteRef.candidates,
+      };
+    }
+    const note = noteRef.note;
+
+    // Find the task line
+    let lineIndex: number;
+    if (params.taskQuery) {
+      const tasks = parseTasks(note.content);
+      const queryLower = params.taskQuery.toLowerCase();
+      const match = tasks.find((t) => t.content.toLowerCase().includes(queryLower));
+      if (!match) {
+        return {
+          success: false,
+          error: `No task matching "${params.taskQuery}" found in note`,
+        };
+      }
+      lineIndex = match.lineIndex;
+    } else {
+      const resolved = resolveTaskLineIndex({
+        lineIndex: params.lineIndex,
+        line: params.line,
+      });
+      if (!resolved.ok) {
+        return { success: false, error: resolved.error };
+      }
+      lineIndex = resolved.lineIndex;
+    }
+
+    const lines = note.content.split('\n');
+    if (lineIndex < 0 || lineIndex >= lines.length) {
+      return { success: false, error: `Line index ${lineIndex} is out of range (0-${lines.length - 1})` };
+    }
+    const taskLine = lines[lineIndex];
+
+    // Check for @repeat tag
+    if (!hasRepeatTag(taskLine)) {
+      return {
+        success: false,
+        error: 'Task does not contain an @repeat tag — not a recurring task',
+        line: taskLine,
+      };
+    }
+
+    // Strip @repeat(...) to get the base content for comparison
+    const baseContent = stripRepeatTags(taskLine);
+
+    // Determine the source date so we only delete from future notes
+    let sourceDateStr: string | undefined;
+    if (note.type === 'calendar' && note.date) {
+      sourceDateStr = note.date.replace(/-/g, '');
+    } else if (params.date) {
+      sourceDateStr = parseFlexibleDate(params.date);
+    }
+
+    // Scan all calendar notes for matching lines
+    const allNotes = store.listNotes({ space: params.space, type: 'calendar' });
+    let deletedCount = 0;
+    const affectedNotes: string[] = [];
+
+    for (const calNote of allNotes) {
+      // Only process daily calendar notes (8-digit date filenames)
+      const dateMatch = calNote.filename.match(/(\d{8})/);
+      if (!dateMatch) continue;
+      const noteDateStr = dateMatch[1];
+
+      // Skip notes on or before the source date (only delete future)
+      if (sourceDateStr && noteDateStr <= sourceDateStr) continue;
+
+      // Skip the source note itself
+      if (calNote.filename === note.filename) continue;
+
+      const calLines = calNote.content.split('\n');
+      const filteredLines: string[] = [];
+      let foundMatch = false;
+
+      for (const calLine of calLines) {
+        const strippedLine = stripRepeatTags(calLine);
+        if (strippedLine === baseContent && hasRepeatTag(calLine)) {
+          foundMatch = true;
+          deletedCount++;
+        } else {
+          filteredLines.push(calLine);
+        }
+      }
+
+      if (foundMatch) {
+        const newContent = filteredLines.join('\n');
+        const writeId = calNote.source === 'space' ? (calNote.id || calNote.filename) : calNote.filename;
+        store.updateNote(writeId, newContent, { source: calNote.source });
+        affectedNotes.push(calNote.filename);
+
+        // If the note is now empty (or whitespace-only), trash it
+        if (newContent.trim() === '') {
+          try {
+            store.deleteNote(writeId);
+          } catch {
+            // Ignore errors from deleting empty notes
+          }
+        }
+      }
+    }
+
+    // Optionally delete from the source note
+    let sourceDeleted = false;
+    if (params.deleteSource !== false) {
+      lines.splice(lineIndex, 1);
+      const newSourceContent = lines.join('\n');
+      const writable = getWritableIdentifier(note);
+      store.updateNote(writable.identifier, newSourceContent, { source: writable.source });
+      sourceDeleted = true;
+    }
+
+    return {
+      success: true,
+      message: `Deleted recurring task and ${deletedCount} future occurrence(s) across ${affectedNotes.length} note(s)`,
+      taskLine,
+      baseContent,
+      sourceDeleted,
+      deletedFutureCount: deletedCount,
+      affectedNotes: affectedNotes.slice(0, 50),
+      affectedNotesTruncated: affectedNotes.length > 50,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete recurring task',
     };
   }
 }

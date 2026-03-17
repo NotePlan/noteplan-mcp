@@ -2138,6 +2138,15 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
         ? buildAttachmentWarningMessage(removedAttachmentReferences.length)
         : undefined;
 
+    // Detect @repeat tags in lines being deleted — warn about recurring tasks
+    const repeatLineNumbers: number[] = [];
+    for (let i = previewStartIndex; i < previewEndIndexExclusive && i < allLines.length; i++) {
+      if (/@repeat\([^)]*\)/.test(allLines[i])) {
+        repeatLineNumbers.push(i + 1); // 1-indexed
+      }
+    }
+    const hasRecurringTasks = repeatLineNumbers.length > 0;
+
     const confirmTarget = `${note.filename}:${boundedStartLine}-${boundedEndLine}`;
     if (isTrueBool(params.dryRun)) {
       const token = issueConfirmationToken({
@@ -2145,6 +2154,16 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
         target: confirmTarget,
         action: 'delete_lines',
       });
+      const warnings: string[] = [];
+      if (attachmentWarning) warnings.push(attachmentWarning);
+      if (hasRecurringTasks) {
+        warnings.push(
+          `Lines ${repeatLineNumbers.join(', ')} contain @repeat tags (recurring tasks). ` +
+          `ASK THE USER before proceeding: ` +
+          `(1) Delete only this occurrence — confirm this delete_lines operation. ` +
+          `(2) Delete this and all future occurrences — use noteplan_paragraphs(action: "delete_recurring") instead.`
+        );
+      }
       return {
         success: true,
         dryRun: true,
@@ -2154,7 +2173,9 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
         previewTruncated: lineCountToDelete > deletedLinesPreview.length,
         removedAttachmentReferences: removedAttachmentReferences.slice(0, 20),
         removedAttachmentReferencesTruncated: removedAttachmentReferences.length > 20,
-        warnings: attachmentWarning ? [attachmentWarning] : undefined,
+        hasRecurringTasks,
+        recurringTaskLines: hasRecurringTasks ? repeatLineNumbers : undefined,
+        warnings: warnings.length > 0 ? warnings : undefined,
         ...token,
       };
     }

@@ -971,6 +971,7 @@ export function createServer(): Server {
         '- Add tasks via `noteplan_paragraphs(action: add)` — the server auto-formats the task marker to match the user\'s NotePlan settings. Never write raw markers like `- [ ]` or `* [ ]`; just pass the task text.',
         '- Find tasks: `noteplan_paragraphs(action: search)` in one note, or `search_global` across all notes',
         '- Complete/update: `noteplan_paragraphs(action: complete/update)`',
+        '- Delete recurring: `noteplan_paragraphs(action: delete_recurring)` — deletes a task with @repeat tag and all its future occurrences in calendar notes',
         '- Use `heading` parameter to target a specific section (e.g., heading: "Tasks")',
         '',
         '## Destructive Operations',
@@ -1401,8 +1402,8 @@ export function createServer(): Server {
             properties: {
               action: {
                 type: 'string',
-                enum: ['get', 'search', 'search_global', 'add', 'complete', 'update', 'list_actions'],
-                description: 'Action: get | search | search_global | add | complete | update | list_actions (discover all actions)',
+                enum: ['get', 'search', 'search_global', 'add', 'complete', 'update', 'delete_recurring', 'list_actions'],
+                description: 'Action: get | search | search_global | add | complete | update | delete_recurring | list_actions (discover all actions)',
               },
               id: {
                 type: 'string',
@@ -1539,6 +1540,10 @@ export function createServer(): Server {
               cursor: {
                 type: 'string',
                 description: 'Cursor from previous page',
+              },
+              deleteSource: {
+                type: 'boolean',
+                description: 'Also delete the task from the source note (default: true) — used by delete_recurring',
               },
             },
             required: ['action'],
@@ -2470,6 +2475,7 @@ export function createServer(): Server {
       { action: 'add', description: 'Add a task (requires target + content)' },
       { action: 'complete', description: 'Mark task done (requires filename + lineIndex or line)' },
       { action: 'update', description: 'Update task content/status (requires filename + lineIndex or line)' },
+      { action: 'delete_recurring', description: 'Delete a recurring task and all future occurrences in calendar notes (requires note ref + lineIndex/line/taskQuery). Detects @repeat(X/Y) tag, strips it for comparison, and removes matching lines from all future daily notes' },
     ],
     noteplan_folders: [
       { action: 'list', description: 'List folders with optional filtering' },
@@ -2654,6 +2660,7 @@ export function createServer(): Server {
             case 'add': result = taskTools.addTaskToNote(a); break;
             case 'complete': result = taskTools.completeTask(a); break;
             case 'update': result = taskTools.updateTask(a); break;
+            case 'delete_recurring': result = taskTools.deleteRecurringTask(a); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
