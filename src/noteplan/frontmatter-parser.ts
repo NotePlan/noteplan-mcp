@@ -38,6 +38,39 @@ export function getFrontmatterLineCount(content: string): number {
 }
 
 /**
+ * Find the closing --- delimiter index for frontmatter.
+ * Returns the line index of the closing ---, or -1 if not found.
+ *
+ * Lenient scanning: allows blank lines, indented lines (YAML arrays/nested
+ * values), comment lines (starting with #), and key:value pairs between
+ * delimiters.  Stops on lines that don't look like YAML (e.g. markdown
+ * list items with * at column 0, plain text paragraphs) — this prevents
+ * a thematic break --- later in the note body from being mistaken for a
+ * frontmatter closer.
+ */
+function findClosingDelimiterIndex(lines: string[]): number {
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i]?.trim() === '---') {
+      return i;
+    }
+    const line = lines[i] ?? '';
+    const trimmed = line.trim();
+    // Allow valid YAML constructs between delimiters:
+    if (
+      trimmed === '' ||           // blank lines
+      /^\s/.test(line) ||         // indented lines (arrays, nested values)
+      trimmed.startsWith('#') ||  // YAML comments
+      /^\S+:\s*/.test(line)       // key: value pairs (including bare key:)
+    ) {
+      continue;
+    }
+    // Unrecognized line — not YAML, stop scanning
+    break;
+  }
+  return -1;
+}
+
+/**
  * Parse a note's content into frontmatter and body
  */
 export function parseNoteContent(content: string): ParsedNote {
@@ -52,25 +85,7 @@ export function parseNoteContent(content: string): ParsedNote {
     };
   }
 
-  // Find closing delimiter.
-  // Each line between the opening and closing --- must be a valid YAML
-  // key-value pair (matching `key: value`).  If we hit a blank line or
-  // any non-YAML content before finding the closing ---, the frontmatter
-  // is considered unclosed/invalid.  This prevents a thematic break ---
-  // later in the note body from being mistaken for a frontmatter closer.
-  let closingIndex = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i]?.trim() === '---') {
-      closingIndex = i;
-      break;
-    }
-    const line = lines[i] ?? '';
-    if (line.trim() === '' || !/^\S+:\s*(.*)$/.test(line)) {
-      // Not a YAML key-value line — stop scanning
-      break;
-    }
-  }
-
+  const closingIndex = findClosingDelimiterIndex(lines);
   if (closingIndex === -1) {
     // No closing delimiter found, treat as no frontmatter
     return {
@@ -80,7 +95,9 @@ export function parseNoteContent(content: string): ParsedNote {
     };
   }
 
-  // Parse frontmatter
+  // Parse key:value pairs from frontmatter (non-kv lines like indented
+  // array items or comments are skipped — they are preserved by the
+  // text-level set/remove functions but not represented in this Record)
   const frontmatterLines = lines.slice(1, closingIndex);
   const frontmatter: Record<string, string> = {};
 
@@ -125,35 +142,99 @@ export function reconstructNote(parsed: ParsedNote): string {
 }
 
 /**
- * Set a frontmatter property, creating frontmatter if needed
+ * Set a frontmatter property, creating frontmatter if needed.
+ * Uses text-level manipulation to preserve YAML arrays, comments,
+ * and other constructs that the simple key:value parser doesn't model.
  */
 export function setFrontmatterProperty(content: string, key: string, value: string): string {
-  const parsed = parseNoteContent(content);
+  const lines = content.split('\n');
 
-  if (!parsed.frontmatter) {
-    // Create new frontmatter
-    parsed.frontmatter = {};
+  if (lines[0]?.trim() !== '---') {
+    // No frontmatter — prepend a new block
+    return `---\n${key}: ${value}\n---\n${content}`;
   }
 
-  parsed.frontmatter[key] = value;
+  const closingIndex = findClosingDelimiterIndex(lines);
+  if (closingIndex === -1) {
+    // Unclosed/invalid frontmatter — prepend a new block
+    return `---\n${key}: ${value}\n---\n${content}`;
+  }
 
-  return reconstructNote(parsed);
+  // Find existing key line within frontmatter
+  const prefix = key + ':';
+  let keyLineIndex = -1;
+  for (let i = 1; i < closingIndex; i++) {
+    const line = lines[i];
+    if (line === prefix || line.startsWith(prefix + ' ') || line.startsWith(prefix + '\t')) {
+      keyLineIndex = i;
+      break;
+    }
+  }
+
+  if (keyLineIndex !== -1) {
+    // Replace existing key line and remove any indented continuation lines
+    // (e.g. YAML array items belonging to this key)
+    let endIndex = keyLineIndex + 1;
+    while (endIndex < closingIndex && /^\s/.test(lines[endIndex])) {
+      endIndex++;
+    }
+    lines.splice(keyLineIndex, endIndex - keyLineIndex, `${key}: ${value}`);
+  } else {
+    // Add new key before closing ---
+    lines.splice(closingIndex, 0, `${key}: ${value}`);
+  }
+
+  return lines.join('\n');
 }
 
 /**
- * Remove a frontmatter property
+ * Remove a frontmatter property.
+ * Uses text-level manipulation to preserve other YAML constructs.
  */
 export function removeFrontmatterProperty(content: string, key: string): string {
-  const parsed = parseNoteContent(content);
+  const lines = content.split('\n');
 
-  if (!parsed.frontmatter) {
-    // No frontmatter, nothing to remove
+  if (lines[0]?.trim() !== '---') {
     return content;
   }
 
-  delete parsed.frontmatter[key];
+  const closingIndex = findClosingDelimiterIndex(lines);
+  if (closingIndex === -1) {
+    return content;
+  }
 
-  return reconstructNote(parsed);
+  // Find the key line
+  const prefix = key + ':';
+  let keyLineIndex = -1;
+  for (let i = 1; i < closingIndex; i++) {
+    const line = lines[i];
+    if (line === prefix || line.startsWith(prefix + ' ') || line.startsWith(prefix + '\t')) {
+      keyLineIndex = i;
+      break;
+    }
+  }
+
+  if (keyLineIndex === -1) {
+    return content; // Key not found
+  }
+
+  // Remove the key line and any indented continuation lines
+  let endIndex = keyLineIndex + 1;
+  while (endIndex < closingIndex && /^\s/.test(lines[endIndex])) {
+    endIndex++;
+  }
+  lines.splice(keyLineIndex, endIndex - keyLineIndex);
+
+  // Check if frontmatter is now empty (only --- delimiters remain)
+  const newClosingIndex = closingIndex - (endIndex - keyLineIndex);
+  const hasRemainingKeys = lines.slice(1, newClosingIndex).some(l => /^\S+:\s*/.test(l));
+
+  if (!hasRemainingKeys) {
+    // Remove entire frontmatter block (opening ---, content, closing ---)
+    lines.splice(0, newClosingIndex + 1);
+  }
+
+  return lines.join('\n');
 }
 
 /**

@@ -272,6 +272,16 @@ describe('reconstructNote', () => {
 // setFrontmatterProperty
 // ---------------------------------------------------------------------------
 describe('setFrontmatterProperty', () => {
+  /**
+   * Helper: count how many times '---' appears as its own line in the output.
+   * A valid note should have exactly 0 (no frontmatter) or 2 (opening + closing).
+   */
+  function countDelimiters(content: string): number {
+    return content.split('\n').filter(l => l.trim() === '---').length;
+  }
+
+  // ── Basic operations ──
+
   it('sets property on note with existing frontmatter', () => {
     const content = '---\ntitle: Existing\n---\nBody';
     const result = setFrontmatterProperty(content, 'tags', 'work');
@@ -311,12 +321,223 @@ describe('setFrontmatterProperty', () => {
     const parsed = parseNoteContent(result);
     expect(parsed.body).toBe('Line 1\nLine 2');
   });
+
+  // ── Bug report: duplicate frontmatter blocks ──
+  // When updating an existing key, the output must have exactly one
+  // frontmatter block (2 delimiters), not a new block prepended.
+
+  it('does not create duplicate frontmatter when updating a key with empty value', () => {
+    const content = '---\nmy-key: \nanother-key: some-value\n---\nBody text';
+    const result = setFrontmatterProperty(content, 'my-key', 'my-new-value');
+    expect(countDelimiters(result)).toBe(2);
+    expect(result).toBe('---\nmy-key: my-new-value\nanother-key: some-value\n---\nBody text');
+  });
+
+  it('does not create duplicate frontmatter when updating a key with existing value', () => {
+    const content = '---\nmy-key: old-value\nanother-key: some-value\n---\nBody text';
+    const result = setFrontmatterProperty(content, 'my-key', 'new-value');
+    expect(countDelimiters(result)).toBe(2);
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!['my-key']).toBe('new-value');
+    expect(parsed.frontmatter!['another-key']).toBe('some-value');
+  });
+
+  it('does not create duplicate frontmatter when adding a new key to existing block', () => {
+    const content = '---\nexisting: value\n---\nBody';
+    const result = setFrontmatterProperty(content, 'new-key', 'new-value');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
+  // ── Raw string output validation ──
+  // These tests check the exact string, not just parsed values, to catch
+  // issues like duplicate --- blocks that the parser might silently accept.
+
+  it('produces clean output when creating frontmatter from scratch', () => {
+    const content = 'Just a body';
+    const result = setFrontmatterProperty(content, 'title', 'Hello');
+    expect(result).toBe('---\ntitle: Hello\n---\nJust a body');
+  });
+
+  it('produces clean output when overwriting a value', () => {
+    const content = '---\ntitle: Old\n---\nBody';
+    const result = setFrontmatterProperty(content, 'title', 'New');
+    expect(result).toBe('---\ntitle: New\n---\nBody');
+  });
+
+  // ── Edge cases: key with no value / bare colon ──
+
+  it('handles key with no space after colon (bare colon)', () => {
+    const content = '---\nmy-key:\nanother-key: value\n---\nBody';
+    const result = setFrontmatterProperty(content, 'my-key', 'filled');
+    expect(countDelimiters(result)).toBe(2);
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!['my-key']).toBe('filled');
+    expect(parsed.frontmatter!['another-key']).toBe('value');
+  });
+
+  it('handles key with only whitespace after colon', () => {
+    const content = '---\nmy-key:   \nanother-key: value\n---\nBody';
+    const result = setFrontmatterProperty(content, 'my-key', 'filled');
+    expect(countDelimiters(result)).toBe(2);
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!['my-key']).toBe('filled');
+  });
+
+  // ── Edge cases: values containing special characters ──
+
+  it('handles value containing a colon', () => {
+    const content = '---\ntitle: My Note\n---\nBody';
+    const result = setFrontmatterProperty(content, 'url', 'https://example.com');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.url).toBe('https://example.com');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
+  it('handles value containing triple dashes (not a delimiter)', () => {
+    const content = '---\ntitle: My Note\n---\nBody';
+    const result = setFrontmatterProperty(content, 'separator', '---');
+    expect(countDelimiters(result)).toBe(2);
+    // The value should be retrievable even though it looks like a delimiter
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.separator).toBe('---');
+  });
+
+  // ── Edge cases: hyphenated keys (common in NotePlan) ──
+
+  it('handles hyphenated keys like bg-color', () => {
+    const content = '---\nbg-color: amber-50\n---\n# Daily Note';
+    const result = setFrontmatterProperty(content, 'bg-color', 'blue-100');
+    expect(countDelimiters(result)).toBe(2);
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!['bg-color']).toBe('blue-100');
+    expect(parsed.body).toBe('# Daily Note');
+  });
+
+  it('handles bg-pattern and bg-color together', () => {
+    const content = '---\nbg-color: amber-50\nbg-pattern: dotted\n---\n# Note';
+    const result = setFrontmatterProperty(content, 'bg-pattern', 'striped');
+    expect(countDelimiters(result)).toBe(2);
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!['bg-color']).toBe('amber-50');
+    expect(parsed.frontmatter!['bg-pattern']).toBe('striped');
+  });
+
+  // ── Edge cases: body content that looks like frontmatter ──
+
+  it('does not get confused by --- thematic break in body', () => {
+    const content = '---\ntitle: Note\n---\nSome text\n\n---\n\nMore text';
+    const result = setFrontmatterProperty(content, 'title', 'Updated');
+    // Should only have 2 delimiters in the frontmatter, the body --- is content
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBe('Updated');
+    expect(parsed.body).toContain('---');
+    expect(parsed.body).toContain('More text');
+  });
+
+  // ── Edge cases: empty / minimal notes ──
+
+  it('handles empty note content', () => {
+    const result = setFrontmatterProperty('', 'title', 'New');
+    const parsed = parseNoteContent(result);
+    expect(parsed.hasFrontmatter).toBe(true);
+    expect(parsed.frontmatter!.title).toBe('New');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
+  it('handles note with only frontmatter and no body', () => {
+    const content = '---\ntitle: Only FM\n---';
+    const result = setFrontmatterProperty(content, 'tags', 'test');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBe('Only FM');
+    expect(parsed.frontmatter!.tags).toBe('test');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
+  it('handles note with empty frontmatter block', () => {
+    const content = '---\n---\nBody';
+    const result = setFrontmatterProperty(content, 'title', 'Added');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBe('Added');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
+  // ── Chained set_property calls (agentic workflow) ──
+
+  it('survives multiple chained setFrontmatterProperty calls', () => {
+    let content = '---\ntitle: Start\n---\nBody';
+    content = setFrontmatterProperty(content, 'tags', 'work');
+    content = setFrontmatterProperty(content, 'status', 'draft');
+    content = setFrontmatterProperty(content, 'title', 'Updated');
+    content = setFrontmatterProperty(content, 'priority', 'high');
+
+    expect(countDelimiters(content)).toBe(2);
+    const parsed = parseNoteContent(content);
+    expect(parsed.frontmatter!.title).toBe('Updated');
+    expect(parsed.frontmatter!.tags).toBe('work');
+    expect(parsed.frontmatter!.status).toBe('draft');
+    expect(parsed.frontmatter!.priority).toBe('high');
+    expect(parsed.body).toBe('Body');
+  });
+
+  it('survives chained calls starting from no frontmatter', () => {
+    let content = 'Plain note';
+    content = setFrontmatterProperty(content, 'title', 'First');
+    content = setFrontmatterProperty(content, 'tags', 'second');
+    content = setFrontmatterProperty(content, 'title', 'Overwritten');
+
+    expect(countDelimiters(content)).toBe(2);
+    const parsed = parseNoteContent(content);
+    expect(parsed.frontmatter!.title).toBe('Overwritten');
+    expect(parsed.frontmatter!.tags).toBe('second');
+    expect(parsed.body).toBe('Plain note');
+  });
+
+  // ── Edge cases: multiline / non-standard YAML ──
+
+  it('handles frontmatter with indented list values (YAML arrays)', () => {
+    const content = '---\ntitle: Note\ntags:\n  - work\n  - urgent\n---\nBody';
+    const result = setFrontmatterProperty(content, 'status', 'active');
+    // Should not produce duplicate frontmatter blocks
+    const delimCount = countDelimiters(result);
+    expect(delimCount).toBe(2);
+  });
+
+  it('handles frontmatter with quoted values', () => {
+    const content = '---\ntitle: "My: Special Note"\n---\nBody';
+    const result = setFrontmatterProperty(content, 'title', 'Updated');
+    expect(countDelimiters(result)).toBe(2);
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!.title).toBe('Updated');
+  });
+
+  it('handles frontmatter with blank line between properties', () => {
+    // Some editors insert blank lines in frontmatter — this is technically
+    // invalid YAML but users may have it in their notes.
+    const content = '---\ntitle: Note\n\ntags: work\n---\nBody';
+    const result = setFrontmatterProperty(content, 'title', 'Updated');
+    // Should not produce duplicate frontmatter — either update in-place
+    // or create new frontmatter, but never two blocks
+    const delimCount = countDelimiters(result);
+    expect(delimCount === 0 || delimCount === 2).toBe(true);
+  });
+
+  it('handles frontmatter with comment-like lines', () => {
+    // YAML supports # comments, some users may use them
+    const content = '---\ntitle: Note\n# this is a comment\ntags: work\n---\nBody';
+    const result = setFrontmatterProperty(content, 'title', 'Updated');
+    const delimCount = countDelimiters(result);
+    expect(delimCount === 0 || delimCount === 2).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
 // removeFrontmatterProperty
 // ---------------------------------------------------------------------------
 describe('removeFrontmatterProperty', () => {
+  function countDelimiters(content: string): number {
+    return content.split('\n').filter(l => l.trim() === '---').length;
+  }
+
   it('removes existing property', () => {
     const content = '---\ntitle: Remove Me\ntags: keep\n---\nBody';
     const result = removeFrontmatterProperty(content, 'title');
@@ -345,6 +566,40 @@ describe('removeFrontmatterProperty', () => {
     expect(parsed.frontmatter!.a).toBe('1');
     expect(parsed.frontmatter!.b).toBeUndefined();
     expect(parsed.frontmatter!.c).toBe('3');
+  });
+
+  it('does not produce duplicate frontmatter blocks', () => {
+    const content = '---\ntitle: Keep\nremove-me: gone\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'remove-me');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
+  it('removes frontmatter entirely when last property is removed', () => {
+    const content = '---\nonly-key: value\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'only-key');
+    // Should have no frontmatter block, just the body
+    expect(result).toBe('Body');
+    expect(countDelimiters(result)).toBe(0);
+  });
+
+  it('removes property with empty value', () => {
+    const content = '---\nempty-key: \nother: keep\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'empty-key');
+    const parsed = parseNoteContent(result);
+    expect(parsed.frontmatter!['empty-key']).toBeUndefined();
+    expect(parsed.frontmatter!.other).toBe('keep');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
+  it('handles chained remove calls', () => {
+    let content = '---\na: 1\nb: 2\nc: 3\n---\nBody';
+    content = removeFrontmatterProperty(content, 'a');
+    content = removeFrontmatterProperty(content, 'c');
+    const parsed = parseNoteContent(content);
+    expect(parsed.frontmatter!.b).toBe('2');
+    expect(parsed.frontmatter!.a).toBeUndefined();
+    expect(parsed.frontmatter!.c).toBeUndefined();
+    expect(content.split('\n').filter(l => l.trim() === '---').length).toBe(2);
   });
 });
 
