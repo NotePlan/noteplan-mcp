@@ -269,3 +269,54 @@ describe('validateAndConsumeConfirmationToken', () => {
     expect(retry).toEqual({ ok: false, reason: 'invalid' });
   });
 });
+
+// ── NOTEPLAN_SKIP_DRY_RUN tests ──────────────────────────────────────
+
+describe('validateAndConsumeConfirmationToken with NOTEPLAN_SKIP_DRY_RUN', () => {
+  afterEach(() => {
+    delete process.env.NOTEPLAN_SKIP_DRY_RUN;
+  });
+
+  it('auto-approves when no token is provided and skip-dry-run is enabled', () => {
+    process.env.NOTEPLAN_SKIP_DRY_RUN = 'true';
+    const result = validateAndConsumeConfirmationToken(undefined, ctx());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('auto-approves when empty string token is provided and skip-dry-run is enabled', () => {
+    process.env.NOTEPLAN_SKIP_DRY_RUN = 'true';
+    const result = validateAndConsumeConfirmationToken('', ctx());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('auto-approves for whitespace-only token when skip-dry-run is enabled', () => {
+    process.env.NOTEPLAN_SKIP_DRY_RUN = 'true';
+    const result = validateAndConsumeConfirmationToken('   ', ctx());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('still validates a real token if one is explicitly provided', () => {
+    process.env.NOTEPLAN_SKIP_DRY_RUN = 'true';
+    const { confirmationToken } = issueConfirmationToken(ctx());
+    const result = validateAndConsumeConfirmationToken(confirmationToken, ctx());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('still rejects an invalid token if one is explicitly provided', () => {
+    process.env.NOTEPLAN_SKIP_DRY_RUN = 'true';
+    const result = validateAndConsumeConfirmationToken('bogus-token', ctx());
+    expect(result).toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  it('does NOT auto-approve when skip-dry-run is disabled', () => {
+    process.env.NOTEPLAN_SKIP_DRY_RUN = 'false';
+    const result = validateAndConsumeConfirmationToken(undefined, ctx());
+    expect(result).toEqual({ ok: false, reason: 'missing' });
+  });
+
+  it('accepts NOTEPLAN_SKIP_DRY_RUN=1 as truthy', () => {
+    process.env.NOTEPLAN_SKIP_DRY_RUN = '1';
+    const result = validateAndConsumeConfirmationToken(undefined, ctx());
+    expect(result).toEqual({ ok: true });
+  });
+});
