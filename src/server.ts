@@ -31,6 +31,7 @@ import * as templateTools from './tools/templates.js';
 import * as attachmentTools from './tools/attachments.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
 import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES, MIN_BUILD_CREATE_BACKUP } from './utils/version.js';
+import { isReadOnly, isSkipDryRun } from './utils/server-config.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
 import { getDatabase, getDatabasePath, listSpaces as listSpacesFromDb } from './noteplan/sqlite-reader.js';
 
@@ -1027,6 +1028,16 @@ export function createServer(): Server {
     console.error(`[noteplan-mcp] Spaces discovered: ${spaces.length}`);
   } else {
     console.error('[noteplan-mcp] Space database: not found');
+  }
+
+  // Log environment configuration
+  const readOnly = isReadOnly();
+  const skipDryRun = isSkipDryRun();
+  if (readOnly) {
+    console.error('[noteplan-mcp] Read-only mode: ENABLED (all write actions will be rejected)');
+  }
+  if (skipDryRun) {
+    console.error('[noteplan-mcp] Skip dry-run: ENABLED (confirmation tokens not required)');
   }
 
   const toolDefinitions: ToolDefinition[] = [
@@ -2378,6 +2389,41 @@ export function createServer(): Server {
   const registeredToolNameSet = new Set(registeredToolNames);
   const compactToolDefinitions = annotatedToolDefinitions.map((tool) => compactToolDefinition(tool));
 
+  // ── Write actions map for read-only mode guard and description hints ──
+  const WRITE_ACTIONS_MAP: Record<string, Set<string>> = {
+    noteplan_manage_note: new Set(['create', 'update', 'delete', 'move', 'restore', 'rename', 'set_property', 'remove_property']),
+    noteplan_edit_content: new Set(['insert', 'append', 'delete_lines', 'edit_line', 'replace_lines']),
+    noteplan_paragraphs: new Set(['add', 'complete', 'update', 'delete_recurring']),
+    noteplan_folders: new Set(['create', 'move', 'rename', 'delete']),
+    noteplan_eventkit: new Set(['create_event', 'update_event', 'delete_event', 'create', 'complete', 'update', 'delete']),
+    noteplan_memory: new Set(['save', 'update', 'delete']),
+    noteplan_filters: new Set(['save', 'rename']),
+    noteplan_ui: new Set(['run_plugin', 'backup']),
+    noteplan_plugins: new Set(['create', 'delete', 'install', 'update_html', 'update_json', 'screenshot']),
+    noteplan_themes: new Set(['save', 'set_active']),
+    noteplan_embeddings: new Set(['sync', 'reset']),
+    noteplan_attachments: new Set(['add', 'move']),
+  };
+
+  // Append mode hints to tool descriptions so the LLM knows about active config.
+  // Only add hints to tools that actually have write actions.
+  if (skipDryRun || readOnly) {
+    const writeCapableTools = new Set(Object.keys(WRITE_ACTIONS_MAP));
+    for (const tool of compactToolDefinitions) {
+      if (!writeCapableTools.has(tool.name)) continue;
+      const hints: string[] = [];
+      if (skipDryRun) {
+        hints.push('NOTEPLAN_SKIP_DRY_RUN is enabled: skip dryRun, call write actions directly without confirmationToken.');
+      }
+      if (readOnly) {
+        hints.push('NOTEPLAN_READ_ONLY is enabled: write actions are disabled and will be rejected.');
+      }
+      if (hints.length > 0) {
+        (tool as any).description += '\n\n' + hints.join(' ');
+      }
+    }
+  }
+
   // Register tool listing handler — all 12 tools returned directly (no pagination needed)
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools: compactToolDefinitions };
@@ -2581,6 +2627,22 @@ export function createServer(): Server {
         result = { success: true, tool: normalizedName, actions: TOOL_ACTIONS[normalizedName] };
         const resultWithDuration = withDuration(result, Date.now() - startTime, includeTiming);
         return { content: [{ type: 'text', text: JSON.stringify(resultWithDuration, null, 2) }] };
+      }
+
+      // ── Read-only mode: reject write actions ──
+      if (readOnly) {
+        const action = (args as any)?.action;
+        const writeSet = WRITE_ACTIONS_MAP[normalizedName];
+        if (writeSet && action && writeSet.has(action)) {
+          const errorResult = { success: false, error: `Read-only mode is enabled (NOTEPLAN_READ_ONLY=true). Write action "${action}" on ${normalizedName} is not allowed.`, code: 'ERR_READ_ONLY' };
+          const hasOutputSchema = !!toolDefinitions.find(t => t.name === normalizedName)?.outputSchema;
+          const resultWithDuration = withDuration(errorResult, Date.now() - startTime, includeTiming);
+          return {
+            content: [{ type: 'text', text: JSON.stringify(resultWithDuration, null, 2) }],
+            ...(hasOutputSchema ? { structuredContent: resultWithDuration } : {}),
+            isError: true,
+          };
+        }
       }
 
       switch (normalizedName) {

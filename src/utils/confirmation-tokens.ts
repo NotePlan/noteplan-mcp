@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { isSkipDryRun } from './server-config.js';
 
 const DEFAULT_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 
@@ -61,6 +62,12 @@ export function validateAndConsumeConfirmationToken(
   token: unknown,
   context: ConfirmationContext
 ): ConfirmationValidationResult {
+  // When NOTEPLAN_SKIP_DRY_RUN is enabled and no token was provided,
+  // auto-approve — this eliminates the two-step dryRun → confirm flow.
+  if (isSkipDryRun() && (typeof token !== 'string' || token.trim().length === 0)) {
+    return { ok: true };
+  }
+
   if (typeof token !== 'string' || token.trim().length === 0) {
     return { ok: false, reason: 'missing' };
   }

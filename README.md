@@ -86,6 +86,8 @@ To enable semantic search, add environment variables to the config:
 - `NOTEPLAN_EMBEDDINGS_PROVIDER`: `openai` (default), `mistral`, or `custom`.
 - `NOTEPLAN_EMBEDDINGS_BASE_URL`: for `custom`, assumes OpenAI-compatible `/v1/embeddings`.
 - `NOTEPLAN_EMBEDDINGS_ENABLED`: defaults to `false`; when false, embeddings tools are not listed.
+- `NOTEPLAN_READ_ONLY`: defaults to `false`; when `true`, all write actions are rejected. Useful for read-only MCP clients.
+- `NOTEPLAN_SKIP_DRY_RUN`: defaults to `false`; when `true`, skips the two-step dryRun/confirmationToken flow for write actions. This halves the number of tool calls for writes — useful for bulk operations or when the per-turn tool call limit is a bottleneck.
 
 <details>
 <summary><strong>Build from Source</strong> (for contributors and development)</summary>
