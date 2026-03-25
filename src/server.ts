@@ -1476,7 +1476,7 @@ export function createServer(): Server {
               },
               target: {
                 type: 'string',
-                description: 'Target note for add: use a date string (today, tomorrow, yesterday, YYYY-MM-DD, YYYYMMDD) for daily/calendar notes, or a filename path for project notes. Daily notes are auto-created if they don\'t exist.',
+                description: 'Target note for add: use a date string (today, tomorrow, yesterday, YYYY-MM-DD, YYYYMMDD) for daily/calendar notes, or a filename path for project notes. Calendar notes (daily, weekly, monthly, etc.) are auto-created if they don\'t exist.',
               },
               position: {
                 type: 'string',

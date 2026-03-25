@@ -327,9 +327,28 @@ export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>) {
       }
     }
 
+    // Auto-create periodic notes when not found (same as daily calendar notes)
+    try {
+      const created = store.ensureCalendarNote(baseFilename, params.space);
+      if (created) {
+        return {
+          success: true,
+          note: {
+            title: created.title,
+            filename: created.filename,
+            content: created.content,
+            type: params.type,
+            displayName,
+          },
+        };
+      }
+    } catch {
+      // Fall through to error response
+    }
+
     return {
       success: false,
-      error: `${params.type} note not found`,
+      error: `${params.type} note not found and could not be created`,
       triedPaths: pathsToTry,
       displayName,
       inputDate: params.date || 'today (default)',
