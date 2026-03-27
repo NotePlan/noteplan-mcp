@@ -60,7 +60,8 @@ function findClosingDelimiterIndex(lines: string[]): number {
       trimmed === '' ||           // blank lines
       /^\s/.test(line) ||         // indented lines (arrays, nested values)
       trimmed.startsWith('#') ||  // YAML comments
-      /^\S+:\s*/.test(line)       // key: value pairs (including bare key:)
+      /^.+:\s/.test(line) ||     // key: value pairs (multi-word keys like "start date:")
+      /^.+:$/.test(trimmed)      // bare key with no value (e.g. "key:")
     ) {
       continue;
     }
@@ -102,10 +103,10 @@ export function parseNoteContent(content: string): ParsedNote {
   const frontmatter: Record<string, string> = {};
 
   for (const line of frontmatterLines) {
-    const match = line.match(/^(\S+):\s*(.*)$/);
+    const match = line.match(/^(.+?):\s*(.*)$/);
     if (match) {
       const [, key, value] = match;
-      frontmatter[key] = value.trim();
+      frontmatter[key.trim()] = value.trim();
     }
   }
 

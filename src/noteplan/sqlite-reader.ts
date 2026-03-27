@@ -286,7 +286,7 @@ function rowToNote(row: SQLiteNoteRow, database?: SqliteDatabase): Note {
 
   return {
     id: row.id,
-    title: row.title || extractTitle(row.content || ''),
+    title: row.content ? extractTitle(row.content) : row.title || 'Untitled',
     filename: row.filename,
     content: row.content || '',
     type: isCalendar ? 'calendar' : 'note',
@@ -376,6 +376,7 @@ export function getSpaceNoteByTitle(
   if (!database) return null;
 
   try {
+    // First try matching the SQLite title column directly
     let query = `
       SELECT id, content, note_type, title, filename, parent, is_dir, created_at, modified_at
       FROM notes
@@ -400,8 +401,16 @@ export function getSpaceNoteByTitle(
 
     const rows = database.prepare(query).all(...params) as unknown as SQLiteNoteRow[];
     const filteredRows = filterRowsByTrash(database, rows, spaceId, includeTrash);
-    const row = filteredRows[0];
-    return row ? rowToNote(row, database) : null;
+    if (filteredRows.length > 0) {
+      return rowToNote(filteredRows[0], database);
+    }
+
+    // Fallback: the SQLite title column may not reflect the frontmatter title.
+    // Search notes whose content contains the title in frontmatter (title: or name: keys)
+    // and resolve via extractTitle to confirm.
+    const lowerTitle = title.toLowerCase();
+    const candidates = listSpaceNotes({ spaceId, includeTrash });
+    return candidates.find((note) => note.title.toLowerCase() === lowerTitle) || null;
   } catch (error) {
     console.error('Error getting teamspace note by title:', error);
     return null;

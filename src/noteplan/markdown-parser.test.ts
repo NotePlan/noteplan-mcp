@@ -297,6 +297,33 @@ describe('extractTitle', () => {
   it('skips leading blank lines when no frontmatter', () => {
     expect(extractTitle('\n\n# My Title\nBody')).toBe('My Title');
   });
+
+  // Bug report regression: template-created note with frontmatter title different from filename
+  it('extracts frontmatter title when filename-derived title would be different', () => {
+    const content = '---\ntitle: 🟥_0049_knuth_reviewer\ntags: #project/scope\ntype: project-note\n---\n# Some heading in the body';
+    expect(extractTitle(content)).toBe('🟥_0049_knuth_reviewer');
+  });
+
+  it('extracts frontmatter title with emoji and underscores', () => {
+    const content = '---\ntitle: 🔵_0012_my_project\n---\n# Different Heading';
+    expect(extractTitle(content)).toBe('🔵_0012_my_project');
+  });
+
+  it('falls back to body heading when frontmatter has no title or name', () => {
+    const content = '---\ntags: #project/scope\ntype: project-note\n---\n# Body Title Here';
+    expect(extractTitle(content)).toBe('Body Title Here');
+  });
+
+  // Multi-word frontmatter keys (e.g. "start date") must not break frontmatter parsing
+  it('extracts frontmatter title when multi-word keys like "start date" are present', () => {
+    const content = '---\ntitle: 🟥_0049_knuth_reviewer\nstart date: 2026-02\ntags: #project/scope\ntype: project-note\n---\n# Some heading';
+    expect(extractTitle(content)).toBe('🟥_0049_knuth_reviewer');
+  });
+
+  it('falls back to body heading when frontmatter has multi-word keys but no title', () => {
+    const content = '---\nstart date: 2026-02\ndue date: 2026-05\ntype: project-note\n---\n# Body Title Here';
+    expect(extractTitle(content)).toBe('Body Title Here');
+  });
 });
 
 // ---------------------------------------------------------------------------

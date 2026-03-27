@@ -468,12 +468,32 @@ export async function searchNotes(
   };
 }
 
+/**
+ * Split query on `|` for OR alternatives.
+ */
 function splitSearchTerms(query: string): string[] {
   const tokens = query
     .split('|')
     .map((token) => token.trim())
     .filter(Boolean);
   return tokens.length > 0 ? tokens : [query.trim()];
+}
+
+/**
+ * Normalize a string for metadata matching: replace underscores with spaces
+ * so "knuth_reviewer" and "knuth reviewer" are treated equivalently.
+ */
+function normalizeForMetadataMatch(value: string): string {
+  return value.replace(/_/g, ' ');
+}
+
+/**
+ * Check if a quoted phrase is an exact substring match in the value.
+ * Returns true if the query (without quotes) appears literally in the value.
+ */
+function isQuotedPhrase(term: string): boolean {
+  return (term.startsWith('"') && term.endsWith('"')) ||
+         (term.startsWith("'") && term.endsWith("'"));
 }
 
 function metadataScore(value: string, term: string): number {
@@ -484,6 +504,51 @@ function metadataScore(value: string, term: string): number {
   if (slashSegment) return 95;
   if (value.includes(term)) return 80;
   return 0;
+}
+
+/**
+ * Score a metadata term against a value with token-aware AND matching.
+ *
+ * Matching rules (mirrors NotePlan's note search behavior):
+ * - Quoted strings ("exact phrase") → literal substring match
+ * - Single word → substring match (with underscores normalized to spaces)
+ * - Multiple space-separated words → AND: all words must appear in the value
+ *   (in any order, underscores treated as spaces)
+ *
+ * Returns 0 if no match, or a positive score based on match quality.
+ */
+function metadataScoreTokenAware(value: string, term: string): number {
+  if (!value || !term) return 0;
+
+  // Quoted phrase: exact literal match (strip quotes first)
+  if (isQuotedPhrase(term)) {
+    const phrase = term.slice(1, -1);
+    return metadataScore(value, phrase);
+  }
+
+  // Normalize underscores to spaces for matching
+  const normalizedValue = normalizeForMetadataMatch(value);
+
+  // Split on spaces into AND tokens
+  const words = term.split(/\s+/).filter(Boolean);
+
+  if (words.length <= 1) {
+    // Single word: try both original and normalized value
+    const directScore = metadataScore(value, term);
+    const normalizedScore = metadataScore(normalizedValue, term);
+    return Math.max(directScore, normalizedScore);
+  }
+
+  // Multiple words: ALL must appear in the normalized value (AND)
+  const allMatch = words.every((word) => normalizedValue.includes(word));
+  if (!allMatch) return 0;
+
+  // Score based on how well the terms match
+  // Exact match of full query (after normalization)
+  if (normalizedValue === term) return 120;
+  if (normalizedValue.startsWith(term)) return 100;
+  // All tokens present → good contains match
+  return 70 + Math.min(words.length, 10);
 }
 
 function scoreMetadataMatch(
@@ -503,14 +568,14 @@ function scoreMetadataMatch(
     if (!term) continue;
 
     if (searchField === 'title' || searchField === 'title_or_filename') {
-      const score = metadataScore(title, term);
+      const score = metadataScoreTokenAware(title, term);
       if (score > bestScore) {
         bestScore = score;
         matchedOn = 'title';
       }
     }
     if (searchField === 'filename' || searchField === 'title_or_filename') {
-      const score = metadataScore(filename, term);
+      const score = metadataScoreTokenAware(filename, term);
       if (score > bestScore) {
         bestScore = score;
         matchedOn = 'filename';

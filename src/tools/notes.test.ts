@@ -2606,3 +2606,274 @@ describe('type filtering with code and table', () => {
     expect(result.filteredCount).toBe(5); // 4 code + 1 task
   });
 });
+
+// ---------------------------------------------------------------------------
+// Title resolution and search: frontmatter title vs body title vs filename
+// Verifies that search/filter pipelines use the frontmatter title when present,
+// matching the Swift-side title resolution (Globals.swift / TemplateHelper).
+// ---------------------------------------------------------------------------
+import { extractTitle } from '../noteplan/markdown-parser.js';
+
+describe('title resolution for search – frontmatter title takes priority', () => {
+  // Simulate how unified-store builds Note objects and how listNotes filters them
+  function buildNote(content: string, filename: string) {
+    return {
+      id: filename,
+      title: extractTitle(content),
+      filename,
+      content,
+      type: 'note' as const,
+      source: 'local' as const,
+    };
+  }
+
+  // Replicates the listNotes query filter from notes.ts
+  // Normalizes underscores to spaces; space-separated words are AND-matched
+  function matchesListQuery(note: { title: string; filename: string; folder?: string }, query: string): boolean {
+    const haystack = `${note.title} ${note.filename} ${note.folder || ''}`
+      .toLowerCase()
+      .replace(/_/g, ' ');
+    const normalizedQuery = query.toLowerCase().replace(/_/g, ' ');
+    const words = normalizedQuery.split(/\s+/).filter(Boolean);
+    return words.every((word) => haystack.includes(word));
+  }
+
+  // Replicates metadataScoreTokenAware from unified-store.ts (title_or_filename search)
+  // Normalizes underscores to spaces; multi-word queries use AND matching
+  function normalizeForMatch(value: string): string {
+    return value.replace(/_/g, ' ');
+  }
+
+  function metadataScore(value: string, term: string): number {
+    if (!value || !term) return 0;
+    if (value === term) return 120;
+    if (value.startsWith(term)) return 100;
+    if (value.includes(term)) return 80;
+    return 0;
+  }
+
+  function metadataScoreTokenAware(value: string, term: string): number {
+    if (!value || !term) return 0;
+    const normalizedValue = normalizeForMatch(value);
+    const words = term.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) {
+      return Math.max(metadataScore(value, term), metadataScore(normalizedValue, term));
+    }
+    const allMatch = words.every((word) => normalizedValue.includes(word));
+    if (!allMatch) return 0;
+    if (normalizedValue === term) return 120;
+    if (normalizedValue.startsWith(term)) return 100;
+    return 70 + Math.min(words.length, 10);
+  }
+
+  function matchesTitleOrFilename(note: { title: string; filename: string }, query: string): boolean {
+    const lowerTitle = note.title.toLowerCase();
+    const lowerFilename = note.filename.toLowerCase();
+    const lowerQuery = query.toLowerCase();
+    return metadataScoreTokenAware(lowerTitle, lowerQuery) > 0 || metadataScoreTokenAware(lowerFilename, lowerQuery) > 0;
+  }
+
+  // --- Local notes ---
+
+  it('local note: listNotes query matches frontmatter title, not just filename', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body Heading',
+      'Notes/🟥_0012_project 2 2 2 2.txt'
+    );
+    expect(note.title).toBe('🟥_0049_knuth_reviewer');
+    expect(matchesListQuery(note, '0049')).toBe(true);
+    expect(matchesListQuery(note, 'knuth')).toBe(true);
+  });
+
+  it('local note: listNotes query does NOT match filename-only content when frontmatter title is different', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body Heading',
+      'Notes/🟥_0012_project 2 2 2 2.txt'
+    );
+    // The filename contains "0012" but the frontmatter title does not — however
+    // listNotes searches BOTH title and filename, so this should still match via filename
+    expect(matchesListQuery(note, '0012')).toBe(true);
+  });
+
+  it('local note: title_or_filename search matches frontmatter title', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body Heading',
+      'Notes/🟥_0012_project 2 2 2 2.txt'
+    );
+    expect(matchesTitleOrFilename(note, '0049')).toBe(true);
+    expect(matchesTitleOrFilename(note, 'knuth_reviewer')).toBe(true);
+  });
+
+  it('local note: title_or_filename search matches filename too', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body Heading',
+      'Notes/🟥_0012_project 2 2 2 2.txt'
+    );
+    expect(matchesTitleOrFilename(note, '0012')).toBe(true);
+  });
+
+  it('local note: uses body heading as title when frontmatter has no title/name', () => {
+    const note = buildNote(
+      '---\ntype: project-note\ntags: #test\n---\n# My Project Title',
+      'Notes/random-filename.txt'
+    );
+    expect(note.title).toBe('My Project Title');
+    expect(matchesTitleOrFilename(note, 'my project')).toBe(true);
+    expect(matchesListQuery(note, 'my project')).toBe(true);
+  });
+
+  it('local note: uses name property as title fallback', () => {
+    const note = buildNote(
+      '---\nname: My Named Note\ntags: #test\n---\n# Different Heading',
+      'Notes/something.txt'
+    );
+    expect(note.title).toBe('My Named Note');
+    expect(matchesTitleOrFilename(note, 'named note')).toBe(true);
+  });
+
+  // --- Space notes (simulating rowToNote behavior) ---
+
+  // This simulates the fixed rowToNote: content present → extractTitle(content) is used
+  function buildSpaceNote(content: string, dbTitle: string, filename: string) {
+    return {
+      id: 'space-id-123',
+      title: content ? extractTitle(content) : dbTitle || 'Untitled',
+      filename,
+      content,
+      type: 'note' as const,
+      source: 'space' as const,
+    };
+  }
+
+  it('space note: uses frontmatter title, not SQLite title column', () => {
+    const note = buildSpaceNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body Heading',
+      '🟥_0012_project 2 2 2 2',  // SQLite title column (filename-derived)
+      '🟥_0012_project 2 2 2 2.md'
+    );
+    expect(note.title).toBe('🟥_0049_knuth_reviewer');
+    expect(matchesTitleOrFilename(note, '0049')).toBe(true);
+    expect(matchesTitleOrFilename(note, 'knuth')).toBe(true);
+  });
+
+  it('space note: does NOT use the SQLite title when frontmatter title exists', () => {
+    const note = buildSpaceNote(
+      '---\ntitle: Correct Title\n---\n# Body',
+      'Wrong DB Title',
+      'wrong-db-title.md'
+    );
+    expect(note.title).toBe('Correct Title');
+    expect(note.title).not.toBe('Wrong DB Title');
+  });
+
+  it('space note: uses body heading when frontmatter has no title', () => {
+    const note = buildSpaceNote(
+      '---\ntags: #test\n---\n# Body Heading Title',
+      'db-filename-title',
+      'db-filename-title.md'
+    );
+    expect(note.title).toBe('Body Heading Title');
+    expect(matchesTitleOrFilename(note, 'body heading')).toBe(true);
+  });
+
+  it('space note: falls back to dbTitle when content is empty', () => {
+    const note = buildSpaceNote(
+      '',
+      'DB Fallback Title',
+      'some-file.md'
+    );
+    expect(note.title).toBe('DB Fallback Title');
+  });
+
+  it('space note: returns Untitled when both content and dbTitle are empty', () => {
+    const note = buildSpaceNote('', '', 'empty.md');
+    expect(note.title).toBe('Untitled');
+  });
+
+  it('space note: listNotes query matches frontmatter title from space note', () => {
+    const note = buildSpaceNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      '🟥_0012_project 2 2 2 2',
+      '🟥_0012_project 2 2 2 2.md'
+    );
+    expect(matchesListQuery(note, '0049')).toBe(true);
+    expect(matchesListQuery(note, 'knuth_reviewer')).toBe(true);
+  });
+
+  // --- Token-aware AND matching with underscore normalization ---
+
+  it('title_or_filename: "knuth reviewer" (space) matches "knuth_reviewer" (underscore)', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'knuth reviewer')).toBe(true);
+  });
+
+  it('listNotes: "knuth reviewer" (space) matches "knuth_reviewer" (underscore)', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesListQuery(note, 'knuth reviewer')).toBe(true);
+  });
+
+  it('multi-word query matches tokens in any order', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'reviewer knuth')).toBe(true);
+    expect(matchesListQuery(note, 'reviewer knuth')).toBe(true);
+  });
+
+  it('multi-word query requires ALL tokens (AND logic)', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    // "knuth" matches but "einstein" does not → should fail
+    expect(matchesTitleOrFilename(note, 'knuth einstein')).toBe(false);
+    expect(matchesListQuery(note, 'knuth einstein')).toBe(false);
+  });
+
+  it('single word with underscore in query matches underscore in title', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'knuth_reviewer')).toBe(true);
+    expect(matchesListQuery(note, 'knuth_reviewer')).toBe(true);
+  });
+
+  it('number substring still matches within underscore-separated title', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, '0049')).toBe(true);
+    expect(matchesListQuery(note, '0049')).toBe(true);
+  });
+
+  // Multi-word frontmatter keys (e.g. "start date") must not break title resolution
+  it('local note: extracts frontmatter title when multi-word keys are present', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\nstart date: 2026-02\ntags: #project/scope\ntype: project-note\n---\n# Body Heading',
+      'Notes/🟥_0012_project 2 2 2 2.txt'
+    );
+    expect(note.title).toBe('🟥_0049_knuth_reviewer');
+    expect(matchesTitleOrFilename(note, '0049')).toBe(true);
+    expect(matchesListQuery(note, 'knuth')).toBe(true);
+  });
+
+  it('space note: extracts frontmatter title when multi-word keys are present', () => {
+    const note = buildSpaceNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\nstart date: 2026-02\ntags: #project/scope\ntype: project-note\n---\n# Body Heading',
+      '🟥_0012_project 2 2 2 2',
+      '🟥_0012_project 2 2 2 2.md'
+    );
+    expect(note.title).toBe('🟥_0049_knuth_reviewer');
+    expect(matchesTitleOrFilename(note, '0049')).toBe(true);
+    expect(matchesListQuery(note, 'knuth_reviewer')).toBe(true);
+  });
+});

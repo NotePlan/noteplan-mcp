@@ -203,6 +203,37 @@ describe('parseNoteContent', () => {
     expect(result.body).toBe('');
     expect(result.hasFrontmatter).toBe(true);
   });
+
+  // Multi-word frontmatter keys (used by NotePlan templates, e.g. "start date", "due date")
+  it('recognizes frontmatter with multi-word keys like "start date"', () => {
+    const content = '---\ntitle: My Project\nstart date: 2026-02\ntype: project-note\n---\n# Body';
+    const result = parseNoteContent(content);
+    expect(result.hasFrontmatter).toBe(true);
+    expect(result.frontmatter!.title).toBe('My Project');
+    expect(result.body).toBe('# Body');
+  });
+
+  it('recognizes frontmatter with "due date" key', () => {
+    const content = '---\ntitle: Task Note\ndue date: 2026-04-15\n---\nBody text';
+    const result = parseNoteContent(content);
+    expect(result.hasFrontmatter).toBe(true);
+    expect(result.frontmatter!.title).toBe('Task Note');
+  });
+
+  it('recognizes frontmatter with multiple multi-word keys', () => {
+    const content = '---\ntitle: Project X\nstart date: 2026-02\ndue date: 2026-05\nreview date: 2026-03\n---\n# Heading';
+    const result = parseNoteContent(content);
+    expect(result.hasFrontmatter).toBe(true);
+    expect(result.frontmatter!.title).toBe('Project X');
+    expect(result.body).toBe('# Heading');
+  });
+
+  it('does not treat plain text lines as valid frontmatter', () => {
+    const content = '---\ntitle: Note\nthis is just plain text without a colon\n---\nBody';
+    const result = parseNoteContent(content);
+    // Plain text line should break frontmatter scanning
+    expect(result.hasFrontmatter).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -643,8 +643,15 @@ export function listNotes(params?: z.infer<typeof listNotesSchema>) {
     if (allowedTypes && !allowedTypes.has(note.type)) return false;
     if (!query) return true;
 
-    const haystack = `${note.title} ${note.filename} ${note.folder || ''}`.toLowerCase();
-    return haystack.includes(query);
+    // Normalize underscores to spaces so "knuth_reviewer" matches "knuth reviewer"
+    const haystack = `${note.title} ${note.filename} ${note.folder || ''}`
+      .toLowerCase()
+      .replace(/_/g, ' ');
+    const normalizedQuery = query.replace(/_/g, ' ');
+
+    // Split query on spaces: all words must be present (AND), any order
+    const words = normalizedQuery.split(/\s+/).filter(Boolean);
+    return words.every((word) => haystack.includes(word));
   });
 
   const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
