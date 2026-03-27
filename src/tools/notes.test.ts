@@ -6,6 +6,7 @@ vi.mock('../noteplan/preferences.js', () => ({
     isAsteriskTodo: true,
     isDashTodo: false,
     defaultTodoCharacter: '*',
+    todoCharacter: '*',
     useCheckbox: true,
     taskPrefix: '* [ ] ',
   })),

@@ -5,6 +5,7 @@ vi.mock('./preferences.js', () => ({
     isAsteriskTodo: true,
     isDashTodo: false,
     defaultTodoCharacter: '*',
+    todoCharacter: '*',
     useCheckbox: true,
   })),
   getTaskPrefix: vi.fn(() => '* [ ] '),
@@ -307,6 +308,7 @@ describe('parseTaskLine', () => {
       isAsteriskTodo: true,
       isDashTodo: false,
       defaultTodoCharacter: '*',
+      todoCharacter: '*',
       useCheckbox: true,
       taskPrefix: '* [ ] ',
     });
@@ -376,6 +378,7 @@ describe('parseParagraphLine', () => {
       isAsteriskTodo: true,
       isDashTodo: false,
       defaultTodoCharacter: '*',
+      todoCharacter: '*',
       useCheckbox: true,
       taskPrefix: '* [ ] ',
     });
@@ -522,6 +525,7 @@ describe('buildParagraphLine strips raw markers', () => {
       isAsteriskTodo: true,
       isDashTodo: false,
       defaultTodoCharacter: '*',
+      todoCharacter: '*',
       useCheckbox: true,
       taskPrefix: '* [ ] ',
     });
@@ -553,6 +557,7 @@ describe('buildParagraphLine', () => {
       isAsteriskTodo: true,
       isDashTodo: false,
       defaultTodoCharacter: '*',
+      todoCharacter: '*',
       useCheckbox: true,
       taskPrefix: '* [ ] ',
     });
@@ -608,6 +613,174 @@ describe('buildParagraphLine', () => {
 
   it('with priority=3 -> appends !!!', () => {
     expect(buildParagraphLine('task', 'task', { taskStatus: 'open', priority: 3 })).toBe('* [ ] task !!!');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildParagraphLine – todoCharacter preference combinations
+// Mirrors Swift Globals.todoChar() logic:
+//   - Both asterisk AND dash → use defaultTodoCharacter
+//   - Only asterisk → always *
+//   - Only dash → always -
+//   - Neither → use defaultTodoCharacter (with checkbox)
+// ---------------------------------------------------------------------------
+describe('buildParagraphLine respects todoCharacter from preferences', () => {
+  it('only asterisk enabled (default) → uses * for tasks', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: false,
+      defaultTodoCharacter: '*',
+      todoCharacter: '*',
+      useCheckbox: false,
+      taskPrefix: '* ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('* Buy milk');
+  });
+
+  it('only asterisk enabled, defaultTodoCharacter is dash → still uses * (todoCharacter wins)', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: false,
+      defaultTodoCharacter: '-',
+      todoCharacter: '*',
+      useCheckbox: false,
+      taskPrefix: '* ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('* Buy milk');
+  });
+
+  it('only dash enabled → uses - for tasks', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: true,
+      defaultTodoCharacter: '*',
+      todoCharacter: '-',
+      useCheckbox: false,
+      taskPrefix: '- ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('- Buy milk');
+  });
+
+  it('only dash enabled, defaultTodoCharacter is asterisk → still uses - (todoCharacter wins)', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: true,
+      defaultTodoCharacter: '*',
+      todoCharacter: '-',
+      useCheckbox: false,
+      taskPrefix: '- ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('- Buy milk');
+  });
+
+  it('both enabled, default asterisk → uses *', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: true,
+      defaultTodoCharacter: '*',
+      todoCharacter: '*',
+      useCheckbox: false,
+      taskPrefix: '* ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('* Buy milk');
+  });
+
+  it('both enabled, default dash → uses -', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: true,
+      defaultTodoCharacter: '-',
+      todoCharacter: '-',
+      useCheckbox: false,
+      taskPrefix: '- ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('- Buy milk');
+  });
+
+  it('neither enabled, default asterisk → uses * with checkbox', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: false,
+      defaultTodoCharacter: '*',
+      todoCharacter: '*',
+      useCheckbox: true,
+      taskPrefix: '* [ ] ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('* [ ] Buy milk');
+  });
+
+  it('neither enabled, default dash → uses - with checkbox', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: false,
+      defaultTodoCharacter: '-',
+      todoCharacter: '-',
+      useCheckbox: true,
+      taskPrefix: '- [ ] ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'open' })).toBe('- [ ] Buy milk');
+  });
+
+  it('task with done status respects todoCharacter (dash config)', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: true,
+      defaultTodoCharacter: '*',
+      todoCharacter: '-',
+      useCheckbox: false,
+      taskPrefix: '- ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'done' })).toBe('- [x] Buy milk');
+  });
+
+  it('task with cancelled status respects todoCharacter', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: true,
+      defaultTodoCharacter: '*',
+      todoCharacter: '-',
+      useCheckbox: false,
+      taskPrefix: '- ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'cancelled' })).toBe('- [-] Buy milk');
+  });
+
+  it('strips LLM-supplied markers and applies correct todoCharacter', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: false,
+      defaultTodoCharacter: '*',
+      todoCharacter: '*',
+      useCheckbox: true,
+      taskPrefix: '* [ ] ',
+    });
+    // LLM sends "- [ ] task" but config says asterisk
+    expect(buildParagraphLine('- [ ] Buy milk', 'task', { taskStatus: 'open' })).toBe('* [ ] Buy milk');
+  });
+
+  it('strips LLM-supplied asterisk markers when dash is configured', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: true,
+      defaultTodoCharacter: '-',
+      todoCharacter: '-',
+      useCheckbox: false,
+      taskPrefix: '- ',
+    });
+    // LLM sends "* [ ] task" but config says dash
+    expect(buildParagraphLine('* [ ] Buy milk', 'task', { taskStatus: 'open' })).toBe('- Buy milk');
+  });
+
+  it('indentation and priority work with non-default todoCharacter', () => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: false,
+      isDashTodo: true,
+      defaultTodoCharacter: '*',
+      todoCharacter: '-',
+      useCheckbox: false,
+      taskPrefix: '- ',
+    });
+    expect(buildParagraphLine('Buy milk', 'task', { taskStatus: 'done', indentLevel: 1, priority: 2 })).toBe('\t- [x] Buy milk !!');
   });
 });
 
@@ -715,6 +888,17 @@ describe('updateTaskContent', () => {
 // addTask
 // ---------------------------------------------------------------------------
 describe('addTask', () => {
+  beforeEach(() => {
+    vi.mocked(getTaskMarkerConfigCached).mockReturnValue({
+      isAsteriskTodo: true,
+      isDashTodo: false,
+      defaultTodoCharacter: '*',
+      todoCharacter: '*',
+      useCheckbox: true,
+      taskPrefix: '* [ ] ',
+    });
+  });
+
   it('adds task at end by default', () => {
     const content = '# Title\nSome text';
     const result = addTask(content, 'New task');
@@ -876,6 +1060,7 @@ describe('parseTasks', () => {
       isAsteriskTodo: true,
       isDashTodo: false,
       defaultTodoCharacter: '*',
+      todoCharacter: '*',
       useCheckbox: true,
       taskPrefix: '* [ ] ',
     });
@@ -910,6 +1095,7 @@ describe('parseTasks – frontmatter line number regression', () => {
       isAsteriskTodo: true,
       isDashTodo: false,
       defaultTodoCharacter: '*',
+      todoCharacter: '*',
       useCheckbox: true,
       taskPrefix: '* [ ] ',
     });

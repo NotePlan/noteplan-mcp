@@ -635,7 +635,7 @@ export function buildParagraphLine(
     }
     case 'task': {
       const cleaned = stripRawMarkers(content);
-      const marker = config.defaultTodoCharacter;
+      const marker = config.todoCharacter;
       const status = options?.taskStatus ?? 'open';
       const wantCheckbox = options?.hasCheckbox ?? config.useCheckbox;
       if (wantCheckbox || status !== 'open') {

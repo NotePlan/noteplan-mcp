@@ -10,6 +10,7 @@ export interface TaskMarkerConfig {
   isAsteriskTodo: boolean;
   isDashTodo: boolean;
   defaultTodoCharacter: '*' | '-';
+  todoCharacter: '*' | '-'; // Computed from preferences, matches Globals.todoChar() in Swift
   useCheckbox: boolean;
   taskPrefix: string; // The complete prefix to use when creating tasks
 }
@@ -86,6 +87,7 @@ export function getTaskMarkerConfig(): TaskMarkerConfig {
     isAsteriskTodo,
     isDashTodo,
     defaultTodoCharacter: defaultChar,
+    todoCharacter: taskChar,
     useCheckbox,
     taskPrefix,
   };
