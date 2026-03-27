@@ -639,21 +639,27 @@ export function listNotes(params?: z.infer<typeof listNotesSchema>) {
   const allowedTypes = input.types ? new Set(input.types) : null;
   const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
 
+  // Pre-compute query tokens outside the per-note filter loop
+  const queryAlternatives = query
+    ? query.split('|').map((alt) => {
+        const words = alt.trim().replace(/_/g, ' ').split(/\s+/).filter(Boolean);
+        return words.length > 0 ? words : null;
+      }).filter((words): words is string[] => words !== null)
+    : null;
+
   const filtered = notes.filter((note) => {
     if (allowedTypes && !allowedTypes.has(note.type)) return false;
-    if (!query) return true;
+    if (!queryAlternatives) return true;
 
     // Normalize underscores to spaces so "knuth_reviewer" matches "knuth reviewer"
     const haystack = `${note.title} ${note.filename} ${note.folder || ''}`
       .toLowerCase()
       .replace(/_/g, ' ');
 
-    // Split on | for OR alternatives; within each alternative, spaces give AND
-    const alternatives = query.split('|').map((alt) => alt.trim().replace(/_/g, ' ')).filter(Boolean);
-    return alternatives.some((alt) => {
-      const words = alt.split(/\s+/).filter(Boolean);
-      return words.every((word) => haystack.includes(word));
-    });
+    // OR across alternatives; AND within each alternative's words
+    return queryAlternatives.some((words) =>
+      words.every((word) => haystack.includes(word))
+    );
   });
 
   const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
