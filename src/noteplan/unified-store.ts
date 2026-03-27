@@ -511,16 +511,17 @@ function metadataScore(value: string, term: string): number {
 function metadataScoreTokenAware(value: string, term: string): number {
   if (!value || !term) return 0;
 
-  // Normalize underscores to spaces for matching
+  // Normalize underscores to spaces in both value and term
   const normalizedValue = normalizeForMetadataMatch(value);
+  const normalizedTerm = normalizeForMetadataMatch(term);
 
   // Split on spaces into AND tokens
-  const words = term.split(/\s+/).filter(Boolean);
+  const words = normalizedTerm.split(/\s+/).filter(Boolean);
 
   if (words.length <= 1) {
     // Single word: try both original and normalized value
     const directScore = metadataScore(value, term);
-    const normalizedScore = metadataScore(normalizedValue, term);
+    const normalizedScore = metadataScore(normalizedValue, normalizedTerm);
     return Math.max(directScore, normalizedScore);
   }
 
@@ -530,8 +531,8 @@ function metadataScoreTokenAware(value: string, term: string): number {
 
   // Score based on how well the terms match
   // Exact match of full query (after normalization)
-  if (normalizedValue === term) return 120;
-  if (normalizedValue.startsWith(term)) return 100;
+  if (normalizedValue === normalizedTerm) return 120;
+  if (normalizedValue.startsWith(normalizedTerm)) return 100;
   // All tokens present → good contains match
   return 70 + Math.min(words.length, 10);
 }

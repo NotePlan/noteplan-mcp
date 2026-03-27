@@ -2628,14 +2628,16 @@ describe('title resolution for search – frontmatter title takes priority', () 
   }
 
   // Replicates the listNotes query filter from notes.ts
-  // Normalizes underscores to spaces; space-separated words are AND-matched
+  // Normalizes underscores to spaces; pipe = OR, spaces = AND
   function matchesListQuery(note: { title: string; filename: string; folder?: string }, query: string): boolean {
     const haystack = `${note.title} ${note.filename} ${note.folder || ''}`
       .toLowerCase()
       .replace(/_/g, ' ');
-    const normalizedQuery = query.toLowerCase().replace(/_/g, ' ');
-    const words = normalizedQuery.split(/\s+/).filter(Boolean);
-    return words.every((word) => haystack.includes(word));
+    const alternatives = query.toLowerCase().split('|').map((alt) => alt.trim().replace(/_/g, ' ')).filter(Boolean);
+    return alternatives.some((alt) => {
+      const words = alt.split(/\s+/).filter(Boolean);
+      return words.every((word) => haystack.includes(word));
+    });
   }
 
   // Replicates metadataScoreTokenAware from unified-store.ts (title_or_filename search)
@@ -2655,14 +2657,15 @@ describe('title resolution for search – frontmatter title takes priority', () 
   function metadataScoreTokenAware(value: string, term: string): number {
     if (!value || !term) return 0;
     const normalizedValue = normalizeForMatch(value);
-    const words = term.split(/\s+/).filter(Boolean);
+    const normalizedTerm = normalizeForMatch(term);
+    const words = normalizedTerm.split(/\s+/).filter(Boolean);
     if (words.length <= 1) {
-      return Math.max(metadataScore(value, term), metadataScore(normalizedValue, term));
+      return Math.max(metadataScore(value, term), metadataScore(normalizedValue, normalizedTerm));
     }
     const allMatch = words.every((word) => normalizedValue.includes(word));
     if (!allMatch) return 0;
-    if (normalizedValue === term) return 120;
-    if (normalizedValue.startsWith(term)) return 100;
+    if (normalizedValue === normalizedTerm) return 120;
+    if (normalizedValue.startsWith(normalizedTerm)) return 100;
     return 70 + Math.min(words.length, 10);
   }
 
@@ -2943,5 +2946,52 @@ describe('title resolution for search – frontmatter title takes priority', () 
       'Notes/some-file.txt'
     );
     expect(matchesTitleOrFilename(note, 'knuth einstein | foo bar')).toBe(false);
+  });
+
+  // --- listNotes also supports OR (pipe) ---
+
+  it('listNotes: pipe | gives OR', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesListQuery(note, 'nonexistent | knuth')).toBe(true);
+    expect(matchesListQuery(note, 'nonexistent | alsonot')).toBe(false);
+  });
+
+  it('listNotes: OR with AND combined', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesListQuery(note, 'knuth einstein | 0049 reviewer')).toBe(true);
+    expect(matchesListQuery(note, 'foo bar | baz qux')).toBe(false);
+  });
+
+  // --- Symmetric underscore normalization ---
+
+  it('underscore in search term matches space in title', () => {
+    const note = buildNote(
+      '---\ntitle: knuth reviewer notes\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    // Title has spaces, query has underscore — should still match
+    expect(matchesTitleOrFilename(note, 'knuth_reviewer')).toBe(true);
+  });
+
+  it('underscore in search term matches underscore in title', () => {
+    const note = buildNote(
+      '---\ntitle: knuth_reviewer_notes\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'knuth_reviewer')).toBe(true);
+  });
+
+  it('space in search term matches underscore in title', () => {
+    const note = buildNote(
+      '---\ntitle: knuth_reviewer_notes\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'knuth reviewer')).toBe(true);
   });
 });

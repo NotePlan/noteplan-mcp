@@ -228,7 +228,7 @@ export function removeFrontmatterProperty(content: string, key: string): string 
 
   // Check if frontmatter is now empty (only --- delimiters remain)
   const newClosingIndex = closingIndex - (endIndex - keyLineIndex);
-  const hasRemainingKeys = lines.slice(1, newClosingIndex).some(l => /^\S+:\s*/.test(l));
+  const hasRemainingKeys = lines.slice(1, newClosingIndex).some(l => /^.+:\s/.test(l) || /^.+:$/.test(l.trim()));
 
   if (!hasRemainingKeys) {
     // Remove entire frontmatter block (opening ---, content, closing ---)

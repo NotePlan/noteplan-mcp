@@ -647,11 +647,13 @@ export function listNotes(params?: z.infer<typeof listNotesSchema>) {
     const haystack = `${note.title} ${note.filename} ${note.folder || ''}`
       .toLowerCase()
       .replace(/_/g, ' ');
-    const normalizedQuery = query.replace(/_/g, ' ');
 
-    // Split query on spaces: all words must be present (AND), any order
-    const words = normalizedQuery.split(/\s+/).filter(Boolean);
-    return words.every((word) => haystack.includes(word));
+    // Split on | for OR alternatives; within each alternative, spaces give AND
+    const alternatives = query.split('|').map((alt) => alt.trim().replace(/_/g, ' ')).filter(Boolean);
+    return alternatives.some((alt) => {
+      const words = alt.split(/\s+/).filter(Boolean);
+      return words.every((word) => haystack.includes(word));
+    });
   });
 
   const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);

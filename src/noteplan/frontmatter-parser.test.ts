@@ -613,6 +613,25 @@ describe('removeFrontmatterProperty', () => {
     expect(countDelimiters(result)).toBe(0);
   });
 
+  it('preserves multi-word keys when removing a different property', () => {
+    const content = '---\ntitle: My Note\nstart date: 2026-02\ndue date: 2026-05\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'title');
+    const parsed = parseNoteContent(result);
+    expect(parsed.hasFrontmatter).toBe(true);
+    expect(parsed.frontmatter!.title).toBeUndefined();
+    expect(parsed.frontmatter!['start date']).toBe('2026-02');
+    expect(parsed.frontmatter!['due date']).toBe('2026-05');
+  });
+
+  it('does not strip frontmatter when only multi-word keys remain', () => {
+    const content = '---\ntitle: Remove Me\nstart date: 2026-02\n---\nBody';
+    const result = removeFrontmatterProperty(content, 'title');
+    const parsed = parseNoteContent(result);
+    expect(parsed.hasFrontmatter).toBe(true);
+    expect(parsed.frontmatter!['start date']).toBe('2026-02');
+    expect(countDelimiters(result)).toBe(2);
+  });
+
   it('removes property with empty value', () => {
     const content = '---\nempty-key: \nother: keep\n---\nBody';
     const result = removeFrontmatterProperty(content, 'empty-key');
