@@ -487,15 +487,6 @@ function normalizeForMetadataMatch(value: string): string {
   return value.replace(/_/g, ' ');
 }
 
-/**
- * Check if a quoted phrase is an exact substring match in the value.
- * Returns true if the query (without quotes) appears literally in the value.
- */
-function isQuotedPhrase(term: string): boolean {
-  return (term.startsWith('"') && term.endsWith('"')) ||
-         (term.startsWith("'") && term.endsWith("'"));
-}
-
 function metadataScore(value: string, term: string): number {
   if (!value || !term) return 0;
   if (value === term) return 120;
@@ -510,21 +501,15 @@ function metadataScore(value: string, term: string): number {
  * Score a metadata term against a value with token-aware AND matching.
  *
  * Matching rules (mirrors NotePlan's note search behavior):
- * - Quoted strings ("exact phrase") → literal substring match
  * - Single word → substring match (with underscores normalized to spaces)
  * - Multiple space-separated words → AND: all words must appear in the value
  *   (in any order, underscores treated as spaces)
+ * - Use `|` between terms for OR matching (handled by splitSearchTerms)
  *
  * Returns 0 if no match, or a positive score based on match quality.
  */
 function metadataScoreTokenAware(value: string, term: string): number {
   if (!value || !term) return 0;
-
-  // Quoted phrase: exact literal match (strip quotes first)
-  if (isQuotedPhrase(term)) {
-    const phrase = term.slice(1, -1);
-    return metadataScore(value, phrase);
-  }
 
   // Normalize underscores to spaces for matching
   const normalizedValue = normalizeForMetadataMatch(value);

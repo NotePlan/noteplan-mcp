@@ -2666,11 +2666,24 @@ describe('title resolution for search – frontmatter title takes priority', () 
     return 70 + Math.min(words.length, 10);
   }
 
+  // Replicates splitSearchTerms from unified-store.ts (OR on `|`)
+  function splitSearchTerms(query: string): string[] {
+    const tokens = query.split('|').map((t) => t.trim()).filter(Boolean);
+    return tokens.length > 0 ? tokens : [query.trim()];
+  }
+
+  // Replicates scoreMetadataMatch: OR across `|`-separated terms,
+  // AND within space-separated words of each term
   function matchesTitleOrFilename(note: { title: string; filename: string }, query: string): boolean {
     const lowerTitle = note.title.toLowerCase();
     const lowerFilename = note.filename.toLowerCase();
-    const lowerQuery = query.toLowerCase();
-    return metadataScoreTokenAware(lowerTitle, lowerQuery) > 0 || metadataScoreTokenAware(lowerFilename, lowerQuery) > 0;
+    const terms = splitSearchTerms(query);
+    for (const rawTerm of terms) {
+      const term = rawTerm.toLowerCase();
+      if (metadataScoreTokenAware(lowerTitle, term) > 0) return true;
+      if (metadataScoreTokenAware(lowerFilename, term) > 0) return true;
+    }
+    return false;
   }
 
   // --- Local notes ---
@@ -2875,5 +2888,60 @@ describe('title resolution for search – frontmatter title takes priority', () 
     expect(note.title).toBe('🟥_0049_knuth_reviewer');
     expect(matchesTitleOrFilename(note, '0049')).toBe(true);
     expect(matchesListQuery(note, 'knuth_reviewer')).toBe(true);
+  });
+
+  // --- OR separator (pipe |) and AND (spaces) ---
+
+  it('pipe | gives OR: matches if either term matches', () => {
+    const note = buildNote(
+      '---\ntitle: Meeting Notes\n---\n# Body',
+      'Notes/meeting-notes.txt'
+    );
+    // "meeting" matches, "nonexistent" doesn't — OR means it should match
+    expect(matchesTitleOrFilename(note, 'nonexistent | meeting')).toBe(true);
+  });
+
+  it('pipe | gives OR: fails if neither term matches', () => {
+    const note = buildNote(
+      '---\ntitle: Meeting Notes\n---\n# Body',
+      'Notes/meeting-notes.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'nonexistent | alsonot')).toBe(false);
+  });
+
+  it('pipe | gives OR: matches on second alternative', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    // First term doesn't match, second does
+    expect(matchesTitleOrFilename(note, 'einstein | knuth')).toBe(true);
+  });
+
+  it('spaces give AND: all words must match', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'knuth reviewer')).toBe(true);
+    expect(matchesTitleOrFilename(note, 'knuth 0049')).toBe(true);
+    expect(matchesTitleOrFilename(note, 'knuth einstein')).toBe(false);
+  });
+
+  it('OR with AND: each pipe alternative is AND-matched independently', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    // "knuth einstein" fails AND, but "0049 reviewer" passes AND → OR succeeds
+    expect(matchesTitleOrFilename(note, 'knuth einstein | 0049 reviewer')).toBe(true);
+  });
+
+  it('OR with AND: fails when no alternative matches all its tokens', () => {
+    const note = buildNote(
+      '---\ntitle: 🟥_0049_knuth_reviewer\ntype: project-note\n---\n# Body',
+      'Notes/some-file.txt'
+    );
+    expect(matchesTitleOrFilename(note, 'knuth einstein | foo bar')).toBe(false);
   });
 });
