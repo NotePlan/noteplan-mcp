@@ -264,7 +264,19 @@ export function listNotes(options: {
 
   // Get space notes
   if (space || !hasFolderScope) {
-    notes.push(...sqliteReader.listSpaceNotes(space));
+    let spaceNotes = sqliteReader.listSpaceNotes(space);
+
+    // Filter space notes by folder when a folder scope is requested
+    if (hasFolderScope && space) {
+      const resolvedFolder = sqliteReader.resolveSpaceFolder(space, normalizedFolder!);
+      if (resolvedFolder) {
+        spaceNotes = spaceNotes.filter(note => note.folder === resolvedFolder.id);
+      } else {
+        spaceNotes = [];
+      }
+    }
+
+    notes.push(...spaceNotes);
   }
 
   // Sort by modified date (newest first)
