@@ -196,6 +196,7 @@ export const getRecentPeriodicNotesSchema = z.object({
 
 export const getNotesInFolderSchema = z.object({
   folder: z.string().describe('Folder path (e.g., "Projects", "10 - Projects")'),
+  space: z.string().optional().describe('Space name or ID to scope the folder listing'),
   includeContent: z.boolean().optional().describe('Include full note content (default: false)'),
   limit: z.number().min(1).max(200).optional().describe('Maximum number of notes to return (default: 50)'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
@@ -547,7 +548,7 @@ export async function getNotesInFolder(params: z.infer<typeof getNotesInFolderSc
     const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const includeContent = params.includeContent === true;
 
-    const allNotes = await store.listNotes({ folder: params.folder });
+    const allNotes = await store.listNotes({ folder: params.folder, space: params.space });
     const pagedNotes = allNotes.slice(offset, offset + limit);
 
     const notes = pagedNotes.map((note) => {

@@ -1628,7 +1628,7 @@ describe('matchesFrontmatterProperties – property filter edge cases', () => {
 // We test the getNote logic by importing the function and mocking the readers.
 // Since getNote depends on sqliteReader and fileReader, we use vi.mock.
 
-import { getNote } from '../noteplan/unified-store.js';
+import { getNote, listNotes } from '../noteplan/unified-store.js';
 import * as sqliteReader from '../noteplan/sqlite-reader.js';
 import * as fileReader from '../noteplan/file-reader.js';
 vi.mock('../noteplan/sqlite-reader.js', () => ({
@@ -2993,5 +2993,65 @@ describe('title resolution for search – frontmatter title takes priority', () 
       'Notes/some-file.txt'
     );
     expect(matchesTitleOrFilename(note, 'knuth reviewer')).toBe(true);
+  });
+});
+
+// ── listNotes — folder scope inside a space (regression: PR #6 by @steinwaywhw) ──
+// Ported from PR #6 to the post-bridge async architecture.
+
+describe('listNotes – folder scope inside a space', () => {
+  const spaceId = 'space-001';
+  const folderId = 'folder-001';
+  const noteInFolder = {
+    id: 'note-in-folder',
+    title: 'Project Alpha',
+    filename: `%%NotePlanCloud%%/${spaceId}/${folderId}/note-in-folder`,
+    type: 'note' as const,
+    source: 'space' as const,
+    folder: folderId,
+    content: '# Project Alpha',
+    modifiedAt: new Date(),
+    createdAt: new Date(),
+    spaceId,
+  };
+  const noteInOtherFolder = {
+    ...noteInFolder,
+    id: 'note-other',
+    title: 'Other Note',
+    folder: 'folder-002',
+    filename: `%%NotePlanCloud%%/${spaceId}/folder-002/note-other`,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(sqliteReader.listSpaces).mockResolvedValue([
+      { id: spaceId, name: 'My Space', noteCount: 2 },
+    ]);
+    vi.mocked(sqliteReader.listSpaceNotes).mockResolvedValue([noteInFolder, noteInOtherFolder]);
+  });
+
+  it('returns only notes in the resolved folder', async () => {
+    vi.mocked(sqliteReader.resolveSpaceFolder).mockResolvedValue({
+      id: folderId,
+      path: 'Active Projects',
+      name: 'Active Projects',
+      source: 'space',
+      spaceId,
+    });
+    const result = await listNotes({ folder: 'Active Projects', space: 'My Space' });
+    expect(result.map((n) => n.title)).toEqual(['Project Alpha']);
+    expect(sqliteReader.resolveSpaceFolder).toHaveBeenCalledWith(spaceId, 'Active Projects');
+  });
+
+  it('returns empty when the folder does not resolve in the space', async () => {
+    vi.mocked(sqliteReader.resolveSpaceFolder).mockResolvedValue(null);
+    const result = await listNotes({ folder: 'Nonexistent', space: 'My Space' });
+    expect(result).toHaveLength(0);
+  });
+
+  it('returns all space notes when no folder is specified', async () => {
+    const result = await listNotes({ space: 'My Space' });
+    expect(result).toHaveLength(2);
+    expect(sqliteReader.resolveSpaceFolder).not.toHaveBeenCalled();
   });
 });

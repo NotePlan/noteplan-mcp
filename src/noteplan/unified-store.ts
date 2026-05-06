@@ -271,7 +271,12 @@ export async function listNotes(options: {
 
   // Get space notes
   if (space || !hasFolderScope) {
-    notes.push(...await sqliteReader.listSpaceNotes(space));
+    let spaceNotes = await sqliteReader.listSpaceNotes(space);
+    if (space && hasFolderScope) {
+      const resolved = await sqliteReader.resolveSpaceFolder(space, normalizedFolder!);
+      spaceNotes = resolved ? spaceNotes.filter((n) => n.folder === resolved.id) : [];
+    }
+    notes.push(...spaceNotes);
   }
 
   // Sort by modified date (newest first)
