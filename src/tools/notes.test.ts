@@ -1687,45 +1687,45 @@ describe('getNote id/filename resolution', () => {
     vi.clearAllMocks();
   });
 
-  it('retrieves a local note via id when SQLite lookup returns null', () => {
-    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(null);
-    vi.mocked(fileReader.readNoteFile).mockReturnValue(localNote);
+  it('retrieves a local note via id when SQLite lookup returns null', async () => {
+    vi.mocked(sqliteReader.getSpaceNote).mockResolvedValue(null);
+    vi.mocked(fileReader.readNoteFile).mockResolvedValue(localNote);
 
-    const result = getNote({ id: 'Notes/Books/my-book.md' });
+    const result = await getNote({ id: 'Notes/Books/my-book.md' });
     expect(result).toEqual(localNote);
     expect(sqliteReader.getSpaceNote).toHaveBeenCalledWith('Notes/Books/my-book.md');
     expect(fileReader.readNoteFile).toHaveBeenCalledWith('Notes/Books/my-book.md');
   });
 
-  it('retrieves a local note via filename', () => {
-    vi.mocked(fileReader.readNoteFile).mockReturnValue(localNote);
+  it('retrieves a local note via filename', async () => {
+    vi.mocked(fileReader.readNoteFile).mockResolvedValue(localNote);
 
-    const result = getNote({ filename: 'Notes/Books/my-book.md' });
+    const result = await getNote({ filename: 'Notes/Books/my-book.md' });
     expect(result).toEqual(localNote);
   });
 
-  it('id and filename return the same note for local notes', () => {
-    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(null);
-    vi.mocked(fileReader.readNoteFile).mockReturnValue(localNote);
+  it('id and filename return the same note for local notes', async () => {
+    vi.mocked(sqliteReader.getSpaceNote).mockResolvedValue(null);
+    vi.mocked(fileReader.readNoteFile).mockResolvedValue(localNote);
 
-    const byId = getNote({ id: localNote.filename });
-    const byFilename = getNote({ filename: localNote.filename });
+    const byId = await getNote({ id: localNote.filename });
+    const byFilename = await getNote({ filename: localNote.filename });
     expect(byId).toEqual(byFilename);
   });
 
-  it('returns null for non-existent id', () => {
-    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(null);
-    vi.mocked(fileReader.readNoteFile).mockReturnValue(null);
+  it('returns null for non-existent id', async () => {
+    vi.mocked(sqliteReader.getSpaceNote).mockResolvedValue(null);
+    vi.mocked(fileReader.readNoteFile).mockResolvedValue(null);
 
-    const result = getNote({ id: 'Notes/nonexistent.md' });
+    const result = await getNote({ id: 'Notes/nonexistent.md' });
     expect(result).toBeNull();
   });
 
-  it('prefers space note when SQLite lookup succeeds', () => {
+  it('prefers space note when SQLite lookup succeeds', async () => {
     const spaceNote = { ...localNote, source: 'space' as const, id: 'space-uuid-123' };
-    vi.mocked(sqliteReader.getSpaceNote).mockReturnValue(spaceNote);
+    vi.mocked(sqliteReader.getSpaceNote).mockResolvedValue(spaceNote);
 
-    const result = getNote({ id: 'space-uuid-123' });
+    const result = await getNote({ id: 'space-uuid-123' });
     expect(result).toEqual(spaceNote);
     expect(fileReader.readNoteFile).not.toHaveBeenCalled();
   });

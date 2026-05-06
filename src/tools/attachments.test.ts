@@ -3,17 +3,60 @@ import * as path from 'path';
 
 // ── Mocks ──
 
-vi.mock('fs', () => ({
-  existsSync: vi.fn(),
-  mkdirSync: vi.fn(),
-  writeFileSync: vi.fn(),
-  readFileSync: vi.fn(),
-  readdirSync: vi.fn(),
-  statSync: vi.fn(),
-  renameSync: vi.fn(),
-  copyFileSync: vi.fn(),
-  unlinkSync: vi.fn(),
-  rmdirSync: vi.fn(),
+vi.mock('fs', () => {
+  const sync = {
+    existsSync: vi.fn(),
+    mkdirSync: vi.fn(),
+    writeFileSync: vi.fn(),
+    readFileSync: vi.fn(),
+    readdirSync: vi.fn(),
+    statSync: vi.fn(),
+    renameSync: vi.fn(),
+    copyFileSync: vi.fn(),
+    unlinkSync: vi.fn(),
+    rmdirSync: vi.fn(),
+    rmSync: vi.fn(),
+  };
+  // bridge-fs / attachments use fs.promises after the async cascade. Each
+  // promise variant forwards to the sync mock so existing assertions on
+  // fs.*Sync still pass.
+  const promises = {
+    mkdir: vi.fn(async (p: any, opts?: any) => sync.mkdirSync(p, opts)),
+    writeFile: vi.fn(async (p: any, content: any, opts?: any) => sync.writeFileSync(p, content, opts)),
+    readFile: vi.fn(async (p: any, opts?: any) => {
+      if (!sync.existsSync(p)) {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+      return sync.readFileSync(p, opts);
+    }),
+    readdir: vi.fn(async (p: any, opts?: any) => sync.readdirSync(p, opts)),
+    stat: vi.fn(async (p: any) => {
+      if (!sync.existsSync(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      const explicit: any = sync.statSync(p) ?? {};
+      // bridge-fs.statPath calls stats.isDirectory(); ensure it exists even
+      // when a test only mocked size/mtime.
+      return {
+        isDirectory: typeof explicit.isDirectory === 'function' ? explicit.isDirectory : () => false,
+        isFile: typeof explicit.isFile === 'function' ? explicit.isFile : () => true,
+        size: explicit.size ?? 0,
+        mtime: explicit.mtime ?? new Date(0),
+        birthtime: explicit.birthtime ?? new Date(0),
+      };
+    }),
+    rename: vi.fn(async (a: any, b: any) => sync.renameSync(a, b)),
+    copyFile: vi.fn(async (a: any, b: any) => sync.copyFileSync(a, b)),
+    unlink: vi.fn(async (p: any) => sync.unlinkSync(p)),
+    rm: vi.fn(async (p: any) => {
+      if (sync.rmSync) sync.rmSync(p, { recursive: true });
+      else sync.unlinkSync(p);
+    }),
+  };
+  return { ...sync, promises };
+});
+
+vi.mock('../transport/bridge-availability.js', () => ({
+  getBridgeClient: vi.fn(async () => null),
+  invalidateBridgeClient: vi.fn(),
 }));
 
 vi.mock('../noteplan/unified-store.js', () => ({
@@ -70,7 +113,7 @@ beforeEach(() => {
 // ── Schema ──
 
 describe('attachmentsSchema', () => {
-  it('accepts valid input with all fields', () => {
+  it('accepts valid input with all fields', async () => {
     const result = attachmentsSchema.safeParse({
       action: 'add',
       id: '1',
@@ -80,7 +123,7 @@ describe('attachmentsSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('rejects invalid action', () => {
+  it('rejects invalid action', async () => {
     const result = attachmentsSchema.safeParse({ action: 'delete' });
     expect(result.success).toBe(false);
   });
@@ -98,56 +141,56 @@ describe('addAttachment', () => {
     includeData: false,
   };
 
-  it('returns error when data is missing', () => {
-    const result = addAttachment({ ...baseParams, data: undefined });
+  it('returns error when data is missing', async () => {
+    const result = await addAttachment({ ...baseParams, data: undefined });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/data.*required/i);
   });
 
-  it('returns error when attachmentFilename is missing', () => {
-    const result = addAttachment({ ...baseParams, attachmentFilename: undefined });
+  it('returns error when attachmentFilename is missing', async () => {
+    const result = await addAttachment({ ...baseParams, attachmentFilename: undefined });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/attachmentFilename.*required/i);
   });
 
-  it('returns error when note not found', () => {
-    vi.mocked(getNote).mockReturnValue(null);
-    const result = addAttachment(baseParams);
+  it('returns error when note not found', async () => {
+    vi.mocked(getNote).mockResolvedValue(null);
+    const result = await addAttachment(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/i);
   });
 
-  it('returns error for space notes', () => {
-    vi.mocked(getNote).mockReturnValue(mockNote({ source: 'space' }) as any);
-    const result = addAttachment(baseParams);
+  it('returns error for space notes', async () => {
+    vi.mocked(getNote).mockResolvedValue(mockNote({ source: 'space' }) as any);
+    const result = await addAttachment(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/space/i);
   });
 
-  it('returns error when filename sanitizes to empty', () => {
-    vi.mocked(getNote).mockReturnValue(mockNote() as any);
-    const result = addAttachment({ ...baseParams, attachmentFilename: '()[]!' });
+  it('returns error when filename sanitizes to empty', async () => {
+    vi.mocked(getNote).mockResolvedValue(mockNote() as any);
+    const result = await addAttachment({ ...baseParams, attachmentFilename: '()[]!' });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/invalid.*filename/i);
   });
 
-  it('returns error for empty base64 (zero-length buffer)', () => {
-    vi.mocked(getNote).mockReturnValue(mockNote() as any);
+  it('returns error for empty base64 (zero-length buffer)', async () => {
+    vi.mocked(getNote).mockResolvedValue(mockNote() as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     // Use padding-only base64 that decodes to zero bytes
     // Note: An empty string '' is falsy and caught by the !data check first,
     // so we use a whitespace-only string that passes truthiness but decodes to empty
-    const result = addAttachment({ ...baseParams, data: '  ' });
+    const result = await addAttachment({ ...baseParams, data: '  ' });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/empty/i);
   });
 
-  it('successfully writes attachment and returns correct markdownLink', () => {
+  it('successfully writes attachment and returns correct markdownLink', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
-    const result = addAttachment(baseParams);
+    const result = await addAttachment(baseParams);
 
     expect(result.success).toBe(true);
     expect(result).toHaveProperty('markdownLink');
@@ -158,59 +201,52 @@ describe('addAttachment', () => {
     expect(fs.writeFileSync).toHaveBeenCalled();
   });
 
-  it('creates the _attachments folder if it does not exist', () => {
+  it('ensures the _attachments parent folder exists when writing', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
-    addAttachment(baseParams);
+    await addAttachment(baseParams);
 
+    // bridge-fs.writeFileBinary always mkdirs the parent (idempotent with
+    // `recursive: true`) before the write, so the explicit existsSync gate
+    // we used to have is no longer needed.
     expect(fs.mkdirSync).toHaveBeenCalledWith(
       path.join(NP_PATH, 'Notes', 'Test Note_attachments'),
       { recursive: true },
     );
   });
 
-  it('does NOT create folder when it already exists', () => {
+  it('generates correct image markdown link for png/jpg', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-
-    addAttachment(baseParams);
-
-    expect(fs.mkdirSync).not.toHaveBeenCalled();
-  });
-
-  it('generates correct image markdown link for png/jpg', () => {
-    const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic']) {
-      const result = addAttachment({ ...baseParams, attachmentFilename: `photo.${ext}` });
+      const result = await addAttachment({ ...baseParams, attachmentFilename: `photo.${ext}` });
       expect(result.markdownLink).toMatch(/^!\[image\]/);
       expect(result.isImage).toBe(true);
     }
   });
 
-  it('generates correct file markdown link for pdf/txt', () => {
+  it('generates correct file markdown link for pdf/txt', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     for (const ext of ['pdf', 'txt', 'csv', 'mp3']) {
-      const result = addAttachment({ ...baseParams, attachmentFilename: `doc.${ext}` });
+      const result = await addAttachment({ ...baseParams, attachmentFilename: `doc.${ext}` });
       expect(result.markdownLink).toMatch(/^!\[file\]/);
       expect(result.isImage).toBe(false);
     }
   });
 
-  it('insertLink=false (default) does NOT modify note content', () => {
+  it('insertLink=false (default) does NOT modify note content', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
-    const result = addAttachment({ ...baseParams, insertLink: false });
+    const result = await addAttachment({ ...baseParams, insertLink: false });
 
     expect(result.success).toBe(true);
     expect(result.linkInserted).toBe(false);
@@ -218,13 +254,13 @@ describe('addAttachment', () => {
     expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(1);
   });
 
-  it('insertLink=true appends link to note', () => {
+  it('insertLink=true appends link to note', async () => {
     const note = mockNote({ content: '# Test\n' });
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue('# Test\n');
 
-    const result = addAttachment({ ...baseParams, insertLink: true });
+    const result = await addAttachment({ ...baseParams, insertLink: true });
 
     expect(result.success).toBe(true);
     expect(result.linkInserted).toBe(true);
@@ -235,12 +271,12 @@ describe('addAttachment', () => {
     expect(writtenContent).toContain('![image](Test%20Note_attachments/photo.png)');
   });
 
-  it('cleans markdown-conflicting characters from filename', () => {
+  it('cleans markdown-conflicting characters from filename', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
-    const result = addAttachment({
+    const result = await addAttachment({
       ...baseParams,
       attachmentFilename: 'photo (1) [copy]!.png',
     });
@@ -251,12 +287,12 @@ describe('addAttachment', () => {
     expect(result.attachmentPath).toBe('Test Note_attachments/photo 1 copy.png');
   });
 
-  it('percent-encodes special characters in the markdown link path', () => {
+  it('percent-encodes special characters in the markdown link path', async () => {
     const note = mockNote({ filename: 'Notes/My (Special) Note.md' });
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
-    const result = addAttachment({ ...baseParams, attachmentFilename: 'file name.png' });
+    const result = await addAttachment({ ...baseParams, attachmentFilename: 'file name.png' });
 
     expect(result.success).toBe(true);
     // Note name has special chars that get encoded in the path
@@ -278,40 +314,40 @@ describe('listAttachments', () => {
     includeData: false,
   };
 
-  it('returns error when note not found', () => {
-    vi.mocked(getNote).mockReturnValue(null);
-    const result = listAttachments(baseParams);
+  it('returns error when note not found', async () => {
+    vi.mocked(getNote).mockResolvedValue(null);
+    const result = await listAttachments(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/i);
   });
 
-  it('returns empty list when _attachments folder does not exist', () => {
-    vi.mocked(getNote).mockReturnValue(mockNote() as any);
+  it('returns empty list when _attachments folder does not exist', async () => {
+    vi.mocked(getNote).mockResolvedValue(mockNote() as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
-    const result = listAttachments(baseParams);
+    const result = await listAttachments(baseParams);
 
     expect(result.success).toBe(true);
     expect(result.count).toBe(0);
     expect(result.attachments).toEqual([]);
   });
 
-  it('lists attachments with correct metadata', () => {
+  it('lists attachments with correct metadata', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     const mockDate = new Date('2024-01-15T10:30:00Z');
     vi.mocked(fs.readdirSync).mockReturnValue([
-      { name: 'photo.png', isFile: () => true } as any,
-      { name: 'doc.pdf', isFile: () => true } as any,
+      { name: 'photo.png', isFile: () => true, isDirectory: () => false } as any,
+      { name: 'doc.pdf', isFile: () => true, isDirectory: () => false } as any,
     ]);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 1024,
       mtime: mockDate,
     } as any);
 
-    const result = listAttachments(baseParams);
+    const result = await listAttachments(baseParams);
 
     expect(result.success).toBe(true);
     expect(result.count).toBe(2);
@@ -331,43 +367,43 @@ describe('listAttachments', () => {
     expect(attachments[1].markdownLink).toBe('![image](Test%20Note_attachments/photo.png)');
   });
 
-  it('skips hidden files (starting with .)', () => {
+  it('skips hidden files (starting with .)', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     vi.mocked(fs.readdirSync).mockReturnValue([
-      { name: '.DS_Store', isFile: () => true } as any,
-      { name: '.hidden', isFile: () => true } as any,
-      { name: 'visible.png', isFile: () => true } as any,
+      { name: '.DS_Store', isFile: () => true, isDirectory: () => false } as any,
+      { name: '.hidden', isFile: () => true, isDirectory: () => false } as any,
+      { name: 'visible.png', isFile: () => true, isDirectory: () => false } as any,
     ]);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 100,
       mtime: new Date(),
     } as any);
 
-    const result = listAttachments(baseParams);
+    const result = await listAttachments(baseParams);
 
     expect(result.success).toBe(true);
     expect(result.count).toBe(1);
     expect((result.attachments as any[])[0].filename).toBe('visible.png');
   });
 
-  it('skips directories', () => {
+  it('skips directories', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     vi.mocked(fs.readdirSync).mockReturnValue([
-      { name: 'subfolder', isFile: () => false } as any,
-      { name: 'photo.png', isFile: () => true } as any,
+      { name: 'subfolder', isFile: () => false, isDirectory: () => true } as any,
+      { name: 'photo.png', isFile: () => true, isDirectory: () => false } as any,
     ]);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 100,
       mtime: new Date(),
     } as any);
 
-    const result = listAttachments(baseParams);
+    const result = await listAttachments(baseParams);
 
     expect(result.success).toBe(true);
     expect(result.count).toBe(1);
@@ -385,38 +421,38 @@ describe('getAttachment', () => {
     includeData: false,
   };
 
-  it('returns error when attachmentFilename is missing', () => {
-    const result = getAttachment({ ...baseParams, attachmentFilename: undefined });
+  it('returns error when attachmentFilename is missing', async () => {
+    const result = await getAttachment({ ...baseParams, attachmentFilename: undefined });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/attachmentFilename.*required/i);
   });
 
-  it('returns error when note not found', () => {
-    vi.mocked(getNote).mockReturnValue(null);
-    const result = getAttachment(baseParams);
+  it('returns error when note not found', async () => {
+    vi.mocked(getNote).mockResolvedValue(null);
+    const result = await getAttachment(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/i);
   });
 
-  it('returns error when attachment file does not exist', () => {
-    vi.mocked(getNote).mockReturnValue(mockNote() as any);
+  it('returns error when attachment file does not exist', async () => {
+    vi.mocked(getNote).mockResolvedValue(mockNote() as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
-    const result = getAttachment(baseParams);
+    const result = await getAttachment(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/i);
   });
 
-  it('returns metadata without data when includeData is false', () => {
+  it('returns metadata without data when includeData is false', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 2048,
       mtime: new Date('2024-06-01T12:00:00Z'),
     } as any);
 
-    const result = getAttachment({ ...baseParams, includeData: false });
+    const result = await getAttachment({ ...baseParams, includeData: false });
 
     expect(result.success).toBe(true);
     expect(result.filename).toBe('photo.png');
@@ -427,9 +463,9 @@ describe('getAttachment', () => {
     expect(result).not.toHaveProperty('data');
   });
 
-  it('returns base64 data when includeData is true', () => {
+  it('returns base64 data when includeData is true', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 100,
@@ -438,15 +474,15 @@ describe('getAttachment', () => {
     const fileBuffer = Buffer.from('file content');
     vi.mocked(fs.readFileSync).mockReturnValue(fileBuffer);
 
-    const result = getAttachment({ ...baseParams, includeData: true });
+    const result = await getAttachment({ ...baseParams, includeData: true });
 
     expect(result.success).toBe(true);
     expect(result.data).toBe(fileBuffer.toString('base64'));
   });
 
-  it('respects maxDataSize - returns dataTruncated=true for large images', () => {
+  it('respects maxDataSize - returns dataTruncated=true for large images', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 5000,
@@ -456,7 +492,7 @@ describe('getAttachment', () => {
     const largeBuffer = Buffer.alloc(5000, 'x');
     vi.mocked(fs.readFileSync).mockReturnValue(largeBuffer);
 
-    const result = getAttachment({
+    const result = await getAttachment({
       ...baseParams,
       includeData: true,
       maxDataSize: 1000,
@@ -469,9 +505,9 @@ describe('getAttachment', () => {
     expect(result.hint).toBeDefined();
   });
 
-  it('does NOT truncate non-image files even if over maxDataSize', () => {
+  it('does NOT truncate non-image files even if over maxDataSize', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 5000,
@@ -480,7 +516,7 @@ describe('getAttachment', () => {
     const largeBuffer = Buffer.alloc(5000, 'x');
     vi.mocked(fs.readFileSync).mockReturnValue(largeBuffer);
 
-    const result = getAttachment({
+    const result = await getAttachment({
       ...baseParams,
       attachmentFilename: 'doc.pdf',
       includeData: true,
@@ -492,9 +528,9 @@ describe('getAttachment', () => {
     expect(result.dataTruncated).toBeUndefined();
   });
 
-  it('returns correct MIME type mapping', () => {
+  it('returns correct MIME type mapping', async () => {
     const note = mockNote();
-    vi.mocked(getNote).mockReturnValue(note as any);
+    vi.mocked(getNote).mockResolvedValue(note as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.statSync).mockReturnValue({
       size: 100,
@@ -518,7 +554,7 @@ describe('getAttachment', () => {
     ];
 
     for (const [filename, expectedMime] of mimeTests) {
-      const result = getAttachment({
+      const result = await getAttachment({
         ...baseParams,
         attachmentFilename: filename,
         includeData: false,
@@ -554,42 +590,42 @@ describe('moveAttachment', () => {
     includeData: false,
   };
 
-  it('returns error when attachmentFilename is missing', () => {
-    const result = moveAttachment({ ...baseParams, attachmentFilename: undefined });
+  it('returns error when attachmentFilename is missing', async () => {
+    const result = await moveAttachment({ ...baseParams, attachmentFilename: undefined });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/attachmentFilename.*required/i);
   });
 
-  it('returns error when source note not found', () => {
-    vi.mocked(getNote).mockReturnValue(null);
-    const result = moveAttachment(baseParams);
+  it('returns error when source note not found', async () => {
+    vi.mocked(getNote).mockResolvedValue(null);
+    const result = await moveAttachment(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/i);
   });
 
-  it('returns error when destination note not found', () => {
+  it('returns error when destination note not found', async () => {
     // First call for source returns note, second call for destination returns null
     vi.mocked(getNote)
-      .mockReturnValueOnce(sourceNote as any)
-      .mockReturnValueOnce(null);
+      .mockResolvedValueOnce(sourceNote as any)
+      .mockResolvedValueOnce(null);
 
-    const result = moveAttachment(baseParams);
+    const result = await moveAttachment(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/i);
   });
 
-  it('returns error when attachment file does not exist at source', () => {
+  it('returns error when attachment file does not exist at source', async () => {
     vi.mocked(getNote)
       .mockReturnValueOnce(sourceNote as any)
       .mockReturnValueOnce(destNote as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
-    const result = moveAttachment(baseParams);
+    const result = await moveAttachment(baseParams);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found.*source/i);
   });
 
-  it('successfully moves file and returns new markdownLink', () => {
+  it('successfully moves file and returns new markdownLink', async () => {
     vi.mocked(getNote)
       .mockReturnValueOnce(sourceNote as any)
       .mockReturnValueOnce(destNote as any);
@@ -599,7 +635,7 @@ describe('moveAttachment', () => {
     );
     vi.mocked(fs.readdirSync).mockReturnValue([]);
 
-    const result = moveAttachment(baseParams);
+    const result = await moveAttachment(baseParams);
 
     expect(result.success).toBe(true);
     expect(result.markdownLink).toBe('![image](Dest%20Note_attachments/photo.png)');
@@ -608,7 +644,7 @@ describe('moveAttachment', () => {
     expect(fs.renameSync).toHaveBeenCalled();
   });
 
-  it('removes old markdown link from source note content', () => {
+  it('removes old markdown link from source note content', async () => {
     vi.mocked(getNote)
       .mockReturnValueOnce(sourceNote as any)
       .mockReturnValueOnce(destNote as any);
@@ -618,7 +654,7 @@ describe('moveAttachment', () => {
     );
     vi.mocked(fs.readdirSync).mockReturnValue([]);
 
-    const result = moveAttachment(baseParams);
+    const result = await moveAttachment(baseParams);
 
     expect(result.success).toBe(true);
     expect(result.oldLinkRemoved).toBe(true);
@@ -632,7 +668,7 @@ describe('moveAttachment', () => {
     expect(writtenContent).toContain('More text');
   });
 
-  it('creates destination folder if needed', () => {
+  it('creates destination folder if needed', async () => {
     vi.mocked(getNote)
       .mockReturnValueOnce(sourceNote as any)
       .mockReturnValueOnce(destNote as any);
@@ -645,7 +681,7 @@ describe('moveAttachment', () => {
     vi.mocked(fs.readFileSync).mockReturnValue('# Source\n');
     vi.mocked(fs.readdirSync).mockReturnValue([]);
 
-    moveAttachment(baseParams);
+    await moveAttachment(baseParams);
 
     expect(fs.mkdirSync).toHaveBeenCalledWith(
       path.join(NP_PATH, 'Notes', 'Dest Note_attachments'),
@@ -653,7 +689,7 @@ describe('moveAttachment', () => {
     );
   });
 
-  it('cleans up empty source folder after move', () => {
+  it('cleans up empty source folder after move', async () => {
     vi.mocked(getNote)
       .mockReturnValueOnce(sourceNote as any)
       .mockReturnValueOnce(destNote as any);
@@ -662,14 +698,15 @@ describe('moveAttachment', () => {
     // Empty remaining files after move
     vi.mocked(fs.readdirSync).mockReturnValue([]);
 
-    moveAttachment(baseParams);
+    await moveAttachment(baseParams);
 
-    expect(fs.rmdirSync).toHaveBeenCalledWith(
+    expect(fs.rmSync).toHaveBeenCalledWith(
       path.join(NP_PATH, 'Notes', 'Source Note_attachments'),
+      { recursive: true },
     );
   });
 
-  it('does NOT remove source folder when other files remain', () => {
+  it('does NOT remove source folder when other files remain', async () => {
     vi.mocked(getNote)
       .mockReturnValueOnce(sourceNote as any)
       .mockReturnValueOnce(destNote as any);
@@ -678,12 +715,12 @@ describe('moveAttachment', () => {
     // Other files remain
     vi.mocked(fs.readdirSync).mockReturnValue(['other.png'] as any);
 
-    moveAttachment(baseParams);
+    await moveAttachment(baseParams);
 
     expect(fs.rmdirSync).not.toHaveBeenCalled();
   });
 
-  it('falls back to copy+unlink when renameSync throws EXDEV', () => {
+  it('falls back to copy+unlink when renameSync throws EXDEV', async () => {
     vi.mocked(getNote)
       .mockReturnValueOnce(sourceNote as any)
       .mockReturnValueOnce(destNote as any);
@@ -695,7 +732,7 @@ describe('moveAttachment', () => {
       throw exdevError;
     });
 
-    const result = moveAttachment(baseParams);
+    const result = await moveAttachment(baseParams);
 
     expect(result.success).toBe(true);
     expect(fs.copyFileSync).toHaveBeenCalled();

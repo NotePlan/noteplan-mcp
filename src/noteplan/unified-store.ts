@@ -13,11 +13,16 @@ import { searchWithRipgrep, isRipgrepAvailable, RipgrepMatch } from './ripgrep-s
 import { fuzzySearch } from './fuzzy-search.js';
 import { parseFlexibleDateFilter, isDateInRange } from '../utils/date-filters.js';
 import { normalizeFilename } from '../utils/filename-normalize.js';
+import { getBridgeClient } from '../transport/bridge-availability.js';
 
 // Cache ripgrep availability check
 let ripgrepAvailable: boolean | null = null;
 const LIST_NOTES_CACHE_TTL_MS = 5000;
 const LIST_FOLDERS_CACHE_TTL_MS = 15000;
+// Tag listing crosses the bridge for local tags (fast via NoteCache) and
+// then iterates every TeamSpace note's content via regex (slow). Cache
+// the merged result per scope so repeat calls within the TTL are instant.
+const LIST_TAGS_CACHE_TTL_MS = 60_000;
 
 type CacheEntry<T> = {
   value: T;
@@ -26,6 +31,7 @@ type CacheEntry<T> = {
 
 const listNotesCache = new Map<string, CacheEntry<Note[]>>();
 const listFoldersCache = new Map<string, CacheEntry<Folder[]>>();
+const listTagsCache = new Map<string, CacheEntry<string[]>>();
 
 function getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
   const entry = cache.get(key);
@@ -48,6 +54,7 @@ function setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value
 function invalidateListingCaches(): void {
   listNotesCache.clear();
   listFoldersCache.clear();
+  listTagsCache.clear();
 }
 
 function normalizeLocalFolderFilter(folder?: string): string | undefined {
@@ -123,12 +130,12 @@ export interface RestoreNoteResult {
  * Returns undefined when the input is undefined/empty (pass-through for optional params).
  * Throws when a non-empty value doesn't match any known space.
  */
-export function resolveSpaceId(space: string | undefined): string | undefined {
+export async function resolveSpaceId(space: string | undefined): Promise<string | undefined> {
   if (!space) return undefined;
   const trimmed = space.trim();
   if (!trimmed) return undefined;
 
-  const spaces = sqliteReader.listSpaces();
+  const spaces = await sqliteReader.listSpaces();
 
   // Exact ID match takes priority (unambiguous)
   const idMatch = spaces.find((s) => s.id === trimmed);
@@ -156,23 +163,23 @@ export function resolveSpaceId(space: string | undefined): string | undefined {
 /**
  * Get a note by various identifiers
  */
-export function getNote(options: {
+export async function getNote(options: {
   id?: string;
   title?: string;
   filename?: string;
   date?: string;
   space?: string;
-}): Note | null {
+}): Promise<Note | null> {
   const { id, title, filename, date } = options;
-  const space = resolveSpaceId(options.space);
+  const space = await resolveSpaceId(options.space);
 
   // If ID is specified, get directly (best for space notes)
   if (id) {
     const normalizedId = normalizeFilename(id);
-    const spaceNote = sqliteReader.getSpaceNote(normalizedId);
+    const spaceNote = await sqliteReader.getSpaceNote(normalizedId);
     if (spaceNote) return spaceNote;
     // Fallback: for local notes, id === filename
-    const localNote = fileReader.readNoteFile(normalizedId);
+    const localNote = await fileReader.readNoteFile(normalizedId);
     if (localNote) return localNote;
     return null;
   }
@@ -181,7 +188,7 @@ export function getNote(options: {
   if (date) {
     const dateStr = parseFlexibleDate(date);
     if (space) {
-      return sqliteReader.getSpaceCalendarNote(dateStr, space);
+      return await sqliteReader.getSpaceCalendarNote(dateStr, space);
     }
     return fileReader.getCalendarNote(dateStr);
   }
@@ -191,13 +198,13 @@ export function getNote(options: {
     const normalizedFilename = normalizeFilename(filename.trim());
 
     if (space) {
-      const directSpaceNote = sqliteReader.getSpaceNote(normalizedFilename);
+      const directSpaceNote = await sqliteReader.getSpaceNote(normalizedFilename);
       if (directSpaceNote && directSpaceNote.spaceId === space) {
         return directSpaceNote;
       }
-      const scopedSpaceNote = sqliteReader
-        .listSpaceNotes(space)
-        .find((note) => note.filename === normalizedFilename || note.id === normalizedFilename);
+      const scopedSpaceNote = (await sqliteReader.listSpaceNotes(space)).find(
+        (note) => note.filename === normalizedFilename || note.id === normalizedFilename,
+      );
       if (scopedSpaceNote) {
         return scopedSpaceNote;
       }
@@ -205,24 +212,24 @@ export function getNote(options: {
 
     // Check if it's a space filename
     if (normalizedFilename.includes('%%NotePlanCloud%%')) {
-      return sqliteReader.getSpaceNote(normalizedFilename);
+      return await sqliteReader.getSpaceNote(normalizedFilename);
     }
-    const localNote = fileReader.readNoteFile(normalizedFilename);
+    const localNote = await fileReader.readNoteFile(normalizedFilename);
     if (localNote) return localNote;
-    return sqliteReader.getSpaceNote(normalizedFilename);
+    return await sqliteReader.getSpaceNote(normalizedFilename);
   }
 
   // If title is specified, search by title
   if (title) {
     if (space) {
-      return sqliteReader.getSpaceNoteByTitle(title, space);
+      return await sqliteReader.getSpaceNoteByTitle(title, space);
     }
     // Try local first
-    const localNote = fileReader.getNoteByTitle(title);
+    const localNote = await fileReader.getNoteByTitle(title);
     if (localNote) return localNote;
 
     // Try space
-    return sqliteReader.getSpaceNoteByTitle(title);
+    return await sqliteReader.getSpaceNoteByTitle(title);
   }
 
   return null;
@@ -231,13 +238,13 @@ export function getNote(options: {
 /**
  * List all notes, optionally filtered
  */
-export function listNotes(options: {
+export async function listNotes(options: {
   folder?: string;
   space?: string;
   type?: NoteType;
-} = {}): Note[] {
+} = {}): Promise<Note[]> {
   const { folder, type } = options;
-  const space = resolveSpaceId(options.space);
+  const space = await resolveSpaceId(options.space);
   const normalizedFolder = normalizeLocalFolderFilter(folder);
   const cacheKey = JSON.stringify({
     folder: normalizedFolder || '',
@@ -255,16 +262,16 @@ export function listNotes(options: {
   // Get local notes
   if (!space) {
     if (!type || type === 'note') {
-      notes.push(...fileReader.listProjectNotes(normalizedFolder));
+      notes.push(...(await fileReader.listProjectNotes(normalizedFolder)));
     }
     if ((!type || type === 'calendar') && !hasFolderScope) {
-      notes.push(...fileReader.listCalendarNotes());
+      notes.push(...(await fileReader.listCalendarNotes()));
     }
   }
 
   // Get space notes
   if (space || !hasFolderScope) {
-    notes.push(...sqliteReader.listSpaceNotes(space));
+    notes.push(...await sqliteReader.listSpaceNotes(space));
   }
 
   // Sort by modified date (newest first)
@@ -301,7 +308,7 @@ export interface SearchOptions {
 export interface SearchExecutionResult {
   results: SearchResult[];
   partialResults: boolean;
-  backend: 'ripgrep' | 'fallback' | 'simple';
+  backend: 'bridge' | 'ripgrep' | 'fallback' | 'simple' | 'sqlite';
   warnings: string[];
 }
 
@@ -313,7 +320,7 @@ export async function searchNotes(
   options: SearchOptions = {}
 ): Promise<SearchExecutionResult> {
   const { types, folder, limit = 50, fuzzy = false } = options;
-  const space = resolveSpaceId(options.space);
+  const space = await resolveSpaceId(options.space);
   const normalizedFolder = normalizeLocalFolderFilter(folder);
   const searchField = options.searchField ?? 'content';
   const effectiveTypes: NoteType[] | undefined =
@@ -321,7 +328,7 @@ export async function searchNotes(
   let results: SearchResult[] = [];
   let partialResults = false;
   const warnings: string[] = [];
-  let backend: 'ripgrep' | 'fallback' | 'simple' = 'simple';
+  let backend: 'bridge' | 'ripgrep' | 'fallback' | 'simple' | 'sqlite' = 'simple';
   const lowerQuery = query.toLowerCase();
 
   // Parse date filters
@@ -366,16 +373,16 @@ export async function searchNotes(
             maxResults: limit * 2, // Get extra for filtering
           });
 
-          backend = 'ripgrep';
+          backend = rgResult.backend;
           partialResults = rgResult.partialResults;
           if (rgResult.warning) warnings.push(rgResult.warning);
-          results.push(...convertRipgrepToSearchResults(rgResult.matches));
+          results.push(...(await convertRipgrepToSearchResults(rgResult.matches)));
         } catch (error) {
           console.error('Ripgrep search failed:', error);
           backend = 'fallback';
           warnings.push('ripgrep failed; using fallback local search');
           // Fall back to simple search
-          const localNotes = fileReader.searchLocalNotes(query, {
+          const localNotes = await fileReader.searchLocalNotes(query, {
             types: effectiveTypes,
             folder: normalizedFolder,
             limit: limit * 2,
@@ -386,7 +393,7 @@ export async function searchNotes(
         backend = 'simple';
         warnings.push('ripgrep unavailable; using fallback local search');
         // Fallback to original search method
-        const localNotes = fileReader.searchLocalNotes(query, {
+        const localNotes = await fileReader.searchLocalNotes(query, {
           types: effectiveTypes,
           folder: normalizedFolder,
           limit: limit * 2,
@@ -396,7 +403,7 @@ export async function searchNotes(
     }
 
     // Search space notes
-    const spaceNotes = sqliteReader.searchSpaceNotesFTS(query, { spaceId: space, limit: limit * 2 });
+    const spaceNotes = await sqliteReader.searchSpaceNotesFTS(query, { spaceId: space, limit: limit * 2 });
     for (const note of spaceNotes) {
       results.push({
         note,
@@ -404,15 +411,22 @@ export async function searchNotes(
         score: 50, // Base score, will be enhanced below
       });
     }
+
+    // Space-only search: relabel backend so callers can tell whether the
+    // space query went through bridge or sqlite-direct. Local content
+    // search (ripgrep/fallback) didn't run in this branch.
+    if (space) {
+      backend = (await getBridgeClient()) ? 'bridge' : 'sqlite';
+    }
   } else {
     backend = 'simple';
     warnings.push(
       `searchField=${searchField} performs metadata matching on titles/filenames (not full-text content search).`
     );
-    const candidates = listNotes({
+    const candidates = (await listNotes({
       folder: normalizedFolder,
       space,
-    }).filter((note) => !effectiveTypes || effectiveTypes.includes(note.type));
+    })).filter((note) => !effectiveTypes || effectiveTypes.includes(note.type));
 
     results = candidates
       .map((note) => scoreMetadataMatch(note, query, searchField, options.caseSensitive === true))
@@ -646,7 +660,7 @@ function noteToSearchResult(note: Note, query: string): SearchResult {
 /**
  * Convert ripgrep matches to SearchResults
  */
-function convertRipgrepToSearchResults(matches: RipgrepMatch[]): SearchResult[] {
+async function convertRipgrepToSearchResults(matches: RipgrepMatch[]): Promise<SearchResult[]> {
   // Group matches by file
   const byFile = new Map<string, RipgrepMatch[]>();
   for (const m of matches) {
@@ -657,7 +671,7 @@ function convertRipgrepToSearchResults(matches: RipgrepMatch[]): SearchResult[] 
 
   const results: SearchResult[] = [];
   for (const [file, fileMatches] of byFile) {
-    const note = fileReader.readNoteFile(file);
+    const note = await fileReader.readNoteFile(file);
     if (note) {
       results.push({
         note,
@@ -787,7 +801,7 @@ function calculateScore(note: Note, matches: SearchMatch[], query: string): numb
 /**
  * Create a new note with smart folder matching
  */
-export function createNote(
+export async function createNote(
   title: string,
   content?: string,
   options: {
@@ -795,7 +809,7 @@ export function createNote(
     space?: string;
     createNewFolder?: boolean;
   } = {}
-): CreateNoteResult {
+): Promise<CreateNoteResult> {
   const { folder, space, createNewFolder = false } = options;
 
   // Initialize folder resolution info
@@ -830,10 +844,10 @@ export function createNote(
     }
   }
 
-  const resolvedSpace = resolveSpaceId(space);
+  const resolvedSpace = await resolveSpaceId(space);
   if (resolvedSpace) {
     const filename = sqliteWriter.createSpaceNote(resolvedSpace, title, effectiveContent);
-    const note = sqliteReader.getSpaceNote(filename);
+    const note = await sqliteReader.getSpaceNote(filename);
     if (!note) throw new Error('Failed to create space note');
     invalidateListingCaches();
     return { note, folderResolution };
@@ -843,7 +857,7 @@ export function createNote(
   let resolvedFolder = folder;
 
   if (folder && !createNewFolder) {
-    const folders = fileReader.listFolders();
+    const folders = await fileReader.listFolders();
     const match = matchFolder(folder, folders);
 
     if (match.matched && match.folder) {
@@ -856,8 +870,8 @@ export function createNote(
     }
   }
 
-  const filename = fileWriter.createProjectNote(title, effectiveContent, resolvedFolder);
-  const note = fileReader.readNoteFile(filename);
+  const filename = await fileWriter.createProjectNote(title, effectiveContent, resolvedFolder);
+  const note = await fileReader.readNoteFile(filename);
   if (!note) throw new Error('Failed to create note');
   invalidateListingCaches();
   return { note, folderResolution };
@@ -866,27 +880,27 @@ export function createNote(
 /**
  * Update a note's content
  */
-export function updateNote(
+export async function updateNote(
   identifier: string,
   content: string,
   options: { source?: Note['source'] } = {}
-): Note {
-  const updateSpace = (spaceIdentifier: string): Note => {
-    const existing = sqliteReader.getSpaceNote(spaceIdentifier);
+): Promise<Note> {
+  const updateSpace = async (spaceIdentifier: string): Promise<Note> => {
+    const existing = await sqliteReader.getSpaceNote(spaceIdentifier);
     if (!existing) {
       throw new Error(`Note not found: ${spaceIdentifier}`);
     }
     const writeIdentifier = existing.id || spaceIdentifier;
     sqliteWriter.updateSpaceNote(writeIdentifier, content);
-    const note = sqliteReader.getSpaceNote(writeIdentifier);
+    const note = await sqliteReader.getSpaceNote(writeIdentifier);
     if (!note) throw new Error('Note not found after update');
     invalidateListingCaches();
     return note;
   };
 
-  const updateLocal = (localIdentifier: string): Note => {
-    fileWriter.updateNote(localIdentifier, content);
-    const note = fileReader.readNoteFile(localIdentifier);
+  const updateLocal = async (localIdentifier: string): Promise<Note> => {
+    await fileWriter.updateNote(localIdentifier, content);
+    const note = await fileReader.readNoteFile(localIdentifier);
     if (!note) throw new Error('Note not found after update');
     invalidateListingCaches();
     return note;
@@ -903,8 +917,8 @@ export function updateNote(
     return updateSpace(identifier);
   }
 
-  const localNote = fileReader.readNoteFile(identifier);
-  const spaceNote = sqliteReader.getSpaceNote(identifier);
+  const localNote = await fileReader.readNoteFile(identifier);
+  const spaceNote = await sqliteReader.getSpaceNote(identifier);
 
   if (localNote) {
     return updateLocal(localNote.filename);
@@ -919,8 +933,8 @@ export function updateNote(
 /**
  * Delete a note
  */
-export function deleteNote(identifier: string): DeleteNoteResult {
-  const note = getNoteByIdentifierOrThrow(identifier);
+export async function deleteNote(identifier: string): Promise<DeleteNoteResult> {
+  const note = await getNoteByIdentifierOrThrow(identifier);
   if (note.source === 'space') {
     const moved = sqliteWriter.deleteSpaceNote(note.id || note.filename);
     invalidateListingCaches();
@@ -932,7 +946,7 @@ export function deleteNote(identifier: string): DeleteNoteResult {
     };
   }
 
-  const trashedPath = fileWriter.deleteNote(note.filename);
+  const trashedPath = await fileWriter.deleteNote(note.filename);
   invalidateListingCaches();
   return {
     source: 'local',
@@ -941,11 +955,11 @@ export function deleteNote(identifier: string): DeleteNoteResult {
   };
 }
 
-function getNoteByIdentifierOrThrow(
+async function getNoteByIdentifierOrThrow(
   identifier: string,
   options: { allowTrash?: boolean } = {}
-): Note {
-  const note = getNote({ id: identifier }) ?? getNote({ filename: identifier });
+): Promise<Note> {
+  const note = (await getNote({ id: identifier })) ?? (await getNote({ filename: identifier }));
   if (!note) {
     throw new Error('Note not found');
   }
@@ -955,8 +969,8 @@ function getNoteByIdentifierOrThrow(
   return note;
 }
 
-function getLocalProjectNoteOrThrow(identifier: string, action: string): Note {
-  const note = getNoteByIdentifierOrThrow(identifier);
+async function getLocalProjectNoteOrThrow(identifier: string, action: string): Promise<Note> {
+  const note = await getNoteByIdentifierOrThrow(identifier);
   if (note.source !== 'local') {
     throw new Error(`${action} is currently supported for local notes only`);
   }
@@ -966,11 +980,11 @@ function getLocalProjectNoteOrThrow(identifier: string, action: string): Note {
   return note;
 }
 
-function resolveSpaceMoveDestination(
+async function resolveSpaceMoveDestination(
   note: Note,
   destinationFolder: string,
   options: { allowTrashDestination?: boolean } = {}
-): { id: string; label: string } {
+): Promise<{ id: string; label: string }> {
   const query = destinationFolder.trim();
   if (!query) {
     throw new Error('Destination folder is required');
@@ -987,7 +1001,7 @@ function resolveSpaceMoveDestination(
     };
   }
 
-  const folder = sqliteReader.resolveSpaceFolder(note.spaceId, query, { includeTrash: true });
+  const folder = await sqliteReader.resolveSpaceFolder(note.spaceId, query, { includeTrash: true });
   if (!folder?.id) {
     throw new Error(`Destination folder not found in space: ${destinationFolder}`);
   }
@@ -1001,14 +1015,14 @@ function resolveSpaceMoveDestination(
   };
 }
 
-export function previewMoveNote(identifier: string, destinationFolder: string): MoveNoteResult {
-  const note = getNoteByIdentifierOrThrow(identifier);
+export async function previewMoveNote(identifier: string, destinationFolder: string): Promise<MoveNoteResult> {
+  const note = await getNoteByIdentifierOrThrow(identifier);
 
   if (note.source === 'space') {
     if (note.type !== 'note') {
       throw new Error('Moving calendar notes in TeamSpaces is not supported');
     }
-    const destination = resolveSpaceMoveDestination(note, destinationFolder);
+    const destination = await resolveSpaceMoveDestination(note, destinationFolder);
     return {
       note,
       fromFilename: note.filename,
@@ -1018,22 +1032,22 @@ export function previewMoveNote(identifier: string, destinationFolder: string): 
     };
   }
 
-  const preview = fileWriter.previewMoveLocalNote(note.filename, destinationFolder);
+  const preview = await fileWriter.previewMoveLocalNote(note.filename, destinationFolder);
   return {
     note,
     ...preview,
   };
 }
 
-export function moveNote(identifier: string, destinationFolder: string): MoveNoteResult {
-  const preview = previewMoveNote(identifier, destinationFolder);
+export async function moveNote(identifier: string, destinationFolder: string): Promise<MoveNoteResult> {
+  const preview = await previewMoveNote(identifier, destinationFolder);
 
   if (preview.note.source === 'space') {
     if (!preview.note.id || !preview.destinationParentId) {
       throw new Error('Could not resolve TeamSpace move target');
     }
     sqliteWriter.moveSpaceNote(preview.note.id, preview.destinationParentId);
-    const movedNote = sqliteReader.getSpaceNote(preview.note.id);
+    const movedNote = await sqliteReader.getSpaceNote(preview.note.id);
     if (!movedNote) {
       throw new Error('Failed to read note after move');
     }
@@ -1047,8 +1061,8 @@ export function moveNote(identifier: string, destinationFolder: string): MoveNot
     };
   }
 
-  const nextFilename = fileWriter.moveLocalNote(preview.note.filename, destinationFolder);
-  const movedNote = fileReader.readNoteFile(nextFilename);
+  const nextFilename = await fileWriter.moveLocalNote(preview.note.filename, destinationFolder);
+  const movedNote = await fileReader.readNoteFile(nextFilename);
   if (!movedNote) {
     throw new Error('Failed to read note after move');
   }
@@ -1061,21 +1075,21 @@ export function moveNote(identifier: string, destinationFolder: string): MoveNot
   };
 }
 
-export function previewRestoreNote(
+export async function previewRestoreNote(
   identifier: string,
   destinationFolder?: string
-): RestoreNoteResult {
-  const note = getNoteByIdentifierOrThrow(identifier, { allowTrash: true });
+): Promise<RestoreNoteResult> {
+  const note = await getNoteByIdentifierOrThrow(identifier, { allowTrash: true });
 
   if (note.source === 'space') {
     if (!note.id) {
       throw new Error('Space note ID is required for restore');
     }
-    if (!sqliteReader.isSpaceNoteInTrash(note.id)) {
+    if (!await sqliteReader.isSpaceNoteInTrash(note.id)) {
       throw new Error('Note is not in TeamSpace @Trash');
     }
     const destination = destinationFolder
-      ? resolveSpaceMoveDestination(note, destinationFolder)
+      ? await resolveSpaceMoveDestination(note, destinationFolder)
       : { id: note.spaceId || '', label: note.spaceId || '' };
     if (!destination.id) {
       throw new Error('Could not resolve TeamSpace restore destination');
@@ -1091,11 +1105,11 @@ export function previewRestoreNote(
   if (note.type !== 'trash') {
     throw new Error('Local note is not in @Trash');
   }
-  const preview = fileWriter.previewRestoreLocalNoteFromTrash(
+  const preview = await fileWriter.previewRestoreLocalNoteFromTrash(
     note.filename,
     destinationFolder && destinationFolder.trim().length > 0 ? destinationFolder : 'Notes'
   );
-  const restoredNote = fileReader.readNoteFile(preview.fromFilename);
+  const restoredNote = await fileReader.readNoteFile(preview.fromFilename);
   if (!restoredNote) {
     throw new Error('Failed to read local trash note');
   }
@@ -1107,12 +1121,12 @@ export function previewRestoreNote(
   };
 }
 
-export function restoreNote(identifier: string, destinationFolder?: string): RestoreNoteResult {
-  const preview = previewRestoreNote(identifier, destinationFolder);
+export async function restoreNote(identifier: string, destinationFolder?: string): Promise<RestoreNoteResult> {
+  const preview = await previewRestoreNote(identifier, destinationFolder);
 
   if (preview.source === 'space') {
     sqliteWriter.restoreSpaceNote(preview.fromIdentifier, preview.toIdentifier);
-    const restoredNote = sqliteReader.getSpaceNote(preview.fromIdentifier);
+    const restoredNote = await sqliteReader.getSpaceNote(preview.fromIdentifier);
     if (!restoredNote) {
       throw new Error('Failed to read TeamSpace note after restore');
     }
@@ -1125,11 +1139,11 @@ export function restoreNote(identifier: string, destinationFolder?: string): Res
     };
   }
 
-  const restoredFilename = fileWriter.restoreLocalNoteFromTrash(
+  const restoredFilename = await fileWriter.restoreLocalNoteFromTrash(
     preview.fromIdentifier,
     destinationFolder && destinationFolder.trim().length > 0 ? destinationFolder : 'Notes'
   );
-  const restoredNote = fileReader.readNoteFile(restoredFilename);
+  const restoredNote = await fileReader.readNoteFile(restoredFilename);
   if (!restoredNote) {
     throw new Error('Failed to read local note after restore');
   }
@@ -1142,27 +1156,27 @@ export function restoreNote(identifier: string, destinationFolder?: string): Res
   };
 }
 
-export function previewRenameNoteFile(
+export async function previewRenameNoteFile(
   filename: string,
   newFilename: string,
   keepExtension = true
-): RenameNoteFileResult {
-  const note = getLocalProjectNoteOrThrow(filename, 'Rename note file');
-  const preview = fileWriter.previewRenameLocalNoteFile(note.filename, newFilename, keepExtension);
+): Promise<RenameNoteFileResult> {
+  const note = await getLocalProjectNoteOrThrow(filename, 'Rename note file');
+  const preview = await fileWriter.previewRenameLocalNoteFile(note.filename, newFilename, keepExtension);
   return {
     note,
     ...preview,
   };
 }
 
-export function renameNoteFile(
+export async function renameNoteFile(
   filename: string,
   newFilename: string,
   keepExtension = true
-): RenameNoteFileResult {
-  const preview = previewRenameNoteFile(filename, newFilename, keepExtension);
-  const nextFilename = fileWriter.renameLocalNoteFile(filename, newFilename, keepExtension);
-  const renamedNote = fileReader.readNoteFile(nextFilename);
+): Promise<RenameNoteFileResult> {
+  const preview = await previewRenameNoteFile(filename, newFilename, keepExtension);
+  const nextFilename = await fileWriter.renameLocalNoteFile(filename, newFilename, keepExtension);
+  const renamedNote = await fileReader.readNoteFile(nextFilename);
   if (!renamedNote) {
     throw new Error('Failed to read note after rename');
   }
@@ -1174,11 +1188,11 @@ export function renameNoteFile(
   };
 }
 
-export function renameSpaceNote(
+export async function renameSpaceNote(
   identifier: string,
   newTitle: string
-): RenameSpaceNoteResult {
-  const note = getNoteByIdentifierOrThrow(identifier);
+): Promise<RenameSpaceNoteResult> {
+  const note = await getNoteByIdentifierOrThrow(identifier);
   if (note.source !== 'space') {
     throw new Error('renameSpaceNote is for TeamSpace notes only');
   }
@@ -1188,7 +1202,7 @@ export function renameSpaceNote(
   const fromTitle = note.title;
   const writeId = note.id || note.filename;
   sqliteWriter.updateSpaceNoteTitle(writeId, newTitle);
-  const renamedNote = sqliteReader.getSpaceNote(writeId);
+  const renamedNote = await sqliteReader.getSpaceNote(writeId);
   if (!renamedNote) {
     throw new Error('Failed to read note after rename');
   }
@@ -1203,7 +1217,7 @@ export function renameSpaceNote(
 /**
  * Get today's daily note
  */
-export function getTodayNote(space?: string): Note | null {
+export async function getTodayNote(space?: string): Promise<Note | null> {
   const dateStr = getTodayDateString();
   return getCalendarNote(dateStr, space);
 }
@@ -1211,12 +1225,12 @@ export function getTodayNote(space?: string): Note | null {
 /**
  * Get a calendar note by date
  */
-export function getCalendarNote(date: string, space?: string): Note | null {
+export async function getCalendarNote(date: string, space?: string): Promise<Note | null> {
   const dateStr = parseFlexibleDate(date);
-  const resolvedSpace = resolveSpaceId(space);
+  const resolvedSpace = await resolveSpaceId(space);
 
   if (resolvedSpace) {
-    return sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
+    return await sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
   }
 
   return fileReader.getCalendarNote(dateStr);
@@ -1225,23 +1239,23 @@ export function getCalendarNote(date: string, space?: string): Note | null {
 /**
  * Ensure a calendar note exists, create if not
  */
-export function ensureCalendarNote(date: string, space?: string): Note {
+export async function ensureCalendarNote(date: string, space?: string): Promise<Note> {
   const dateStr = parseFlexibleDate(date);
-  const resolvedSpace = resolveSpaceId(space);
+  const resolvedSpace = await resolveSpaceId(space);
 
   if (resolvedSpace) {
-    let note = sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
+    let note = await sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
     if (!note) {
       sqliteWriter.createSpaceCalendarNote(resolvedSpace, dateStr, '');
-      note = sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
+      note = await sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
       invalidateListingCaches();
     }
     if (!note) throw new Error('Failed to create space calendar note');
     return note;
   }
 
-  const filename = fileWriter.ensureCalendarNote(dateStr);
-  const note = fileReader.readNoteFile(filename);
+  const filename = await fileWriter.ensureCalendarNote(dateStr);
+  const note = await fileReader.readNoteFile(filename);
   if (!note) throw new Error('Failed to create calendar note');
   invalidateListingCaches();
   return note;
@@ -1250,12 +1264,12 @@ export function ensureCalendarNote(date: string, space?: string): Note {
 /**
  * Add content to today's note
  */
-export function addToToday(
+export async function addToToday(
   content: string,
   position: 'start' | 'end' = 'end',
   space?: string
-): Note {
-  const note = ensureCalendarNote('today', space);
+): Promise<Note> {
+  const note = await ensureCalendarNote('today', space);
 
   let newContent: string;
   if (position === 'start') {
@@ -1283,8 +1297,8 @@ export function addToToday(
 /**
  * List all spaces
  */
-export function listSpaces(): Space[] {
-  return sqliteReader.listSpaces();
+export async function listSpaces(): Promise<Space[]> {
+  return await sqliteReader.listSpaces();
 }
 
 // Keep old name for backwards compatibility
@@ -1380,8 +1394,8 @@ export type FolderRenameResult = LocalFolderRenameResult | SpaceFolderRenameResu
 /**
  * List folders with optional source/depth/query filtering
  */
-export function listFolders(options: ListFoldersOptions = {}): Folder[] {
-  const resolvedSpace = resolveSpaceId(options.space);
+export async function listFolders(options: ListFoldersOptions = {}): Promise<Folder[]> {
+  const resolvedSpace = await resolveSpaceId(options.space);
   const {
     includeLocal = !resolvedSpace,
     includeSpaces = Boolean(resolvedSpace),
@@ -1409,11 +1423,11 @@ export function listFolders(options: ListFoldersOptions = {}): Folder[] {
   const folders: Folder[] = [];
 
   if (includeLocal) {
-    folders.push(...fileReader.listFolders(maxDepth));
+    folders.push(...(await fileReader.listFolders(maxDepth)));
   }
 
   if (includeSpaces) {
-    folders.push(...sqliteReader.listSpaceFolders(space));
+    folders.push(...await sqliteReader.listSpaceFolders(space));
   }
 
   const deduped = folders.filter((folder, index, arr) => {
@@ -1448,11 +1462,11 @@ export function listFolders(options: ListFoldersOptions = {}): Folder[] {
   return setCachedValue(listFoldersCache, cacheKey, filtered, LIST_FOLDERS_CACHE_TTL_MS);
 }
 
-function resolveSpaceFolderReference(
+async function resolveSpaceFolderReference(
   spaceId: string,
   reference: string,
   options: { allowRoot?: boolean; includeTrash?: boolean } = {}
-): { id: string; path: string; name: string } {
+): Promise<{ id: string; path: string; name: string }> {
   const normalized = reference.trim();
   if (!normalized) {
     throw new Error('Folder reference is required');
@@ -1460,7 +1474,7 @@ function resolveSpaceFolderReference(
 
   const lower = normalized.toLowerCase();
   if (options.allowRoot === true && (lower === 'root' || lower === 'space-root' || normalized === spaceId)) {
-    const space = sqliteReader.listSpaces().find((candidate) => candidate.id === spaceId);
+    const space = (await sqliteReader.listSpaces()).find((candidate) => candidate.id === spaceId);
     return {
       id: spaceId,
       path: space?.name || spaceId,
@@ -1468,7 +1482,7 @@ function resolveSpaceFolderReference(
     };
   }
 
-  const folder = sqliteReader.resolveSpaceFolder(spaceId, normalized, {
+  const folder = await sqliteReader.resolveSpaceFolder(spaceId, normalized, {
     includeTrash: options.includeTrash === true,
   });
   if (!folder?.id) {
@@ -1482,11 +1496,11 @@ function resolveSpaceFolderReference(
   };
 }
 
-export function previewCreateFolder(
+export async function previewCreateFolder(
   options: { path: string } | { space: string; name: string; parent?: string }
-): FolderCreateResult {
+): Promise<FolderCreateResult> {
   if ('space' in options) {
-    const spaceId = resolveSpaceId(options.space.trim());
+    const spaceId = await resolveSpaceId(options.space.trim());
     if (!spaceId) {
       throw new Error('space is required');
     }
@@ -1496,8 +1510,8 @@ export function previewCreateFolder(
     }
     const parent = options.parent?.trim();
     const destination = parent
-      ? resolveSpaceFolderReference(spaceId, parent, { allowRoot: true, includeTrash: true })
-      : resolveSpaceFolderReference(spaceId, spaceId, { allowRoot: true, includeTrash: true });
+      ? await resolveSpaceFolderReference(spaceId, parent, { allowRoot: true, includeTrash: true })
+      : await resolveSpaceFolderReference(spaceId, spaceId, { allowRoot: true, includeTrash: true });
     if (destination.name.toLowerCase() === '@trash') {
       throw new Error('Destination parent cannot be @Trash');
     }
@@ -1512,7 +1526,7 @@ export function previewCreateFolder(
     };
   }
 
-  const folder = fileWriter.previewCreateFolder(options.path);
+  const folder = await fileWriter.previewCreateFolder(options.path);
   return {
     source: 'local',
     path: folder,
@@ -1520,10 +1534,10 @@ export function previewCreateFolder(
   };
 }
 
-export function createFolder(
+export async function createFolder(
   options: { path: string } | { space: string; name: string; parent?: string }
-): FolderCreateResult {
-  const preview = previewCreateFolder(options);
+): Promise<FolderCreateResult> {
+  const preview = await previewCreateFolder(options);
   if ('space' in options) {
     if (preview.source !== 'space') {
       throw new Error('Invalid folder create state');
@@ -1533,7 +1547,7 @@ export function createFolder(
       preview.name,
       preview.parentId
     );
-    const createdFolder = resolveSpaceFolderReference(preview.spaceId, createdId, {
+    const createdFolder = await resolveSpaceFolderReference(preview.spaceId, createdId, {
       allowRoot: false,
       includeTrash: true,
     });
@@ -1548,7 +1562,7 @@ export function createFolder(
     };
   }
 
-  const createdPath = fileWriter.createFolder(options.path);
+  const createdPath = await fileWriter.createFolder(options.path);
   invalidateListingCaches();
   return {
     source: 'local',
@@ -1557,21 +1571,21 @@ export function createFolder(
   };
 }
 
-export function previewMoveFolder(
+export async function previewMoveFolder(
   options:
     | { sourcePath: string; destinationFolder: string }
     | { space: string; source: string; destination: string }
-): FolderMoveResult {
+): Promise<FolderMoveResult> {
   if ('space' in options) {
-    const spaceId = resolveSpaceId(options.space.trim());
+    const spaceId = await resolveSpaceId(options.space.trim());
     if (!spaceId) {
       throw new Error('space is required');
     }
-    const source = resolveSpaceFolderReference(spaceId, options.source, {
+    const source = await resolveSpaceFolderReference(spaceId, options.source, {
       allowRoot: false,
       includeTrash: true,
     });
-    const destination = resolveSpaceFolderReference(spaceId, options.destination, {
+    const destination = await resolveSpaceFolderReference(spaceId, options.destination, {
       allowRoot: true,
       includeTrash: true,
     });
@@ -1579,7 +1593,7 @@ export function previewMoveFolder(
       throw new Error('Destination folder cannot be @Trash');
     }
 
-    const counts = sqliteReader.countSpaceFolderContents(source.id);
+    const counts = await sqliteReader.countSpaceFolderContents(source.id);
     return {
       source: 'space',
       spaceId,
@@ -1592,9 +1606,9 @@ export function previewMoveFolder(
     };
   }
 
-  const preview = fileWriter.previewMoveLocalFolder(options.sourcePath, options.destinationFolder);
+  const preview = await fileWriter.previewMoveLocalFolder(options.sourcePath, options.destinationFolder);
   const fullPath = path.join(fileReader.getNotesPath(), preview.fromFolder);
-  const counts = fileReader.countNotesInDirectory(fullPath);
+  const counts = await fileReader.countNotesInDirectory(fullPath);
   return {
     source: 'local',
     fromPath: preview.fromFolder,
@@ -1605,18 +1619,18 @@ export function previewMoveFolder(
   };
 }
 
-export function moveFolder(
+export async function moveFolder(
   options:
     | { sourcePath: string; destinationFolder: string }
     | { space: string; source: string; destination: string }
-): FolderMoveResult {
-  const preview = previewMoveFolder(options);
+): Promise<FolderMoveResult> {
+  const preview = await previewMoveFolder(options);
   if ('space' in options) {
     if (preview.source !== 'space') {
       throw new Error('Invalid folder move state');
     }
     sqliteWriter.moveSpaceFolder(preview.folderId, preview.destinationParentId);
-    const moved = resolveSpaceFolderReference(preview.spaceId, preview.folderId, {
+    const moved = await resolveSpaceFolderReference(preview.spaceId, preview.folderId, {
       allowRoot: false,
       includeTrash: true,
     });
@@ -1627,7 +1641,7 @@ export function moveFolder(
     };
   }
 
-  const moved = fileWriter.moveLocalFolder(options.sourcePath, options.destinationFolder);
+  const moved = await fileWriter.moveLocalFolder(options.sourcePath, options.destinationFolder);
   invalidateListingCaches();
   return {
     source: 'local',
@@ -1637,19 +1651,19 @@ export function moveFolder(
   };
 }
 
-export function previewDeleteFolder(
+export async function previewDeleteFolder(
   options: { path: string } | { space: string; source: string }
-): FolderDeleteResult {
+): Promise<FolderDeleteResult> {
   if ('space' in options) {
-    const spaceId = resolveSpaceId(options.space.trim());
+    const spaceId = await resolveSpaceId(options.space.trim());
     if (!spaceId) {
       throw new Error('space is required');
     }
-    const source = resolveSpaceFolderReference(spaceId, options.source, {
+    const source = await resolveSpaceFolderReference(spaceId, options.source, {
       allowRoot: false,
       includeTrash: true,
     });
-    const counts = sqliteReader.countSpaceFolderContents(source.id);
+    const counts = await sqliteReader.countSpaceFolderContents(source.id);
     return {
       source: 'space',
       spaceId,
@@ -1661,9 +1675,9 @@ export function previewDeleteFolder(
     };
   }
 
-  const normalized = fileWriter.previewDeleteLocalFolder(options.path);
+  const normalized = await fileWriter.previewDeleteLocalFolder(options.path);
   const fullPath = path.join(fileReader.getNotesPath(), normalized);
-  const counts = fileReader.countNotesInDirectory(fullPath);
+  const counts = await fileReader.countNotesInDirectory(fullPath);
   return {
     source: 'local',
     fromPath: normalized,
@@ -1673,10 +1687,10 @@ export function previewDeleteFolder(
   };
 }
 
-export function deleteFolder(
+export async function deleteFolder(
   options: { path: string } | { space: string; source: string }
-): FolderDeleteResult {
-  const preview = previewDeleteFolder(options);
+): Promise<FolderDeleteResult> {
+  const preview = await previewDeleteFolder(options);
   if ('space' in options) {
     if (preview.source !== 'space') {
       throw new Error('Invalid folder delete state');
@@ -1692,7 +1706,7 @@ export function deleteFolder(
     };
   }
 
-  const trashedPath = fileWriter.deleteLocalFolder(options.path);
+  const trashedPath = await fileWriter.deleteLocalFolder(options.path);
   invalidateListingCaches();
   return {
     source: 'local',
@@ -1701,17 +1715,17 @@ export function deleteFolder(
   };
 }
 
-export function previewRenameFolder(
+export async function previewRenameFolder(
   options:
     | { sourcePath: string; newName: string }
     | { space: string; source: string; newName: string }
-): FolderRenameResult {
+): Promise<FolderRenameResult> {
   if ('space' in options) {
-    const spaceId = resolveSpaceId(options.space.trim());
+    const spaceId = await resolveSpaceId(options.space.trim());
     if (!spaceId) {
       throw new Error('space is required');
     }
-    const source = resolveSpaceFolderReference(spaceId, options.source, {
+    const source = await resolveSpaceFolderReference(spaceId, options.source, {
       allowRoot: false,
       includeTrash: true,
     });
@@ -1732,7 +1746,7 @@ export function previewRenameFolder(
     };
   }
 
-  const preview = fileWriter.previewRenameLocalFolder(options.sourcePath, options.newName);
+  const preview = await fileWriter.previewRenameLocalFolder(options.sourcePath, options.newName);
   return {
     source: 'local',
     fromPath: preview.fromFolder,
@@ -1740,18 +1754,18 @@ export function previewRenameFolder(
   };
 }
 
-export function renameFolder(
+export async function renameFolder(
   options:
     | { sourcePath: string; newName: string }
     | { space: string; source: string; newName: string }
-): FolderRenameResult {
-  const preview = previewRenameFolder(options);
+): Promise<FolderRenameResult> {
+  const preview = await previewRenameFolder(options);
   if ('space' in options) {
     if (preview.source !== 'space') {
       throw new Error('Invalid folder rename state');
     }
     const renamed = sqliteWriter.renameSpaceFolder(preview.folderId, preview.name);
-    const folder = resolveSpaceFolderReference(preview.spaceId, renamed.folderId, {
+    const folder = await resolveSpaceFolderReference(preview.spaceId, renamed.folderId, {
       allowRoot: false,
       includeTrash: true,
     });
@@ -1762,7 +1776,7 @@ export function renameFolder(
     };
   }
 
-  const renamed = fileWriter.renameLocalFolder(options.sourcePath, options.newName);
+  const renamed = await fileWriter.renameLocalFolder(options.sourcePath, options.newName);
   invalidateListingCaches();
   return {
     source: 'local',
@@ -1774,15 +1788,19 @@ export function renameFolder(
 /**
  * List all tags
  */
-export function listTags(space?: string): string[] {
-  const resolvedSpace = resolveSpaceId(space);
+export async function listTags(space?: string): Promise<string[]> {
+  const resolvedSpace = await resolveSpaceId(space);
+  const cacheKey = resolvedSpace ?? '__all__';
+  const cached = getCachedValue(listTagsCache, cacheKey);
+  if (cached) return cached;
+
   const tags = new Set<string>();
 
   if (!resolvedSpace) {
-    fileReader.extractAllTags().forEach((tag) => tags.add(tag));
+    (await fileReader.extractAllTags()).forEach((tag) => tags.add(tag));
   }
 
-  sqliteReader.extractSpaceTags(resolvedSpace).forEach((tag) => tags.add(tag));
+  (await sqliteReader.extractSpaceTags(resolvedSpace)).forEach((tag) => tags.add(tag));
 
-  return Array.from(tags).sort();
+  return setCachedValue(listTagsCache, cacheKey, Array.from(tags).sort(), LIST_TAGS_CACHE_TTL_MS);
 }

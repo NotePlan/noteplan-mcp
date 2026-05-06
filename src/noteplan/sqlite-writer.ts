@@ -762,7 +762,7 @@ export function renameSpaceFolder(identifier: string, title: string): SpaceRenam
 /**
  * Get the default space ID (first one found)
  */
-export function getDefaultSpaceId(): string | null {
-  const spaces = listSpaces();
+export async function getDefaultSpaceId(): Promise<string | null> {
+  const spaces = await listSpaces();
   return spaces.length > 0 ? spaces[0].id : null;
 }

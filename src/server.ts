@@ -34,6 +34,7 @@ import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVA
 import { isReadOnly, isSkipDryRun } from './utils/server-config.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
 import { getDatabase, getDatabasePath, listSpaces as listSpacesFromDb } from './noteplan/sqlite-reader.js';
+import { getBridgeClient } from './transport/bridge-availability.js';
 
 type ToolDefinition = {
   name: string;
@@ -266,7 +267,7 @@ const PERIOD_TYPE_MAP: Record<string, string> = {
   year: 'yearly',
 };
 
-function dispatchGetNotes(args: Record<string, unknown>): unknown {
+async function dispatchGetNotes(args: Record<string, unknown>): Promise<unknown> {
   const {
     resolve, resolveQuery, id, title, filename, date, period, count,
     rangePeriod, startDate, endDate, folder, space, types, query,
@@ -1024,8 +1025,9 @@ export function createServer(): Server {
     const database = getDatabase();
     const writable = database ? 'read-write' : 'unavailable';
     console.error(`[noteplan-mcp] Space database: ${dbPath} (${writable})`);
-    const spaces = listSpacesFromDb();
-    console.error(`[noteplan-mcp] Spaces discovered: ${spaces.length}`);
+    listSpacesFromDb()
+      .then((spaces) => console.error(`[noteplan-mcp] Spaces discovered: ${spaces.length}`))
+      .catch((err) => console.error('[noteplan-mcp] Failed to list spaces:', err));
   } else {
     console.error('[noteplan-mcp] Space database: not found');
   }
@@ -2648,12 +2650,12 @@ export function createServer(): Server {
       switch (normalizedName) {
         // ── Primary consolidated tools ──
         case 'noteplan_get_notes':
-          result = dispatchGetNotes((args ?? {}) as Record<string, unknown>);
+          result = await dispatchGetNotes((args ?? {}) as Record<string, unknown>);
           break;
         case 'noteplan_search': {
           const searchAction = (args as any)?.action;
           if (searchAction === 'list_tags') {
-            result = spaceTools.listTags(args as any);
+            result = await spaceTools.listTags(args as any);
           } else {
             result = await searchTools.searchNotes(args as any);
           }
@@ -2667,14 +2669,14 @@ export function createServer(): Server {
             break;
           }
           switch (action) {
-            case 'create': result = noteTools.createNote(args as any); break;
-            case 'update': result = noteTools.updateNote(args as any); break;
-            case 'delete': result = noteTools.deleteNote(args as any); break;
-            case 'move': result = noteTools.moveNote(args as any); break;
-            case 'restore': result = noteTools.restoreNote(args as any); break;
-            case 'rename': result = noteTools.renameNoteFile(args as any); break;
-            case 'set_property': result = noteTools.setProperty(args as any); break;
-            case 'remove_property': result = noteTools.removeProperty(args as any); break;
+            case 'create': result = await noteTools.createNote(args as any); break;
+            case 'update': result = await noteTools.updateNote(args as any); break;
+            case 'delete': result = await noteTools.deleteNote(args as any); break;
+            case 'move': result = await noteTools.moveNote(args as any); break;
+            case 'restore': result = await noteTools.restoreNote(args as any); break;
+            case 'rename': result = await noteTools.renameNoteFile(args as any); break;
+            case 'set_property': result = await noteTools.setProperty(args as any); break;
+            case 'remove_property': result = await noteTools.removeProperty(args as any); break;
             default: throw new Error(`Unknown action: "${action}". Valid actions: create, update, delete, move, restore, rename, set_property, remove_property`);
           }
           break;
@@ -2691,11 +2693,11 @@ export function createServer(): Server {
           }
           const action = a?.action;
           switch (action) {
-            case 'insert': result = noteTools.insertContent(a); break;
-            case 'append': result = noteTools.appendContent(a); break;
-            case 'delete_lines': result = noteTools.deleteLines(a); break;
-            case 'edit_line': result = noteTools.editLine(a); break;
-            case 'replace_lines': result = noteTools.replaceLines(a); break;
+            case 'insert': result = await noteTools.insertContent(a); break;
+            case 'append': result = await noteTools.appendContent(a); break;
+            case 'delete_lines': result = await noteTools.deleteLines(a); break;
+            case 'edit_line': result = await noteTools.editLine(a); break;
+            case 'replace_lines': result = await noteTools.replaceLines(a); break;
             default: throw new Error(`Unknown action: "${action}". Valid actions: insert, append, delete_lines, edit_line, replace_lines (snake_case required)`);
           }
           break;
@@ -2716,13 +2718,13 @@ export function createServer(): Server {
           }
           const action = a?.action;
           switch (action) {
-            case 'get': result = noteTools.getParagraphs(a); break;
-            case 'search': result = noteTools.searchParagraphs(a); break;
-            case 'search_global': result = noteTools.searchParagraphsGlobal(a); break;
-            case 'add': result = taskTools.addTaskToNote(a); break;
-            case 'complete': result = taskTools.completeTask(a); break;
-            case 'update': result = taskTools.updateTask(a); break;
-            case 'delete_recurring': result = taskTools.deleteRecurringTask(a); break;
+            case 'get': result = await noteTools.getParagraphs(a); break;
+            case 'search': result = await noteTools.searchParagraphs(a); break;
+            case 'search_global': result = await noteTools.searchParagraphsGlobal(a); break;
+            case 'add': result = await taskTools.addTaskToNote(a); break;
+            case 'complete': result = await taskTools.completeTask(a); break;
+            case 'update': result = await taskTools.updateTask(a); break;
+            case 'delete_recurring': result = await taskTools.deleteRecurringTask(a); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -2735,14 +2737,14 @@ export function createServer(): Server {
             break;
           }
           switch (action) {
-            case 'list': result = spaceTools.listFolders(args as any); break;
-            case 'find': result = spaceTools.findFolders(args as any); break;
-            case 'resolve': result = spaceTools.resolveFolder(args as any); break;
-            case 'create': result = spaceTools.createFolder(args as any); break;
-            case 'move': result = spaceTools.moveFolder(args as any); break;
-            case 'rename': result = spaceTools.renameFolder(args as any); break;
-            case 'delete': result = spaceTools.deleteFolder(args as any); break;
-            case 'list_spaces': result = spaceTools.listSpaces(args as any); break;
+            case 'list': result = await spaceTools.listFolders(args as any); break;
+            case 'find': result = await spaceTools.findFolders(args as any); break;
+            case 'resolve': result = await spaceTools.resolveFolder(args as any); break;
+            case 'create': result = await spaceTools.createFolder(args as any); break;
+            case 'move': result = await spaceTools.moveFolder(args as any); break;
+            case 'rename': result = await spaceTools.renameFolder(args as any); break;
+            case 'delete': result = await spaceTools.deleteFolder(args as any); break;
+            case 'list_spaces': result = await spaceTools.listSpaces(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -2750,12 +2752,12 @@ export function createServer(): Server {
         case 'noteplan_filters': {
           const action = (args as any)?.action;
           switch (action) {
-            case 'list': result = filterTools.listFilters(args as any); break;
-            case 'get': result = filterTools.getFilter(args as any); break;
-            case 'get_tasks': result = filterTools.getFilterTasks(args as any); break;
-            case 'list_parameters': result = filterTools.listFilterParameters(); break;
-            case 'save': result = filterTools.saveFilter(args as any); break;
-            case 'rename': result = filterTools.renameFilter(args as any); break;
+            case 'list': result = await filterTools.listFilters(args as any); break;
+            case 'get': result = await filterTools.getFilter(args as any); break;
+            case 'get_tasks': result = await filterTools.getFilterTasks(args as any); break;
+            case 'list_parameters': result = await filterTools.listFilterParameters(); break;
+            case 'save': result = await filterTools.saveFilter(args as any); break;
+            case 'rename': result = await filterTools.renameFilter(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -2802,7 +2804,7 @@ export function createServer(): Server {
           switch (action) {
             case 'open_note': result = uiTools.openNote(args as any); break;
             case 'open_today': result = uiTools.openToday(args as any); break;
-            case 'search': result = uiTools.searchNotes(args as any); break;
+            case 'search': result = await uiTools.searchNotes(args as any); break;
             case 'run_plugin': result = uiTools.runPlugin(args as any); break;
             case 'open_view': result = uiTools.openView(args as any); break;
             case 'toggle_sidebar': result = uiTools.toggleSidebar(args as any); break;
@@ -2836,7 +2838,7 @@ export function createServer(): Server {
                 switch (resolved) {
                   case 'open_note': result = uiTools.openNote(args as any); break;
                   case 'open_today': result = uiTools.openToday(args as any); break;
-                  case 'search': result = uiTools.searchNotes(args as any); break;
+                  case 'search': result = await uiTools.searchNotes(args as any); break;
                   case 'run_plugin': result = uiTools.runPlugin(args as any); break;
                   case 'open_view': result = uiTools.openView(args as any); break;
                   case 'toggle_sidebar': result = uiTools.toggleSidebar(args as any); break;
@@ -2906,10 +2908,10 @@ export function createServer(): Server {
         case 'noteplan_attachments': {
           const action = (args as any)?.action;
           switch (action) {
-            case 'add': result = attachmentTools.addAttachment(args as any); break;
-            case 'list': result = attachmentTools.listAttachments(args as any); break;
-            case 'get': result = attachmentTools.getAttachment(args as any); break;
-            case 'move': result = attachmentTools.moveAttachment(args as any); break;
+            case 'add': result = await attachmentTools.addAttachment(args as any); break;
+            case 'list': result = await attachmentTools.listAttachments(args as any); break;
+            case 'get': result = await attachmentTools.getAttachment(args as any); break;
+            case 'move': result = await attachmentTools.moveAttachment(args as any); break;
             default: throw new Error(`Unknown action: ${action}. Valid actions: add, list, get, move`);
           }
           break;
@@ -3008,6 +3010,22 @@ export async function startServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('[noteplan-mcp] Server running on stdio');
+
+  // Phase-1 diagnostic probe: not yet wired into any tool, just reports
+  // whether the bridge is reachable so we can verify end-to-end discovery.
+  void (async () => {
+    try {
+      const client = await getBridgeClient();
+      if (client) {
+        const config = await client.config();
+        console.error(`[noteplan-mcp] Bridge OK on 127.0.0.1:${client.port} — storage: ${config.storagePath}`);
+      } else {
+        console.error('[noteplan-mcp] Bridge unavailable (NotePlan not running, old build, or Automation denied)');
+      }
+    } catch (err) {
+      console.error(`[noteplan-mcp] Bridge probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  })();
 
   // Nudge the client to re-fetch tools once after a version upgrade.
   // We store the last-seen version in a tiny file so the notification

@@ -75,9 +75,9 @@ export function ensureTemplateFrontmatter(
 
 // ── List templates ──
 
-export function listTemplates(params: z.infer<typeof templatesSchema>) {
+export async function listTemplates(params: z.infer<typeof templatesSchema>) {
   const folder = params.folder || '@Templates';
-  const notes = store.listNotes({ folder });
+  const notes = await store.listNotes({ folder });
 
   const offset = params.cursor ? parseInt(params.cursor, 10) || 0 : (params.offset ?? 0);
   const limit = params.limit ?? 50;
@@ -111,7 +111,7 @@ export function listTemplates(params: z.infer<typeof templatesSchema>) {
 
 // ── Render template ──
 
-export function renderTemplate(params: z.infer<typeof templatesSchema>) {
+export async function renderTemplate(params: z.infer<typeof templatesSchema>) {
   const { build } = getNotePlanVersion();
   if (build < MIN_BUILD_RENDER_TEMPLATE) {
     return {
@@ -176,7 +176,7 @@ export function renderTemplate(params: z.infer<typeof templatesSchema>) {
 
 // ── Get full doc chunk ──
 
-export function getDoc(params: z.infer<typeof templatesSchema>) {
+export async function getDoc(params: z.infer<typeof templatesSchema>) {
   const noteTitle = params.noteTitle?.trim();
   if (!noteTitle) {
     return { success: false, error: 'noteTitle is required for get_doc' };

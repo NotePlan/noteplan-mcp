@@ -1,5 +1,3 @@
-// File system writer for local NotePlan notes
-
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -12,24 +10,16 @@ import {
   getCalendarNote,
   isValidNoteExtension,
 } from './file-reader.js';
-
-/**
- * Rename/move a file, with fallback for sandboxed/mounted filesystems.
- * EPERM/EXDEV: copy + delete instead of atomic rename.
- */
-function moveFile(source: string, destination: string): void {
-  try {
-    fs.renameSync(source, destination);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'EPERM' || code === 'EXDEV') {
-      fs.copyFileSync(source, destination);
-      fs.unlinkSync(source);
-    } else {
-      throw error;
-    }
-  }
-}
+import {
+  readFileUtf8,
+  statPath,
+  pathExists,
+  writeFileUtf8,
+  makeDirectory,
+  removePath,
+  moveFile,
+} from '../transport/bridge-fs.js';
+import { BridgeHttpError } from '../transport/bridge-client.js';
 
 function ensurePathInsideRoot(candidatePath: string, rootPath: string, label: string): void {
   const resolvedCandidate = path.resolve(candidatePath);
@@ -262,125 +252,103 @@ export interface FolderLocalPreview {
 }
 
 /**
- * Write content to a note file atomically
- * NotePlan's FolderMonitor will detect the change within ~300ms.
- *
- * Important: use in-place writes for existing files so filesystem birthtime
- * (used as createdAt in MCP responses) does not reset on every edit.
+ * Use in-place writes for existing files so filesystem birthtime (exposed as
+ * createdAt in MCP responses) does not reset on every edit.
  */
-export function writeNoteFile(filePath: string, content: string): void {
+export async function writeNoteFile(filePath: string, content: string): Promise<void> {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
   ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
 
-  // Ensure directory exists
-  const dir = path.dirname(fullPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  // Normalize line endings to Unix style
   const normalizedContent = content.replace(/\r\n/g, '\n');
 
-  // Preserve createdAt for existing notes by avoiding temp-file rename.
-  // Renaming a temp file replaces the inode and resets birthtime.
-  if (fs.existsSync(fullPath)) {
-    fs.writeFileSync(fullPath, normalizedContent, { encoding: 'utf-8' });
+  if (await pathExists(fullPath)) {
+    await writeFileUtf8(fullPath, normalizedContent);
     return;
   }
-
-  // For new files, create exclusively to avoid accidental overwrite races.
   try {
-    fs.writeFileSync(fullPath, normalizedContent, { encoding: 'utf-8', flag: 'wx' });
-  } catch (error) {
-    const maybeErrno = error as NodeJS.ErrnoException;
-    if (maybeErrno.code === 'EEXIST' || maybeErrno.code === 'EPERM') {
-      // EEXIST: file appeared between existsSync and writeFileSync — safe to overwrite.
-      // EPERM: sandboxed/mounted filesystems (e.g. Claude Co-Work, iCloud FUSE) may not
-      //   support O_EXCL (wx flag). Fall back to plain write.
-      fs.writeFileSync(fullPath, normalizedContent, { encoding: 'utf-8' });
+    await writeFileUtf8(fullPath, normalizedContent, { exclusive: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const conflict =
+      code === 'EEXIST' ||
+      code === 'EPERM' ||
+      (err instanceof BridgeHttpError && err.status === 409);
+    if (conflict) {
+      await writeFileUtf8(fullPath, normalizedContent);
       return;
     }
-    throw error;
+    throw err;
   }
 }
 
 /**
  * Create a new project note
  */
-export function createProjectNote(title: string, content: string = '', folder?: string): string {
-  // Sanitize title for filename
+export async function createProjectNote(title: string, content: string = '', folder?: string): Promise<string> {
   const safeTitle = sanitizeFilename(title);
-  // Strip Notes/ prefix if present to avoid double-nesting (Notes/Notes/...)
   const cleanFolder = folder?.replace(/^Notes\//, '');
   const folderPath = cleanFolder ? path.join('Notes', cleanFolder) : 'Notes';
-  const ext = getFileExtension(); // Use detected extension
+  const ext = getFileExtension();
 
   const filePath = path.join(folderPath, `${safeTitle}${ext}`);
-
-  // Check if file already exists (with any extension)
   const fullPath = path.join(getNotePlanPath(), filePath);
   const altExt = ext === '.txt' ? '.md' : '.txt';
   const altPath = path.join(getNotePlanPath(), folderPath, `${safeTitle}${altExt}`);
 
-  if (fs.existsSync(fullPath)) {
+  if (await pathExists(fullPath)) {
     throw new Error(`Note already exists: ${filePath}`);
   }
-  if (fs.existsSync(altPath)) {
+  if (await pathExists(altPath)) {
     throw new Error(`Note already exists: ${path.join(folderPath, `${safeTitle}${altExt}`)}`);
   }
 
-  // Create content with title as heading if content is empty
   const noteContent = content || `# ${title}\n\n`;
-
-  writeNoteFile(filePath, noteContent);
+  await writeNoteFile(filePath, noteContent);
   return filePath;
 }
 
 /**
  * Create or update a calendar note
  */
-export function createCalendarNote(dateStr: string, content: string): string {
-  // Use the detected configuration for file path
+export async function createCalendarNote(dateStr: string, content: string): Promise<string> {
   const filePath = buildCalendarNotePath(dateStr);
-
-  writeNoteFile(filePath, content);
+  await writeNoteFile(filePath, content);
   return filePath;
 }
 
 /**
  * Append content to a note
  */
-export function appendToNote(filePath: string, content: string): void {
+export async function appendToNote(filePath: string, content: string): Promise<void> {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
   ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
 
-  if (!fs.existsSync(fullPath)) {
+  const existingContent = await readFileUtf8(fullPath);
+  if (existingContent === null) {
     throw new Error(`Note not found: ${filePath}`);
   }
 
-  const existingContent = fs.readFileSync(fullPath, 'utf-8');
   const newContent = existingContent.endsWith('\n')
     ? existingContent + content
     : existingContent + '\n' + content;
 
-  writeNoteFile(filePath, newContent);
+  await writeNoteFile(filePath, newContent);
 }
 
 /**
  * Prepend content to a note (after frontmatter if present)
  */
-export function prependToNote(filePath: string, content: string): void {
+export async function prependToNote(filePath: string, content: string): Promise<void> {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
   ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
 
-  if (!fs.existsSync(fullPath)) {
+  const existingContent = await readFileUtf8(fullPath);
+  if (existingContent === null) {
     throw new Error(`Note not found: ${filePath}`);
   }
 
-  const existingContent = fs.readFileSync(fullPath, 'utf-8');
   const lines = existingContent.split('\n');
 
-  // Find end of frontmatter if present
   let insertIndex = 0;
   if (lines[0]?.trim() === '---') {
     for (let i = 1; i < lines.length; i++) {
@@ -391,77 +359,73 @@ export function prependToNote(filePath: string, content: string): void {
     }
   }
 
-  // Insert content
   lines.splice(insertIndex, 0, content);
-  writeNoteFile(filePath, lines.join('\n'));
+  await writeNoteFile(filePath, lines.join('\n'));
 }
 
 /**
  * Update a note's content
  */
-export function updateNote(filePath: string, content: string): void {
+export async function updateNote(filePath: string, content: string): Promise<void> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
 
-  if (!fs.existsSync(fullPath)) {
+  if (!(await pathExists(fullPath))) {
     throw new Error(`Note not found: ${filePath}`);
   }
 
-  writeNoteFile(filePath, content);
+  await writeNoteFile(filePath, content);
 }
 
 /**
  * Delete a note (move to trash)
  */
-export function deleteNote(filePath: string): string {
+export async function deleteNote(filePath: string): Promise<string> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
 
-  if (!fs.existsSync(fullPath)) {
+  if (!(await pathExists(fullPath))) {
     throw new Error(`Note not found: ${filePath}`);
   }
 
-  // Reject non-text files (e.g. .key, .pdf) — only .md and .txt are valid notes
   if (!isValidNoteExtension(path.basename(fullPath))) {
     throw new Error(
       `Cannot delete: "${path.basename(fullPath)}" is not a note file. Only .md and .txt files are supported.`
     );
   }
 
-  // Move to Notes/@Trash (matching NotePlan's own moveToTrash behavior)
   const trashPath = path.join(getNotesPath(), '@Trash');
-  if (!fs.existsSync(trashPath)) {
-    fs.mkdirSync(trashPath, { recursive: true });
+  if (!(await pathExists(trashPath))) {
+    await makeDirectory(trashPath);
   }
 
   const filename = path.basename(fullPath);
   const trashFilePath = path.join(trashPath, filename);
 
-  // Handle duplicate filenames in trash
   let finalTrashPath = trashFilePath;
   let counter = 1;
-  while (fs.existsSync(finalTrashPath)) {
+  while (await pathExists(finalTrashPath)) {
     const ext = path.extname(filename);
     const base = path.basename(filename, ext);
     finalTrashPath = path.join(trashPath, `${base}-${counter}${ext}`);
     counter++;
   }
 
-  moveFile(fullPath, finalTrashPath);
+  await moveFile(fullPath, finalTrashPath);
   return path.relative(getNotePlanPath(), finalTrashPath);
 }
 
 /**
  * Preview local note move target without mutating the filesystem
  */
-export function previewMoveLocalNote(filePath: string, destinationFolder: string): MoveLocalNotePreview {
+export async function previewMoveLocalNote(filePath: string, destinationFolder: string): Promise<MoveLocalNotePreview> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
-  if (!fs.existsSync(fullPath)) {
+  const sourceStat = await statPath(fullPath);
+  if (!sourceStat.exists) {
     throw new Error(`Note not found: ${filePath}`);
   }
-  if (fs.statSync(fullPath).isDirectory()) {
+  if (sourceStat.isDir) {
     throw new Error(`Not a note file: ${filePath}`);
   }
 
-  // Reject non-text files (e.g. .key, .pdf) — only .md and .txt are valid notes
   if (!isValidNoteExtension(path.basename(fullPath))) {
     throw new Error(
       `Cannot move: "${path.basename(fullPath)}" is not a note file. Only .md and .txt files are supported.`
@@ -482,7 +446,7 @@ export function previewMoveLocalNote(filePath: string, destinationFolder: string
   if (path.resolve(nextAbsolutePath) === path.resolve(fullPath)) {
     throw new Error('Note is already in the destination folder');
   }
-  if (fs.existsSync(nextAbsolutePath)) {
+  if (await pathExists(nextAbsolutePath)) {
     throw new Error(`A note already exists at destination: ${path.relative(getNotePlanPath(), nextAbsolutePath)}`);
   }
 
@@ -496,32 +460,33 @@ export function previewMoveLocalNote(filePath: string, destinationFolder: string
 /**
  * Move a local note to another folder
  */
-export function moveLocalNote(filePath: string, destinationFolder: string): string {
-  const preview = previewMoveLocalNote(filePath, destinationFolder);
+export async function moveLocalNote(filePath: string, destinationFolder: string): Promise<string> {
+  const preview = await previewMoveLocalNote(filePath, destinationFolder);
   const sourcePath = path.join(getNotePlanPath(), preview.fromFilename);
   const targetPath = path.join(getNotePlanPath(), preview.toFilename);
 
   const targetDir = path.dirname(targetPath);
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
+  if (!(await pathExists(targetDir))) {
+    await makeDirectory(targetDir);
   }
 
-  moveFile(sourcePath, targetPath);
+  await moveFile(sourcePath, targetPath);
   return preview.toFilename;
 }
 
 /**
  * Preview restoring a local note from @Trash into Notes
  */
-export function previewRestoreLocalNoteFromTrash(
+export async function previewRestoreLocalNoteFromTrash(
   filePath: string,
   destinationFolder: string
-): MoveLocalNotePreview {
+): Promise<MoveLocalNotePreview> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
-  if (!fs.existsSync(fullPath)) {
+  const sourceStat = await statPath(fullPath);
+  if (!sourceStat.exists) {
     throw new Error(`Note not found: ${filePath}`);
   }
-  if (fs.statSync(fullPath).isDirectory()) {
+  if (sourceStat.isDir) {
     throw new Error(`Not a note file: ${filePath}`);
   }
 
@@ -533,7 +498,7 @@ export function previewRestoreLocalNoteFromTrash(
   ensurePathInsideRoot(destinationDir, getNotesPath(), 'Destination folder');
 
   const nextAbsolutePath = path.join(destinationDir, path.basename(fullPath));
-  if (fs.existsSync(nextAbsolutePath)) {
+  if (await pathExists(nextAbsolutePath)) {
     throw new Error(`A note already exists at destination: ${path.relative(getNotePlanPath(), nextAbsolutePath)}`);
   }
 
@@ -547,35 +512,35 @@ export function previewRestoreLocalNoteFromTrash(
 /**
  * Restore a local note from @Trash into Notes
  */
-export function restoreLocalNoteFromTrash(filePath: string, destinationFolder: string): string {
-  const preview = previewRestoreLocalNoteFromTrash(filePath, destinationFolder);
+export async function restoreLocalNoteFromTrash(filePath: string, destinationFolder: string): Promise<string> {
+  const preview = await previewRestoreLocalNoteFromTrash(filePath, destinationFolder);
   const sourcePath = path.join(getNotePlanPath(), preview.fromFilename);
   const targetPath = path.join(getNotePlanPath(), preview.toFilename);
   const targetDir = path.dirname(targetPath);
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
+  if (!(await pathExists(targetDir))) {
+    await makeDirectory(targetDir);
   }
-  moveFile(sourcePath, targetPath);
+  await moveFile(sourcePath, targetPath);
   return preview.toFilename;
 }
 
 /**
  * Preview local note rename target without mutating the filesystem
  */
-export function previewRenameLocalNoteFile(
+export async function previewRenameLocalNoteFile(
   filePath: string,
   newFilename: string,
   keepExtension = true
-): RenameLocalNotePreview {
+): Promise<RenameLocalNotePreview> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
-  if (!fs.existsSync(fullPath)) {
+  const sourceStat = await statPath(fullPath);
+  if (!sourceStat.exists) {
     throw new Error(`Note not found: ${filePath}`);
   }
-  if (fs.statSync(fullPath).isDirectory()) {
+  if (sourceStat.isDir) {
     throw new Error(`Not a note file: ${filePath}`);
   }
 
-  // Reject non-text files (e.g. .key, .pdf) — only .md and .txt are valid notes
   if (!isValidNoteExtension(path.basename(fullPath))) {
     throw new Error(
       `Cannot rename: "${path.basename(fullPath)}" is not a note file. Only .md and .txt files are supported.`
@@ -590,7 +555,7 @@ export function previewRenameLocalNoteFile(
   if (path.resolve(nextAbsolutePath) === path.resolve(fullPath)) {
     throw new Error('New filename matches current filename');
   }
-  if (fs.existsSync(nextAbsolutePath)) {
+  if (await pathExists(nextAbsolutePath)) {
     throw new Error(`A note already exists with filename: ${path.relative(getNotePlanPath(), nextAbsolutePath)}`);
   }
 
@@ -603,29 +568,29 @@ export function previewRenameLocalNoteFile(
 /**
  * Rename a local note file inside the same folder
  */
-export function renameLocalNoteFile(
+export async function renameLocalNoteFile(
   filePath: string,
   newFilename: string,
   keepExtension = true
-): string {
-  const preview = previewRenameLocalNoteFile(filePath, newFilename, keepExtension);
+): Promise<string> {
+  const preview = await previewRenameLocalNoteFile(filePath, newFilename, keepExtension);
   const sourcePath = path.join(getNotePlanPath(), preview.fromFilename);
   const targetPath = path.join(getNotePlanPath(), preview.toFilename);
-  moveFile(sourcePath, targetPath);
+  await moveFile(sourcePath, targetPath);
   return preview.toFilename;
 }
 
 /**
  * Preview creating a local folder under Notes
  */
-export function previewCreateFolder(folderPath: string): string {
+export async function previewCreateFolder(folderPath: string): Promise<string> {
   const normalized = normalizeLocalFolderPath(folderPath, 'Folder path');
   if (!normalized) {
     throw new Error('Folder path is required');
   }
   const fullPath = path.join(getNotesPath(), normalized);
   ensurePathInsideRoot(fullPath, getNotesPath(), 'Folder path');
-  if (fs.existsSync(fullPath)) {
+  if (await pathExists(fullPath)) {
     throw new Error(`Folder already exists: ${normalized}`);
   }
   return normalized;
@@ -634,11 +599,11 @@ export function previewCreateFolder(folderPath: string): string {
 /**
  * Create a folder in the Notes directory
  */
-export function createFolder(folderPath: string): string {
-  const normalized = previewCreateFolder(folderPath);
+export async function createFolder(folderPath: string): Promise<string> {
+  const normalized = await previewCreateFolder(folderPath);
   const fullPath = path.join(getNotesPath(), normalized);
-  if (!fs.existsSync(fullPath)) {
-    fs.mkdirSync(fullPath, { recursive: true });
+  if (!(await pathExists(fullPath))) {
+    await makeDirectory(fullPath);
   }
   return normalized;
 }
@@ -646,17 +611,18 @@ export function createFolder(folderPath: string): string {
 /**
  * Preview deleting a local folder (validates and returns normalized path)
  */
-export function previewDeleteLocalFolder(folderPath: string): string {
+export async function previewDeleteLocalFolder(folderPath: string): Promise<string> {
   const normalized = normalizeLocalFolderPath(folderPath, 'Source folder');
   if (!normalized) {
     throw new Error('Folder path is required');
   }
   const fullPath = path.join(getNotesPath(), normalized);
   ensurePathInsideRoot(fullPath, getNotesPath(), 'Source folder');
-  if (!fs.existsSync(fullPath)) {
+  const stat = await statPath(fullPath);
+  if (!stat.exists) {
     throw new Error(`Folder not found: ${normalized}`);
   }
-  if (!fs.statSync(fullPath).isDirectory()) {
+  if (!stat.isDir) {
     throw new Error(`Not a folder: ${normalized}`);
   }
 
@@ -671,42 +637,42 @@ export function previewDeleteLocalFolder(folderPath: string): string {
 /**
  * Delete a local folder (move to @Trash)
  */
-export function deleteLocalFolder(folderPath: string): string {
-  const normalized = previewDeleteLocalFolder(folderPath);
+export async function deleteLocalFolder(folderPath: string): Promise<string> {
+  const normalized = await previewDeleteLocalFolder(folderPath);
   const fullPath = path.join(getNotesPath(), normalized);
   const folderName = path.basename(fullPath);
 
-  // Move to Notes/@Trash (matching NotePlan's own moveToTrash behavior)
   const trashPath = path.join(getNotesPath(), '@Trash');
-  if (!fs.existsSync(trashPath)) {
-    fs.mkdirSync(trashPath, { recursive: true });
+  if (!(await pathExists(trashPath))) {
+    await makeDirectory(trashPath);
   }
 
   let targetPath = path.join(trashPath, folderName);
   let counter = 1;
-  while (fs.existsSync(targetPath)) {
+  while (await pathExists(targetPath)) {
     targetPath = path.join(trashPath, `${folderName}-${counter}`);
     counter++;
   }
 
-  moveFile(fullPath, targetPath);
+  await moveFile(fullPath, targetPath);
   return path.relative(getNotePlanPath(), targetPath);
 }
 
 /**
  * Preview moving a local folder under Notes
  */
-export function previewMoveLocalFolder(sourceFolder: string, destinationFolder: string): FolderLocalPreview {
+export async function previewMoveLocalFolder(sourceFolder: string, destinationFolder: string): Promise<FolderLocalPreview> {
   const normalizedSource = normalizeLocalFolderPath(sourceFolder, 'Source folder');
   if (!normalizedSource) {
     throw new Error('Source folder is required');
   }
   const sourcePath = path.join(getNotesPath(), normalizedSource);
   ensurePathInsideRoot(sourcePath, getNotesPath(), 'Source folder');
-  if (!fs.existsSync(sourcePath)) {
+  const sourceStat = await statPath(sourcePath);
+  if (!sourceStat.exists) {
     throw new Error(`Source folder not found: ${normalizedSource}`);
   }
-  if (!fs.statSync(sourcePath).isDirectory()) {
+  if (!sourceStat.isDir) {
     throw new Error(`Source is not a folder: ${normalizedSource}`);
   }
 
@@ -718,12 +684,13 @@ export function previewMoveLocalFolder(sourceFolder: string, destinationFolder: 
     ? path.join(getNotesPath(), normalizedDestination)
     : getNotesPath();
   ensurePathInsideRoot(destinationPath, getNotesPath(), 'Destination folder');
-  if (!fs.existsSync(destinationPath)) {
+  const destStat = await statPath(destinationPath);
+  if (!destStat.exists) {
     throw new Error(
       `Destination folder not found: ${normalizedDestination || 'Notes'}`
     );
   }
-  if (!fs.statSync(destinationPath).isDirectory()) {
+  if (!destStat.isDir) {
     throw new Error('Destination is not a folder');
   }
   if (
@@ -737,7 +704,7 @@ export function previewMoveLocalFolder(sourceFolder: string, destinationFolder: 
   if (path.resolve(targetPath) === path.resolve(sourcePath)) {
     throw new Error('Folder is already in the destination');
   }
-  if (fs.existsSync(targetPath)) {
+  if (await pathExists(targetPath)) {
     throw new Error(
       `A folder already exists at destination: ${path.relative(getNotesPath(), targetPath)}`
     );
@@ -753,28 +720,29 @@ export function previewMoveLocalFolder(sourceFolder: string, destinationFolder: 
 /**
  * Move a local folder under Notes
  */
-export function moveLocalFolder(sourceFolder: string, destinationFolder: string): FolderLocalPreview {
-  const preview = previewMoveLocalFolder(sourceFolder, destinationFolder);
+export async function moveLocalFolder(sourceFolder: string, destinationFolder: string): Promise<FolderLocalPreview> {
+  const preview = await previewMoveLocalFolder(sourceFolder, destinationFolder);
   const sourcePath = path.join(getNotesPath(), preview.fromFolder);
   const targetPath = path.join(getNotesPath(), preview.toFolder);
-  moveFile(sourcePath, targetPath);
+  await moveFile(sourcePath, targetPath);
   return preview;
 }
 
 /**
  * Preview renaming a local folder in place
  */
-export function previewRenameLocalFolder(sourceFolder: string, newName: string): FolderLocalPreview {
+export async function previewRenameLocalFolder(sourceFolder: string, newName: string): Promise<FolderLocalPreview> {
   const normalizedSource = normalizeLocalFolderPath(sourceFolder, 'Source folder');
   if (!normalizedSource) {
     throw new Error('Source folder is required');
   }
   const sourcePath = path.join(getNotesPath(), normalizedSource);
   ensurePathInsideRoot(sourcePath, getNotesPath(), 'Source folder');
-  if (!fs.existsSync(sourcePath)) {
+  const sourceStat = await statPath(sourcePath);
+  if (!sourceStat.exists) {
     throw new Error(`Source folder not found: ${normalizedSource}`);
   }
-  if (!fs.statSync(sourcePath).isDirectory()) {
+  if (!sourceStat.isDir) {
     throw new Error(`Source is not a folder: ${normalizedSource}`);
   }
 
@@ -820,7 +788,7 @@ export function previewRenameLocalFolder(sourceFolder: string, newName: string):
   if (path.resolve(targetPath) === path.resolve(sourcePath)) {
     throw new Error('New folder name matches current name');
   }
-  if (fs.existsSync(targetPath)) {
+  if (await pathExists(targetPath)) {
     throw new Error(
       `A folder with this name already exists: ${path.relative(getNotesPath(), targetPath)}`
     );
@@ -835,11 +803,11 @@ export function previewRenameLocalFolder(sourceFolder: string, newName: string):
 /**
  * Rename a local folder in place
  */
-export function renameLocalFolder(sourceFolder: string, newName: string): FolderLocalPreview {
-  const preview = previewRenameLocalFolder(sourceFolder, newName);
+export async function renameLocalFolder(sourceFolder: string, newName: string): Promise<FolderLocalPreview> {
+  const preview = await previewRenameLocalFolder(sourceFolder, newName);
   const sourcePath = path.join(getNotesPath(), preview.fromFolder);
   const targetPath = path.join(getNotesPath(), preview.toFolder);
-  moveFile(sourcePath, targetPath);
+  await moveFile(sourcePath, targetPath);
   return preview;
 }
 
@@ -857,15 +825,15 @@ function sanitizeFilename(name: string): string {
  * Ensure a calendar note exists, create if not
  * Returns the path to the existing or newly created note
  */
-export function ensureCalendarNote(dateStr: string): string {
+export async function ensureCalendarNote(dateStr: string): Promise<string> {
   // First try to find an existing note (checks multiple paths/extensions)
-  const existingNote = getCalendarNote(dateStr);
+  const existingNote = await getCalendarNote(dateStr);
   if (existingNote) {
     return existingNote.filename;
   }
 
   // Create a new one using detected configuration
   const filePath = buildCalendarNotePath(dateStr);
-  writeNoteFile(filePath, '');
+  await writeNoteFile(filePath, '');
   return filePath;
 }

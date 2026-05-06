@@ -39,13 +39,13 @@ export const getCalendarNoteSchema = z.object({
   space: z.string().optional().describe('Space name or ID'),
 });
 
-export function getToday(params: z.infer<typeof getTodaySchema>) {
-  const note = store.getTodayNote(params.space);
+export async function getToday(params: z.infer<typeof getTodaySchema>) {
+  const note = await store.getTodayNote(params.space);
 
   if (!note) {
     // Try to create it
     try {
-      const createdNote = store.ensureCalendarNote('today', params.space);
+      const createdNote = await store.ensureCalendarNote('today', params.space);
       return {
         success: true,
         note: {
@@ -81,9 +81,9 @@ export function getToday(params: z.infer<typeof getTodaySchema>) {
   };
 }
 
-export function addToToday(params: z.infer<typeof addToTodaySchema>) {
+export async function addToToday(params: z.infer<typeof addToTodaySchema>) {
   try {
-    const note = store.addToToday(
+    const note = await store.addToToday(
       params.content,
       params.position as 'start' | 'end',
       params.space
@@ -105,9 +105,9 @@ export function addToToday(params: z.infer<typeof addToTodaySchema>) {
   }
 }
 
-export function getCalendarNote(params: z.infer<typeof getCalendarNoteSchema>) {
+export async function getCalendarNote(params: z.infer<typeof getCalendarNoteSchema>) {
   const dateStr = parseFlexibleDate(params.date);
-  const note = store.getCalendarNote(dateStr, params.space);
+  const note = await store.getCalendarNote(dateStr, params.space);
 
   if (!note) {
     return {
@@ -224,7 +224,7 @@ function shiftDateBackByPeriod(date: Date, type: 'weekly' | 'monthly' | 'quarter
  * Get a periodic note (weekly, monthly, quarterly, yearly)
  * Tries multiple paths with both .md and .txt extensions
  */
-export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>, options?: { autoCreate?: boolean }) {
+export async function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>, options?: { autoCreate?: boolean }) {
   const autoCreate = options?.autoCreate ?? true;
   try {
     const refDate = params.date ? new Date(params.date) : new Date();
@@ -313,7 +313,7 @@ export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>, o
 
     // Try each path
     for (const notePath of pathsToTry) {
-      const note = store.getNote({ filename: notePath, space: params.space });
+      const note = await store.getNote({ filename: notePath, space: params.space });
       if (note) {
         return {
           success: true,
@@ -333,7 +333,7 @@ export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>, o
     // to avoid creating empty notes for every missing past period
     if (autoCreate) {
       try {
-        const created = store.ensureCalendarNote(baseFilename, params.space);
+        const created = await store.ensureCalendarNote(baseFilename, params.space);
         if (created) {
           return {
             success: true,
@@ -369,7 +369,7 @@ export function getPeriodicNote(params: z.infer<typeof getPeriodicNoteSchema>, o
   }
 }
 
-export function getRecentPeriodicNotes(params: z.infer<typeof getRecentPeriodicNotesSchema>) {
+export async function getRecentPeriodicNotes(params: z.infer<typeof getRecentPeriodicNotesSchema>) {
   try {
     const type = (params.type ?? 'weekly') as 'weekly' | 'monthly' | 'quarterly' | 'yearly';
     const count = toBoundedInt(params.count, 6, 1, 50);
@@ -392,7 +392,7 @@ export function getRecentPeriodicNotes(params: z.infer<typeof getRecentPeriodicN
 
     while (inspectedSlots < maxLookback && notes.length < count) {
       const dateToken = formatDateString(cursor);
-      const periodic = getPeriodicNote({
+      const periodic = await getPeriodicNote({
         type,
         date: dateToken,
         space: params.space,
@@ -464,7 +464,7 @@ export function getRecentPeriodicNotes(params: z.infer<typeof getRecentPeriodicN
 /**
  * Get multiple daily notes in a date range
  */
-export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
+export async function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
   try {
     const { start, end } = getDateRange(params.period, params.startDate, params.endDate);
     const dates = getDatesInRange(start, end);
@@ -490,7 +490,7 @@ export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
 
     for (const date of pageDates) {
       const dateStr = formatDateString(date);
-      const note = store.getCalendarNote(dateStr, params.space);
+      const note = await store.getCalendarNote(dateStr, params.space);
 
       if (note) {
         const entry: (typeof notes)[0] = {
@@ -541,13 +541,13 @@ export function getNotesInRange(params: z.infer<typeof getNotesInRangeSchema>) {
 /**
  * Get all notes in a folder with optional content
  */
-export function getNotesInFolder(params: z.infer<typeof getNotesInFolderSchema>) {
+export async function getNotesInFolder(params: z.infer<typeof getNotesInFolderSchema>) {
   try {
     const limit = toBoundedInt(params.limit, 50, 1, 200);
     const offset = toBoundedInt(params.cursor ?? params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const includeContent = params.includeContent === true;
 
-    const allNotes = store.listNotes({ folder: params.folder });
+    const allNotes = await store.listNotes({ folder: params.folder });
     const pagedNotes = allNotes.slice(offset, offset + limit);
 
     const notes = pagedNotes.map((note) => {

@@ -1,8 +1,10 @@
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { getNotePlanPath } from './file-reader.js';
+import { getBridgeClient } from '../transport/bridge-availability.js';
+import { bridgeOrFallback } from '../transport/bridge-cascade.js';
+import { BridgeHttpError } from '../transport/bridge-client.js';
 
 export interface FilterItemRecord {
   param: string;
@@ -76,19 +78,14 @@ function isFilterFileName(name: string): boolean {
   return true;
 }
 
-function ensureFiltersPath(): string {
-  const filtersPath = getFiltersPath();
-  if (!fs.existsSync(filtersPath)) {
-    fs.mkdirSync(filtersPath, { recursive: true });
-  }
-  return filtersPath;
-}
-
 function toFilterFilePath(name: string): string {
   const safeName = assertFilterName(name);
   return path.join(getFiltersPath(), safeName);
 }
 
+/** Read fallback only — used when NotePlan is closed. Writes go through
+ *  the bridge so they're immediately reflected in NotePlan's cached
+ *  filter list. */
 function toJsonViaPlutil(filePath: string): unknown {
   try {
     const output = execFileSync('plutil', ['-convert', 'json', '-o', '-', filePath], {
@@ -101,18 +98,6 @@ function toJsonViaPlutil(filePath: string): unknown {
   }
 }
 
-function toBinaryPlistViaPlutil(jsonPath: string, outputPath: string): void {
-  try {
-    execFileSync('plutil', ['-convert', 'binary1', '-o', outputPath, jsonPath], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Failed to write filter plist via plutil: ${reason}`);
-  }
-}
-
 function normalizeFilterItems(raw: unknown): FilterItemRecord[] {
   if (!Array.isArray(raw)) {
     throw new Error('Filter file is malformed: expected an array');
@@ -120,29 +105,65 @@ function normalizeFilterItems(raw: unknown): FilterItemRecord[] {
   return raw.map((entry) => normalizeFilterItem(entry as Record<string, unknown>));
 }
 
-export function listFilters(): Array<{ name: string; path: string; modifiedAt?: Date; createdAt?: Date }> {
-  const filtersPath = getFiltersPath();
-  if (!fs.existsSync(filtersPath)) return [];
-
-  const entries = fs.readdirSync(filtersPath, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && isFilterFileName(entry.name))
-    .map((entry) => {
-      const fullPath = path.join(filtersPath, entry.name);
-      const stats = fs.statSync(fullPath);
-      return {
-        name: entry.name,
-        path: fullPath,
-        modifiedAt: stats.mtime,
-        createdAt: stats.birthtime,
-      };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+export async function listFilters(): Promise<Array<{ name: string; path: string; modifiedAt?: Date; createdAt?: Date }>> {
+  return bridgeOrFallback(
+    async (bridge) => {
+      const rows = await bridge.listFilters();
+      const filtersPath = getFiltersPath();
+      return rows
+        .filter((r) => isFilterFileName(r.name))
+        .map((r) => ({
+          name: r.name,
+          path: path.join(filtersPath, r.name),
+          modifiedAt: r.modifiedAt ? new Date(r.modifiedAt) : undefined,
+          createdAt: r.createdAt ? new Date(r.createdAt) : undefined,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+    () => {
+      const filtersPath = getFiltersPath();
+      if (!fs.existsSync(filtersPath)) return [];
+      const entries = fs.readdirSync(filtersPath, { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isFile() && isFilterFileName(entry.name))
+        .map((entry) => {
+          const fullPath = path.join(filtersPath, entry.name);
+          const stats = fs.statSync(fullPath);
+          return {
+            name: entry.name,
+            path: fullPath,
+            modifiedAt: stats.mtime,
+            createdAt: stats.birthtime,
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+  );
 }
 
-export function getFilter(name: string): FilterRecord | null {
+export async function getFilter(name: string): Promise<FilterRecord | null> {
   const safeName = assertFilterName(name);
   const filePath = toFilterFilePath(safeName);
+
+  return bridgeOrFallback<FilterRecord | null>(
+    async (bridge) => {
+      const fetched = await bridge.getFilter(safeName);
+      if (!fetched) return null;
+      return {
+        name: safeName,
+        path: filePath,
+        items: fetched.items.map((it) => ({
+          param: it.param,
+          value: it.value,
+          display: it.display,
+        })),
+      };
+    },
+    () => sqlGetFilterFallback(safeName, filePath),
+  );
+}
+
+function sqlGetFilterFallback(safeName: string, filePath: string): FilterRecord | null {
   if (!fs.existsSync(filePath)) return null;
 
   const stats = fs.statSync(filePath);
@@ -158,11 +179,11 @@ export function getFilter(name: string): FilterRecord | null {
   };
 }
 
-export function saveFilter(
+export async function saveFilter(
   name: string,
   items: Array<{ param?: unknown; value?: unknown; display?: unknown }>,
   options: { overwrite?: boolean } = {}
-): FilterRecord {
+): Promise<FilterRecord> {
   const safeName = assertFilterName(name);
   const overwrite = options.overwrite !== false;
   const normalizedItems = items.map((item) => normalizeFilterItem(item));
@@ -170,64 +191,53 @@ export function saveFilter(
     throw new Error('Filter items are required');
   }
 
-  const filtersPath = ensureFiltersPath();
-  const outputPath = path.join(filtersPath, safeName);
-  if (!overwrite && fs.existsSync(outputPath)) {
-    throw new Error(`Filter already exists: ${safeName}`);
+  // Filter writes require NotePlan to be running so the change becomes
+  // visible to the cached filter list (loaded once at app launch).
+  // Writing the plist while NotePlan is closed silently does nothing.
+  const bridge = await getBridgeClient();
+  if (!bridge) {
+    throw new Error('Saving filters requires NotePlan to be running.');
   }
 
-  const tempPath = path.join(
-    os.tmpdir(),
-    `noteplan-filter-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
-  );
-
+  // FilterHelper.save handles the keyword item itself; strip any keyword
+  // item and pass it as the dedicated `keyword` param.
+  const keywordItem = normalizedItems.find((it) => it.param === 'fp_keyword');
+  const remainingItems = normalizedItems.filter((it) => it.param !== 'fp_keyword');
   try {
-    fs.writeFileSync(tempPath, JSON.stringify(normalizedItems), { encoding: 'utf-8' });
-    toBinaryPlistViaPlutil(tempPath, outputPath);
-  } finally {
-    if (fs.existsSync(tempPath)) {
-      fs.unlinkSync(tempPath);
+    await bridge.saveFilter({
+      name: safeName,
+      items: remainingItems,
+      keyword: keywordItem?.value ?? '',
+      overwrite,
+    });
+  } catch (err) {
+    if (err instanceof BridgeHttpError && err.status === 409 && !overwrite) {
+      throw new Error(`Filter already exists: ${safeName}`);
     }
+    throw err;
   }
-
-  const stored = getFilter(safeName);
-  if (!stored) {
-    throw new Error(`Filter save succeeded but reload failed: ${safeName}`);
-  }
-
+  const stored = await getFilter(safeName);
+  if (!stored) throw new Error(`Filter save succeeded but reload failed: ${safeName}`);
   return stored;
 }
 
-export function renameFilter(oldName: string, newName: string, overwrite = false): FilterRecord {
+export async function renameFilter(oldName: string, newName: string, overwrite = false): Promise<FilterRecord> {
   const sourceName = assertFilterName(oldName);
   const targetName = assertFilterName(newName);
 
-  const sourcePath = toFilterFilePath(sourceName);
-  const targetPath = toFilterFilePath(targetName);
-
-  if (!fs.existsSync(sourcePath)) {
-    throw new Error(`Filter not found: ${sourceName}`);
-  }
-  if (!overwrite && fs.existsSync(targetPath)) {
-    throw new Error(`Filter already exists: ${targetName}`);
+  // Same reasoning as saveFilter — renaming the file while NotePlan is
+  // closed leaves the in-memory filter list pointing at the old name.
+  const bridge = await getBridgeClient();
+  if (!bridge) {
+    throw new Error('Renaming filters requires NotePlan to be running.');
   }
 
-  try {
-    fs.renameSync(sourcePath, targetPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'EPERM' || code === 'EXDEV') {
-      fs.copyFileSync(sourcePath, targetPath);
-      fs.unlinkSync(sourcePath);
-    } else {
-      throw error;
-    }
+  if (!overwrite) {
+    const existing = await bridge.getFilter(targetName);
+    if (existing) throw new Error(`Filter already exists: ${targetName}`);
   }
-
-  const stored = getFilter(targetName);
-  if (!stored) {
-    throw new Error(`Filter rename succeeded but reload failed: ${targetName}`);
-  }
-
+  await bridge.renameFilter(sourceName, targetName);
+  const stored = await getFilter(targetName);
+  if (!stored) throw new Error(`Filter rename succeeded but reload failed: ${targetName}`);
   return stored;
 }

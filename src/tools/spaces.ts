@@ -324,9 +324,9 @@ export const renameFolderSchema = z.object({
   }
 });
 
-export function listSpaces(params?: z.infer<typeof listSpacesSchema>) {
+export async function listSpaces(params?: z.infer<typeof listSpacesSchema>) {
   const input = params ?? ({} as z.infer<typeof listSpacesSchema>);
-  const spaces = store.listSpaces();
+  const spaces = await store.listSpaces();
   const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
   const filtered = query
     ? spaces.filter((space) =>
@@ -355,9 +355,9 @@ export function listSpaces(params?: z.infer<typeof listSpacesSchema>) {
   };
 }
 
-export function listTags(params?: z.infer<typeof listTagsSchema>) {
+export async function listTags(params?: z.infer<typeof listTagsSchema>) {
   const input = params ?? ({} as z.infer<typeof listTagsSchema>);
-  const tags = store.listTags(input.space);
+  const tags = await store.listTags(input.space);
   const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : undefined;
   const filtered = query ? tags.filter((tag) => tag.toLowerCase().includes(query)) : tags;
   const offset = toBoundedInt(input.cursor ?? input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -378,7 +378,7 @@ export function listTags(params?: z.infer<typeof listTagsSchema>) {
   };
 }
 
-export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
+export async function listFolders(params?: z.infer<typeof listFoldersSchema>) {
   const input = params ?? ({} as z.infer<typeof listFoldersSchema>);
   const includeStageTimings = isDebugTimingsEnabled(
     (input as { debugTimings?: unknown }).debugTimings
@@ -394,7 +394,7 @@ export function listFolders(params?: z.infer<typeof listFoldersSchema>) {
       ? (recursive ? 20 : Math.min(20, parentDepth + 1))
       : 1);
   const listStart = Date.now();
-  const folders = store.listFolders({
+  const folders = await store.listFolders({
     space: input.space,
     includeLocal: toOptionalBoolean(input.includeLocal),
     includeSpaces: toOptionalBoolean(input.includeSpaces),
@@ -497,7 +497,7 @@ function folderMatchScore(path: string, name: string, query: string): number {
   return 0;
 }
 
-export function findFolders(params: z.infer<typeof findFoldersSchema>) {
+export async function findFolders(params: z.infer<typeof findFoldersSchema>) {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   if (!query) {
     return {
@@ -508,7 +508,7 @@ export function findFolders(params: z.infer<typeof findFoldersSchema>) {
 
   const limit = toBoundedInt(params.limit, 10, 1, 100);
   const maxDepth = toOptionalBoundedInt(params.maxDepth, 1, 20) ?? 2;
-  const folders = store.listFolders({
+  const folders = await store.listFolders({
     space: params.space,
     includeLocal: toOptionalBoolean(params.includeLocal),
     includeSpaces: toOptionalBoolean(params.includeSpaces),
@@ -545,7 +545,7 @@ export function findFolders(params: z.infer<typeof findFoldersSchema>) {
   };
 }
 
-export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
+export async function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   if (!query) {
     return {
@@ -564,7 +564,7 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
   const stageTimings: Record<string, number> = {};
 
   const listStart = Date.now();
-  const folders = store.listFolders({
+  const folders = await store.listFolders({
     space: params.space,
     includeLocal: toOptionalBoolean(params.includeLocal),
     includeSpaces: toOptionalBoolean(params.includeSpaces),
@@ -668,11 +668,11 @@ export function resolveFolder(params: z.infer<typeof resolveFolderSchema>) {
   return result;
 }
 
-export function createFolder(params: z.infer<typeof createFolderSchema>) {
+export async function createFolder(params: z.infer<typeof createFolderSchema>) {
   const input = params ?? ({} as z.infer<typeof createFolderSchema>);
   try {
     if (input.space) {
-      const created = store.createFolder({
+      const created = await store.createFolder({
         space: input.space,
         name: input.name || '',
         parent: input.parent,
@@ -692,7 +692,7 @@ export function createFolder(params: z.infer<typeof createFolderSchema>) {
       };
     }
 
-    const created = store.createFolder({
+    const created = await store.createFolder({
       path: input.path || '',
     });
     return {
@@ -710,16 +710,16 @@ export function createFolder(params: z.infer<typeof createFolderSchema>) {
   }
 }
 
-export function moveFolder(params: z.infer<typeof moveFolderSchema>) {
+export async function moveFolder(params: z.infer<typeof moveFolderSchema>) {
   const input = params ?? ({} as z.infer<typeof moveFolderSchema>);
   try {
     const preview = input.space
-      ? store.previewMoveFolder({
+      ?  await store.previewMoveFolder({
           space: input.space,
           source: input.source || '',
           destination: input.destination || '',
         })
-      : store.previewMoveFolder({
+      :  await store.previewMoveFolder({
           sourcePath: input.sourcePath || '',
           destinationFolder: input.destinationFolder || '',
         });
@@ -759,12 +759,12 @@ export function moveFolder(params: z.infer<typeof moveFolderSchema>) {
     }
 
     const moved = input.space
-      ? store.moveFolder({
+      ?  await store.moveFolder({
           space: input.space,
           source: input.source || '',
           destination: input.destination || '',
         })
-      : store.moveFolder({
+      :  await store.moveFolder({
           sourcePath: input.sourcePath || '',
           destinationFolder: input.destinationFolder || '',
         });
@@ -785,15 +785,15 @@ export function moveFolder(params: z.infer<typeof moveFolderSchema>) {
   }
 }
 
-export function deleteFolder(params: z.infer<typeof deleteFolderSchema>) {
+export async function deleteFolder(params: z.infer<typeof deleteFolderSchema>) {
   const input = params ?? ({} as z.infer<typeof deleteFolderSchema>);
   try {
     const preview = input.space
-      ? store.previewDeleteFolder({
+      ?  await store.previewDeleteFolder({
           space: input.space,
           source: input.source || '',
         })
-      : store.previewDeleteFolder({
+      :  await store.previewDeleteFolder({
           path: input.path || '',
         });
 
@@ -832,11 +832,11 @@ export function deleteFolder(params: z.infer<typeof deleteFolderSchema>) {
     }
 
     const deleted = input.space
-      ? store.deleteFolder({
+      ?  await store.deleteFolder({
           space: input.space,
           source: input.source || '',
         })
-      : store.deleteFolder({
+      :  await store.deleteFolder({
           path: input.path || '',
         });
 
@@ -856,10 +856,10 @@ export function deleteFolder(params: z.infer<typeof deleteFolderSchema>) {
   }
 }
 
-export function renameFolder(params: z.infer<typeof renameFolderSchema>) {
+export async function renameFolder(params: z.infer<typeof renameFolderSchema>) {
   const input = params ?? ({} as z.infer<typeof renameFolderSchema>);
   try {
-    const preview = input.space
+    const preview = await (input.space
       ? store.previewRenameFolder({
           space: input.space,
           source: input.source || '',
@@ -868,7 +868,7 @@ export function renameFolder(params: z.infer<typeof renameFolderSchema>) {
       : store.previewRenameFolder({
           sourcePath: input.sourcePath || '',
           newName: input.newName || '',
-        });
+        }));
 
     const confirmationTarget = `${preview.fromPath}=>${preview.toPath}`;
     if (input.dryRun === true) {
@@ -898,7 +898,7 @@ export function renameFolder(params: z.infer<typeof renameFolderSchema>) {
       };
     }
 
-    const renamed = input.space
+    const renamed = await (input.space
       ? store.renameFolder({
           space: input.space,
           source: input.source || '',
@@ -907,7 +907,7 @@ export function renameFolder(params: z.infer<typeof renameFolderSchema>) {
       : store.renameFolder({
           sourcePath: input.sourcePath || '',
           newName: input.newName || '',
-        });
+        }));
 
     return {
       success: true,

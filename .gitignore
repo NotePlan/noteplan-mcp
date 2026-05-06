@@ -20,6 +20,7 @@ scripts/reminders-helper
 
 # Logs
 *.log
+logs/
 npm-debug.log*
 
 # SQLite artifacts

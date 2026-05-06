@@ -310,7 +310,7 @@ export const updateTaskSchema = z.object({
   }
 });
 
-export function getTasks(params: z.infer<typeof getTasksSchema>) {
+export async function getTasks(params: z.infer<typeof getTasksSchema>) {
   if (!params.id && !params.title && !params.filename && !params.date) {
     return {
       success: false,
@@ -318,7 +318,7 @@ export function getTasks(params: z.infer<typeof getTasksSchema>) {
     };
   }
 
-  const note = store.getNote({
+  const note = await store.getNote({
     id: params.id,
     title: params.title,
     filename: params.filename,
@@ -387,7 +387,7 @@ export function getTasks(params: z.infer<typeof getTasksSchema>) {
   return result;
 }
 
-export function searchTasks(params: z.infer<typeof searchTasksSchema>) {
+export async function searchTasks(params: z.infer<typeof searchTasksSchema>) {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   if (!query) {
     return {
@@ -402,7 +402,7 @@ export function searchTasks(params: z.infer<typeof searchTasksSchema>) {
     };
   }
 
-  const note = store.getNote({
+  const note = await store.getNote({
     id: params.id,
     title: params.title,
     filename: params.filename,
@@ -480,7 +480,7 @@ export function searchTasks(params: z.infer<typeof searchTasksSchema>) {
   return result;
 }
 
-export function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema>) {
+export async function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema>) {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   if (!query) {
     return {
@@ -501,7 +501,7 @@ export function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema
   const noteTypes = normalizeTypeList((params as { noteTypes?: unknown }).noteTypes);
   const preferCalendar = params.preferCalendar === true;
   const periodicOnly = params.periodicOnly === true;
-  const allNotes = store.listNotes({
+  const allNotes = await store.listNotes({
     folder: params.folder,
     space: params.space,
   });
@@ -608,17 +608,17 @@ export function searchTasksGlobal(params: z.infer<typeof searchTasksGlobalSchema
   return result;
 }
 
-export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
+export async function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
   try {
     let note;
 
     // Check if target is a date (daily note) or a filename (project note)
     if (isDateTarget(params.target)) {
       // Target is a date - get or create the daily note for that date
-      note = store.ensureCalendarNote(params.target, params.space);
+      note = await store.ensureCalendarNote(params.target, params.space);
     } else {
       // Target is a filename - get the project note
-      note = store.getNote({ filename: params.target, space: params.space });
+      note = await store.getNote({ filename: params.target, space: params.space });
     }
 
     if (!note) {
@@ -644,7 +644,7 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
     );
 
     const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    store.updateNote(writeIdentifier, newContent, {
+    await store.updateNote(writeIdentifier, newContent, {
       source: note.source,
     });
 
@@ -662,9 +662,9 @@ export function addTaskToNote(params: z.infer<typeof addTaskSchema>) {
   }
 }
 
-export function completeTask(params: z.infer<typeof completeTaskSchema>) {
+export async function completeTask(params: z.infer<typeof completeTaskSchema>) {
   try {
-    const noteRef = resolveWritableNoteReference({
+    const noteRef = await resolveWritableNoteReference({
       id: params.id,
       filename: params.filename,
       title: params.title,
@@ -716,7 +716,7 @@ export function completeTask(params: z.infer<typeof completeTaskSchema>) {
 
     const newContent = updateTaskStatus(note.content, lineIndex, 'done');
     const writable = getWritableIdentifier(note);
-    const updatedNote = store.updateNote(writable.identifier, newContent, {
+    const updatedNote = await store.updateNote(writable.identifier, newContent, {
       source: writable.source,
     });
 
@@ -740,7 +740,7 @@ export function completeTask(params: z.infer<typeof completeTaskSchema>) {
   }
 }
 
-export function updateTask(params: z.infer<typeof updateTaskSchema>) {
+export async function updateTask(params: z.infer<typeof updateTaskSchema>) {
   try {
     const resolved = resolveTaskLineIndex({
       lineIndex: params.lineIndex,
@@ -772,7 +772,7 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
       };
     }
 
-    const noteRef = resolveWritableNoteReference({
+    const noteRef = await resolveWritableNoteReference({
       id: params.id,
       filename: params.filename,
       title: params.title,
@@ -801,7 +801,7 @@ export function updateTask(params: z.infer<typeof updateTaskSchema>) {
     }
 
     const writable = getWritableIdentifier(note);
-    store.updateNote(writable.identifier, newContent, {
+    await store.updateNote(writable.identifier, newContent, {
       source: writable.source,
     });
 
@@ -888,10 +888,10 @@ export const deleteRecurringTaskSchema = z.object({
  * 5. Delete those matching lines from future notes
  * 6. Optionally delete the line from the source note
  */
-export function deleteRecurringTask(params: z.infer<typeof deleteRecurringTaskSchema>) {
+export async function deleteRecurringTask(params: z.infer<typeof deleteRecurringTaskSchema>) {
   try {
     // Resolve the source note
-    const noteRef = resolveWritableNoteReference({
+    const noteRef = await resolveWritableNoteReference({
       id: params.id,
       filename: params.filename,
       title: params.title,
@@ -960,7 +960,7 @@ export function deleteRecurringTask(params: z.infer<typeof deleteRecurringTaskSc
     }
 
     // Scan all calendar notes for matching lines
-    const allNotes = store.listNotes({ space: params.space, type: 'calendar' });
+    const allNotes = await store.listNotes({ space: params.space, type: 'calendar' });
     let deletedCount = 0;
     const affectedNotes: string[] = [];
 
@@ -993,13 +993,13 @@ export function deleteRecurringTask(params: z.infer<typeof deleteRecurringTaskSc
       if (foundMatch) {
         const newContent = filteredLines.join('\n');
         const writeId = calNote.source === 'space' ? (calNote.id || calNote.filename) : calNote.filename;
-        store.updateNote(writeId, newContent, { source: calNote.source });
+        await store.updateNote(writeId, newContent, { source: calNote.source });
         affectedNotes.push(calNote.filename);
 
         // If the note is now empty (or whitespace-only), trash it
         if (newContent.trim() === '') {
           try {
-            store.deleteNote(writeId);
+            await store.deleteNote(writeId);
           } catch {
             // Ignore errors from deleting empty notes
           }
@@ -1013,7 +1013,7 @@ export function deleteRecurringTask(params: z.infer<typeof deleteRecurringTaskSc
       lines.splice(lineIndex, 1);
       const newSourceContent = lines.join('\n');
       const writable = getWritableIdentifier(note);
-      store.updateNote(writable.identifier, newSourceContent, { source: writable.source });
+      await store.updateNote(writable.identifier, newSourceContent, { source: writable.source });
       sourceDeleted = true;
     }
 

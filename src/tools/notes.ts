@@ -60,11 +60,11 @@ function confirmationFailureMessage(toolName: string, reason: string): string {
   return `Confirmation token is invalid for ${toolName}. ${refreshHint}`;
 }
 
-function resolveNoteTarget(
+async function resolveNoteTarget(
   id?: string,
   filename?: string,
   space?: string
-): { identifier: string; note: ReturnType<typeof store.getNote> } {
+): Promise<{ identifier: string; note: Awaited<ReturnType<typeof store.getNote>> }> {
   const raw = (id && id.trim().length > 0 ? id : filename)?.trim();
   if (!raw) {
     return { identifier: '', note: null };
@@ -72,8 +72,8 @@ function resolveNoteTarget(
   const identifier = normalizeFilename(raw);
 
   const note = id
-    ? store.getNote({ id: identifier, space }) ?? store.getNote({ filename: identifier, space })
-    : store.getNote({ filename: identifier, space });
+    ? (await  await store.getNote({ id: identifier, space })) ?? (await  await store.getNote({ filename: identifier, space }))
+    : await  await store.getNote({ filename: identifier, space });
   return {
     identifier,
     note,
@@ -89,29 +89,29 @@ export type WritableNoteReferenceInput = {
   space?: string;
 };
 
-export function resolveWritableNoteReference(input: WritableNoteReferenceInput): {
-  note: ReturnType<typeof store.getNote>;
+export async function resolveWritableNoteReference(input: WritableNoteReferenceInput): Promise<{
+  note: Awaited<ReturnType<typeof store.getNote>>;
   error?: string;
   candidates?: Array<{ id: string; title: string; filename: string; score: number }>;
-} {
+}> {
   if (input.id && input.id.trim().length > 0) {
     const normalizedId = normalizeFilename(input.id.trim());
-    const note = store.getNote({ id: normalizedId, space: input.space?.trim() });
+    const note = await  await store.getNote({ id: normalizedId, space: input.space?.trim() });
     return { note, error: note ? undefined : 'Note not found' };
   }
 
   if (input.filename && input.filename.trim().length > 0) {
     const normalizedFn = normalizeFilename(input.filename.trim());
-    const note = store.getNote({ filename: normalizedFn, space: input.space?.trim() });
+    const note = await  await store.getNote({ filename: normalizedFn, space: input.space?.trim() });
     return { note, error: note ? undefined : 'Note not found' };
   }
 
   if (input.date && input.date.trim().length > 0) {
-    let note = store.getNote({ date: input.date.trim(), space: input.space?.trim() });
+    let note = await  await store.getNote({ date: input.date.trim(), space: input.space?.trim() });
     if (!note) {
       // Auto-create calendar notes on the fly (matches NotePlan native behavior)
       try {
-        note = store.ensureCalendarNote(input.date.trim(), input.space?.trim());
+        note = await  await store.ensureCalendarNote(input.date.trim(), input.space?.trim());
       } catch {
         return { note: null, error: 'Failed to create calendar note for date' };
       }
@@ -121,14 +121,14 @@ export function resolveWritableNoteReference(input: WritableNoteReferenceInput):
 
   const textQuery = input.query?.trim() || input.title?.trim();
   if (textQuery) {
-    const resolved = resolveNote({
+    const resolved = (await resolveNote({
       query: textQuery,
       space: input.space?.trim(),
       types: ['note', 'calendar'],
       limit: 5,
       minScore: 0.88,
       ambiguityDelta: 0.06,
-    }) as {
+    })) as {
       success?: boolean;
       resolved?: { id?: string; filename?: string };
       ambiguous?: boolean;
@@ -153,7 +153,7 @@ export function resolveWritableNoteReference(input: WritableNoteReferenceInput):
     if (!identifier) {
       return { note: null, error: 'Could not resolve note target' };
     }
-    const note = store.getNote({ id: identifier, space: input.space?.trim() }) ?? store.getNote({ filename: identifier, space: input.space?.trim() });
+    const note = (await  await store.getNote({ id: identifier, space: input.space?.trim() })) ?? (await  await store.getNote({ filename: identifier, space: input.space?.trim() }));
     return { note, error: note ? undefined : 'Resolved note no longer exists' };
   }
 
@@ -164,7 +164,7 @@ export function resolveWritableNoteReference(input: WritableNoteReferenceInput):
 }
 
 export function getWritableIdentifier(
-  note: NonNullable<ReturnType<typeof store.getNote>>
+  note: NonNullable<Awaited<ReturnType<typeof store.getNote>>>
 ): { identifier: string; source: 'local' | 'space' } {
   if (note.source === 'space') {
     return {
@@ -416,14 +416,6 @@ export const updateNoteSchema = z.object({
     .boolean()
     .optional()
     .describe('Required safety confirmation for whole-note rewrite. Must be true to proceed.'),
-  dryRun: z
-    .boolean()
-    .optional()
-    .describe('Preview full-rewrite impact and get confirmationToken without modifying the note'),
-  confirmationToken: z
-    .string()
-    .optional()
-    .describe('Confirmation token issued by dryRun for full note rewrite'),
   allowEmptyContent: z
     .boolean()
     .optional()
@@ -552,8 +544,8 @@ export const restoreNoteSchema = z.object({
 });
 
 // Tool implementations
-export function getNote(params: z.infer<typeof getNoteSchema>) {
-  const note = store.getNote(params);
+export async function getNote(params: z.infer<typeof getNoteSchema>) {
+  const note = await store.getNote(params);
 
   if (!note) {
     return {
@@ -630,9 +622,9 @@ export function getNote(params: z.infer<typeof getNoteSchema>) {
   return result;
 }
 
-export function listNotes(params?: z.infer<typeof listNotesSchema>) {
+export async function listNotes(params?: z.infer<typeof listNotesSchema>) {
   const input = params ?? ({} as z.infer<typeof listNotesSchema>);
-  const notes = store.listNotes({
+  const notes = await store.listNotes({
     folder: input.folder,
     space: input.space,
   });
@@ -696,7 +688,7 @@ function normalizeDateToken(value?: string): string | null {
 }
 
 function noteMatchScore(
-  note: ReturnType<typeof store.listNotes>[number],
+  note: Awaited<ReturnType<typeof store.listNotes>>[number],
   query: string,
   queryDateToken: string | null
 ): number {
@@ -719,7 +711,7 @@ function noteMatchScore(
   return 0;
 }
 
-export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
+export async function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   if (!query) {
     return {
@@ -739,7 +731,7 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
   const stageTimings: Record<string, number> = {};
 
   const listStart = Date.now();
-  const notes = store.listNotes({
+  const notes = await store.listNotes({
     folder: params.folder,
     space: params.space,
   });
@@ -842,7 +834,7 @@ export function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
   return result;
 }
 
-export function createNote(params: z.infer<typeof createNoteSchema>) {
+export async function createNote(params: z.infer<typeof createNoteSchema>) {
   try {
     const isTemplate = params.noteType === 'template';
     const folder = isTemplate && !params.folder ? '@Templates' : params.folder;
@@ -850,7 +842,7 @@ export function createNote(params: z.infer<typeof createNoteSchema>) {
       ? ensureTemplateFrontmatter(params.title, params.content, params.templateTypes)
       : params.content;
 
-    const result = store.createNote(params.title, content, {
+    const result = await store.createNote(params.title, content, {
       folder,
       space: params.space,
       createNewFolder: params.create_new_folder,
@@ -883,7 +875,7 @@ export function createNote(params: z.infer<typeof createNoteSchema>) {
   }
 }
 
-export function updateNote(params: z.infer<typeof updateNoteSchema>) {
+export async function updateNote(params: z.infer<typeof updateNoteSchema>) {
   try {
     if (params.fullReplace !== true) {
       return {
@@ -893,7 +885,7 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
       };
     }
 
-    const noteRef = resolveWritableNoteReference(params);
+    const noteRef = await resolveWritableNoteReference(params);
     if (!noteRef.note) {
       return {
         success: false,
@@ -911,48 +903,8 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
       };
     }
 
-    // Use the resolved filename as the confirmation token target for consistency
-    const confirmationTarget = existingNote.filename;
-
-    if (isTrueBool(params.dryRun)) {
-      const token = issueConfirmationToken({
-        tool: 'noteplan_update_note',
-        target: confirmationTarget,
-        action: 'full_replace',
-      });
-      return {
-        success: true,
-        dryRun: true,
-        message: `Dry run: note ${existingNote.filename} would be fully replaced`,
-        note: {
-          id: existingNote.id,
-          title: existingNote.title,
-          filename: existingNote.filename,
-          type: existingNote.type,
-          source: existingNote.source,
-          folder: existingNote.folder,
-          spaceId: existingNote.spaceId,
-        },
-        currentContentLength: existingNote.content.length,
-        newContentLength: params.content.length,
-        ...token,
-      };
-    }
-
-    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
-      tool: 'noteplan_update_note',
-      target: confirmationTarget,
-      action: 'full_replace',
-    });
-    if (!confirmation.ok) {
-      return {
-        success: false,
-        error: confirmationFailureMessage('noteplan_update_note', confirmation.reason),
-      };
-    }
-
     const writeTarget = getWritableIdentifier(existingNote);
-    const note = store.updateNote(writeTarget.identifier, params.content, {
+    const note = await store.updateNote(writeTarget.identifier, params.content, {
       source: writeTarget.source,
     });
 
@@ -973,9 +925,9 @@ export function updateNote(params: z.infer<typeof updateNoteSchema>) {
   }
 }
 
-export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
+export async function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
   try {
-    const target = resolveNoteTarget(params.id, params.filename, params.space);
+    const target = await resolveNoteTarget(params.id, params.filename, params.space);
     const note = target.note;
     if (!note) {
       return {
@@ -1019,7 +971,7 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
       };
     }
 
-    const deleted = store.deleteNote(target.identifier);
+    const deleted = await store.deleteNote(target.identifier);
 
     return {
       success: true,
@@ -1042,9 +994,9 @@ export function deleteNote(params: z.infer<typeof deleteNoteSchema>) {
   }
 }
 
-export function moveNote(params: z.infer<typeof moveNoteSchema>) {
+export async function moveNote(params: z.infer<typeof moveNoteSchema>) {
   try {
-    const noteRef = resolveWritableNoteReference(params);
+    const noteRef = await resolveWritableNoteReference(params);
     if (!noteRef.note) {
       return {
         success: false,
@@ -1053,7 +1005,7 @@ export function moveNote(params: z.infer<typeof moveNoteSchema>) {
       };
     }
     const writable = getWritableIdentifier(noteRef.note);
-    const preview = store.previewMoveNote(writable.identifier, params.destinationFolder);
+    const preview = await store.previewMoveNote(writable.identifier, params.destinationFolder);
     const confirmationTarget =
       `${preview.fromFilename}=>${preview.toFilename}::${preview.destinationParentId ?? preview.destinationFolder}`;
 
@@ -1095,7 +1047,7 @@ export function moveNote(params: z.infer<typeof moveNoteSchema>) {
       };
     }
 
-    const moved = store.moveNote(writable.identifier, params.destinationFolder);
+    const moved = await store.moveNote(writable.identifier, params.destinationFolder);
     return {
       success: true,
       message:
@@ -1123,9 +1075,9 @@ export function moveNote(params: z.infer<typeof moveNoteSchema>) {
   }
 }
 
-export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
+export async function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
   try {
-    const target = resolveNoteTarget(params.id, params.filename, params.space);
+    const target = await resolveNoteTarget(params.id, params.filename, params.space);
     if (!target.note) {
       return {
         success: false,
@@ -1133,7 +1085,7 @@ export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
       };
     }
 
-    const preview = store.previewRestoreNote(target.identifier, params.destinationFolder);
+    const preview = await store.previewRestoreNote(target.identifier, params.destinationFolder);
     const confirmationTarget = `${preview.fromIdentifier}=>${preview.toIdentifier}`;
 
     if (isTrueBool(params.dryRun)) {
@@ -1174,7 +1126,7 @@ export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
       };
     }
 
-    const restored = store.restoreNote(target.identifier, params.destinationFolder);
+    const restored = await store.restoreNote(target.identifier, params.destinationFolder);
     return {
       success: true,
       message:
@@ -1201,10 +1153,10 @@ export function restoreNote(params: z.infer<typeof restoreNoteSchema>) {
   }
 }
 
-export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
+export async function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
   try {
     // Resolve the note — supports id, filename, title, or query
-    const resolved = resolveWritableNoteReference(params);
+    const resolved = await resolveWritableNoteReference(params);
     if (!resolved.note) {
       return {
         success: false,
@@ -1263,7 +1215,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
         };
       }
 
-      const renamed = store.renameSpaceNote(writeId, params.newTitle);
+      const renamed = await store.renameSpaceNote(writeId, params.newTitle);
 
       // Also update the # Title heading in the note content if it matches the old title
       if (renamed.note.content) {
@@ -1274,7 +1226,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
           if (oldHeadingTitle === renamed.fromTitle) {
             lines[titleLineIndex] = `# ${params.newTitle}`;
             const renamedWriteTarget = getWritableIdentifier(renamed.note);
-            store.updateNote(renamedWriteTarget.identifier, lines.join('\n'), {
+            await store.updateNote(renamedWriteTarget.identifier, lines.join('\n'), {
               source: renamedWriteTarget.source,
             });
           }
@@ -1309,7 +1261,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
     }
 
     const keepExtension = params.keepExtension ?? true;
-    const preview = store.previewRenameNoteFile(note.filename, effectiveNewFilename, keepExtension);
+    const preview = await store.previewRenameNoteFile(note.filename, effectiveNewFilename, keepExtension);
     const confirmationTarget = `${preview.fromFilename}=>${preview.toFilename}`;
 
     if (isTrueBool(params.dryRun)) {
@@ -1349,7 +1301,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
       };
     }
 
-    const renamed = store.renameNoteFile(note.filename, effectiveNewFilename, keepExtension);
+    const renamed = await store.renameNoteFile(note.filename, effectiveNewFilename, keepExtension);
 
     // Also update the # Title heading in the note content if it matches the old title
     const newTitle = params.newTitle || params.newFilename;
@@ -1364,7 +1316,7 @@ export function renameNoteFile(params: z.infer<typeof renameNoteFileSchema>) {
         if (oldHeadingTitle === oldTitle || oldHeadingTitle === oldFilenameBase) {
           lines[titleLineIndex] = `# ${newTitle}`;
           const writeTarget = getWritableIdentifier(renamed.note);
-          store.updateNote(writeTarget.identifier, lines.join('\n'), {
+          await store.updateNote(writeTarget.identifier, lines.join('\n'), {
             source: writeTarget.source,
           });
         }
@@ -1492,8 +1444,8 @@ function annotateFromMeta(
   };
 }
 
-export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
-  const noteRef = resolveWritableNoteReference(params);
+export async function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
+  const noteRef = await resolveWritableNoteReference(params);
   if (!noteRef.note) {
     return {
       success: false,
@@ -1602,7 +1554,7 @@ export function getParagraphs(params: z.infer<typeof getParagraphsSchema>) {
   return result;
 }
 
-export function searchParagraphs(params: z.infer<typeof searchParagraphsSchema>) {
+export async function searchParagraphs(params: z.infer<typeof searchParagraphsSchema>) {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   if (!query) {
     return {
@@ -1617,7 +1569,7 @@ export function searchParagraphs(params: z.infer<typeof searchParagraphsSchema>)
     };
   }
 
-  const note = store.getNote({
+  const note = await store.getNote({
     id: params.id,
     title: params.title,
     filename: params.filename,
@@ -1901,14 +1853,6 @@ export const replaceLinesSchema = z.object({
     .optional()
     .default('tabs')
     .describe('Indentation normalization for replacement list/task lines. Default: tabs'),
-  dryRun: z
-    .boolean()
-    .optional()
-    .describe('Preview line replacement and get confirmationToken without modifying the note'),
-  confirmationToken: z
-    .string()
-    .optional()
-    .describe('Confirmation token issued by dryRun for replace execution'),
   allowEmptyContent: z
     .boolean()
     .optional()
@@ -1916,9 +1860,9 @@ export const replaceLinesSchema = z.object({
 });
 
 // Granular note operation implementations
-export function setProperty(params: z.infer<typeof setPropertySchema>) {
+export async function setProperty(params: z.infer<typeof setPropertySchema>) {
   try {
-    const noteRef = resolveWritableNoteReference(params);
+    const noteRef = await resolveWritableNoteReference(params);
     if (!noteRef.note) {
       return { success: false, error: noteRef.error || 'Note not found', candidates: noteRef.candidates };
     }
@@ -1926,7 +1870,7 @@ export function setProperty(params: z.infer<typeof setPropertySchema>) {
 
     const newContent = frontmatter.setFrontmatterProperty(note.content, params.key, params.value);
     const writable = getWritableIdentifier(note);
-    store.updateNote(writable.identifier, newContent, { source: writable.source });
+    await store.updateNote(writable.identifier, newContent, { source: writable.source });
 
     return {
       success: true,
@@ -1940,9 +1884,9 @@ export function setProperty(params: z.infer<typeof setPropertySchema>) {
   }
 }
 
-export function removeProperty(params: z.infer<typeof removePropertySchema>) {
+export async function removeProperty(params: z.infer<typeof removePropertySchema>) {
   try {
-    const noteRef = resolveWritableNoteReference(params);
+    const noteRef = await resolveWritableNoteReference(params);
     if (!noteRef.note) {
       return { success: false, error: noteRef.error || 'Note not found', candidates: noteRef.candidates };
     }
@@ -1950,7 +1894,7 @@ export function removeProperty(params: z.infer<typeof removePropertySchema>) {
 
     const newContent = frontmatter.removeFrontmatterProperty(note.content, params.key);
     const writable = getWritableIdentifier(note);
-    store.updateNote(writable.identifier, newContent, { source: writable.source });
+    await store.updateNote(writable.identifier, newContent, { source: writable.source });
 
     return {
       success: true,
@@ -1964,9 +1908,9 @@ export function removeProperty(params: z.infer<typeof removePropertySchema>) {
   }
 }
 
-export function insertContent(params: z.infer<typeof insertContentSchema>) {
+export async function insertContent(params: z.infer<typeof insertContentSchema>) {
   try {
-    const resolved = resolveWritableNoteReference(params);
+    const resolved = await resolveWritableNoteReference(params);
     if (!resolved.note) {
       return {
         success: false,
@@ -2032,7 +1976,7 @@ export function insertContent(params: z.infer<typeof insertContentSchema>) {
       line: params.line,
     });
     const writeTarget = getWritableIdentifier(note);
-    store.updateNote(writeTarget.identifier, newContent, {
+    await store.updateNote(writeTarget.identifier, newContent, {
       source: writeTarget.source,
     });
 
@@ -2056,9 +2000,9 @@ export function insertContent(params: z.infer<typeof insertContentSchema>) {
   }
 }
 
-export function appendContent(params: z.infer<typeof appendContentSchema>) {
+export async function appendContent(params: z.infer<typeof appendContentSchema>) {
   try {
-    const resolved = resolveWritableNoteReference(params);
+    const resolved = await resolveWritableNoteReference(params);
     if (!resolved.note) {
       return {
         success: false,
@@ -2077,7 +2021,7 @@ export function appendContent(params: z.infer<typeof appendContentSchema>) {
       heading: params.heading,
     });
     const writeTarget = getWritableIdentifier(note);
-    store.updateNote(writeTarget.identifier, newContent, {
+    await store.updateNote(writeTarget.identifier, newContent, {
       source: writeTarget.source,
     });
 
@@ -2100,7 +2044,7 @@ export function appendContent(params: z.infer<typeof appendContentSchema>) {
   }
 }
 
-export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
+export async function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
   try {
     // Validate required line params — MCP may deliver them as undefined when omitted
     const rawStart = params.startLine !== undefined && params.startLine !== null ? Number(params.startLine) : NaN;
@@ -2112,16 +2056,21 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
       return { success: false, error: 'endLine is required (1-indexed). Pass the same value as startLine to delete a single line.' };
     }
 
-    const resolved = resolveWritableNoteReference(params);
+    const resolved = await resolveWritableNoteReference(params);
     if (!resolved.note) {
       return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
     }
     const note = resolved.note;
 
     const allLines = note.content.split('\n');
-    // Line numbers are absolute (1-indexed), matching get_notes/getParagraphs
     const totalLineCount = allLines.length;
     const fmLineCount = frontmatter.getFrontmatterLineCount(note.content);
+    if (fmLineCount > 0 && rawStart <= fmLineCount) {
+      return {
+        success: false,
+        error: `Line ${rawStart} is inside frontmatter (lines 1-${fmLineCount}). Content starts at line ${fmLineCount + 1}.`,
+      };
+    }
     const minLine = fmLineCount > 0 ? fmLineCount + 1 : 1;
     const boundedStartLine = toBoundedInt(params.startLine, minLine, minLine, Math.max(minLine, totalLineCount));
     const boundedEndLine = toBoundedInt(
@@ -2130,12 +2079,6 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
       boundedStartLine,
       Math.max(boundedStartLine, totalLineCount)
     );
-    if (boundedStartLine <= fmLineCount) {
-      return {
-        success: false,
-        error: `Lines 1-${fmLineCount} are frontmatter and cannot be deleted. Content starts at line ${fmLineCount + 1}.`,
-      };
-    }
     const lineCountToDelete = boundedEndLine - boundedStartLine + 1;
     const previewStartIndex = boundedStartLine - 1;
     const previewEndIndexExclusive = boundedEndLine;
@@ -2212,7 +2155,7 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
     splicedLines.splice(boundedStartLine - 1, lineCountToDelete);
     const newContent = splicedLines.join('\n');
     const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    store.updateNote(writeIdentifier, newContent, { source: note.source });
+    await store.updateNote(writeIdentifier, newContent, { source: note.source });
 
     return {
       success: true,
@@ -2230,7 +2173,7 @@ export function deleteLines(params: z.infer<typeof deleteLinesSchema>) {
   }
 }
 
-export function editLine(params: z.infer<typeof editLineSchema>) {
+export async function editLine(params: z.infer<typeof editLineSchema>) {
   try {
     if (params.allowEmptyContent !== true && params.content.trim().length === 0) {
       return {
@@ -2240,7 +2183,7 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
       };
     }
 
-    const resolved = resolveWritableNoteReference(params);
+    const resolved = await resolveWritableNoteReference(params);
     if (!resolved.note) {
       return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
     }
@@ -2290,7 +2233,7 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
     }
 
     const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    store.updateNote(writeIdentifier, newContent, { source: note.source });
+    await store.updateNote(writeIdentifier, newContent, { source: note.source });
 
     return {
       success: true,
@@ -2315,7 +2258,7 @@ export function editLine(params: z.infer<typeof editLineSchema>) {
   }
 }
 
-export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
+export async function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
   try {
     // Validate required line params — MCP may deliver them as undefined when omitted
     const rawStart = params.startLine !== undefined && params.startLine !== null ? Number(params.startLine) : NaN;
@@ -2327,7 +2270,7 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
       return { success: false, error: 'endLine is required (1-indexed). Pass the same value as startLine to replace a single line.' };
     }
 
-    const resolved = resolveWritableNoteReference(params);
+    const resolved = await resolveWritableNoteReference(params);
     if (!resolved.note) {
       return { success: false, error: resolved.error || 'Note not found', candidates: resolved.candidates };
     }
@@ -2335,8 +2278,13 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
 
     const allLines = note.content.split('\n');
     const originalLineCount = allLines.length;
-    // Line numbers are absolute (1-indexed), matching get_notes/getParagraphs
     const fmLineCount = frontmatter.getFrontmatterLineCount(note.content);
+    if (fmLineCount > 0 && rawStart <= fmLineCount) {
+      return {
+        success: false,
+        error: `Line ${rawStart} is inside frontmatter (lines 1-${fmLineCount}). Content starts at line ${fmLineCount + 1}.`,
+      };
+    }
     const minLine = fmLineCount > 0 ? fmLineCount + 1 : 1;
     const boundedStartLine = toBoundedInt(params.startLine, minLine, minLine, Math.max(minLine, originalLineCount));
     const boundedEndLine = toBoundedInt(
@@ -2345,12 +2293,6 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
       boundedStartLine,
       Math.max(boundedStartLine, originalLineCount)
     );
-    if (boundedStartLine <= fmLineCount) {
-      return {
-        success: false,
-        error: `Lines 1-${fmLineCount} are frontmatter and cannot be replaced directly. Content starts at line ${fmLineCount + 1}.`,
-      };
-    }
     let startIndex = boundedStartLine - 1;
     let lineCountToReplace = boundedEndLine - boundedStartLine + 1;
     const replacedText = allLines.slice(startIndex, boundedEndLine).join('\n');
@@ -2392,46 +2334,9 @@ export function replaceLines(params: z.infer<typeof replaceLinesSchema>) {
       );
     }
 
-    const target = `${note.filename}:${boundedStartLine}-${boundedEndLine}:${replacementLines.length}:${normalized.content.length}`;
-    if (isTrueBool(params.dryRun)) {
-      const token = issueConfirmationToken({
-        tool: 'noteplan_replace_lines',
-        target,
-        action: 'replace_lines',
-      });
-      return {
-        success: true,
-        dryRun: true,
-        message: `Dry run: lines ${boundedStartLine}-${boundedEndLine} would be replaced`,
-        lineCountToReplace,
-        insertedLineCount: replacementLines.length,
-        lineDelta,
-        originalLineCount,
-        newLineCount,
-        indentationStyle,
-        linesRetabbed: normalized.linesRetabbed,
-        removedAttachmentReferences: removedAttachmentReferences.slice(0, 20),
-        removedAttachmentReferencesTruncated: removedAttachmentReferences.length > 20,
-        warnings: warnings.length > 0 ? warnings : undefined,
-        ...token,
-      };
-    }
-
-    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
-      tool: 'noteplan_replace_lines',
-      target,
-      action: 'replace_lines',
-    });
-    if (!confirmation.ok) {
-      return {
-        success: false,
-        error: confirmationFailureMessage('noteplan_replace_lines', confirmation.reason),
-      };
-    }
-
     allLines.splice(startIndex, lineCountToReplace, ...replacementLines);
     const writeIdentifier = note.source === 'space' ? (note.id || note.filename) : note.filename;
-    store.updateNote(writeIdentifier, allLines.join('\n'), { source: note.source });
+    await store.updateNote(writeIdentifier, allLines.join('\n'), { source: note.source });
 
     return {
       success: true,
@@ -2520,7 +2425,7 @@ export const searchParagraphsGlobalSchema = z.object({
   cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
 });
 
-export function searchParagraphsGlobal(params: z.infer<typeof searchParagraphsGlobalSchema>) {
+export async function searchParagraphsGlobal(params: z.infer<typeof searchParagraphsGlobalSchema>) {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   if (!query) {
     return {
@@ -2544,7 +2449,7 @@ export function searchParagraphsGlobal(params: z.infer<typeof searchParagraphsGl
   const preferCalendar = params.preferCalendar === true;
   const periodicOnly = params.periodicOnly === true;
 
-  const allNotes = store.listNotes({
+  const allNotes = await store.listNotes({
     folder: params.folder,
     space: params.space,
   });

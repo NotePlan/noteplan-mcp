@@ -5,6 +5,20 @@ import * as path from 'path';
 import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
 import { getNotePlanPath } from '../noteplan/file-reader.js';
+import {
+  pathExists,
+  statPath,
+  readDir,
+  makeDirectory,
+  removePath,
+  moveFile,
+  readFileUtf8,
+  writeFileUtf8,
+  readFileBinary,
+  writeFileBinary,
+  toRelative,
+} from '../transport/bridge-fs.js';
+import { getBridgeClient } from '../transport/bridge-availability.js';
 
 // ── Constants (mirrors FileAttachments.swift) ──
 
@@ -128,38 +142,38 @@ function ensureInsideRoot(targetPath: string): boolean {
 
 // ── Note resolution (shared pattern with other tools) ──
 
-function resolveNoteForAttachment(params: {
+async function resolveNoteForAttachment(params: {
   id?: string;
   filename?: string;
   title?: string;
   date?: string;
   query?: string;
   space?: string;
-}): {
-  note: ReturnType<typeof store.getNote>;
+}): Promise<{
+  note: Awaited<ReturnType<typeof store.getNote>>;
   error?: string;
-} {
+}> {
   const { id, filename, title, date, query, space } = params;
 
   if (id?.trim()) {
-    const note = store.getNote({ id: id.trim(), space: space?.trim() })
-      ?? store.getNote({ filename: id.trim(), space: space?.trim() });
+    const note = await store.getNote({ id: id.trim(), space: space?.trim() })
+      ??  await store.getNote({ filename: id.trim(), space: space?.trim() });
     return { note, error: note ? undefined : `Note not found: ${id}` };
   }
 
   if (filename?.trim()) {
-    const note = store.getNote({ filename: filename.trim(), space: space?.trim() });
+    const note = await store.getNote({ filename: filename.trim(), space: space?.trim() });
     return { note, error: note ? undefined : `Note not found: ${filename}` };
   }
 
   if (date?.trim()) {
-    const note = store.getNote({ date: date.trim(), space: space?.trim() });
+    const note = await store.getNote({ date: date.trim(), space: space?.trim() });
     return { note, error: note ? undefined : `Calendar note not found for date: ${date}` };
   }
 
   const textQuery = title?.trim() || query?.trim();
   if (textQuery) {
-    const note = store.getNote({ title: textQuery, space: space?.trim() });
+    const note = await store.getNote({ title: textQuery, space: space?.trim() });
     if (note) {
       return { note };
     }
@@ -178,7 +192,7 @@ function resolveNoteForAttachment(params: {
  * - Writes the file
  * - Returns the markdown link for the AI to place where it wants
  */
-export function addAttachment(params: z.infer<typeof attachmentsSchema>) {
+export async function addAttachment(params: z.infer<typeof attachmentsSchema>) {
   const { data, attachmentFilename } = params;
 
   if (!data) {
@@ -188,7 +202,7 @@ export function addAttachment(params: z.infer<typeof attachmentsSchema>) {
     return { success: false, error: 'attachmentFilename is required for add' };
   }
 
-  const { note, error } = resolveNoteForAttachment(params);
+  const { note, error } = await resolveNoteForAttachment(params);
   if (!note) {
     return { success: false, error: error || 'Note not found' };
   }
@@ -220,24 +234,19 @@ export function addAttachment(params: z.infer<typeof attachmentsSchema>) {
     return { success: false, error: 'Decoded attachment data is empty' };
   }
 
-  if (!fs.existsSync(attachmentsFolder)) {
-    fs.mkdirSync(attachmentsFolder, { recursive: true });
-  }
-
-  fs.writeFileSync(attachmentPath, buffer);
+  // writeFileBinary creates the parent dir itself, so no explicit mkdir.
+  await writeFileBinary(attachmentPath, buffer);
 
   const markdownLink = toMarkdownLink(note.filename, cleanName);
 
   // Only insert link if explicitly requested (default: false)
   if (params.insertLink === true) {
-    const notePlanPath = getNotePlanPath();
-    const fullNotePath = path.join(notePlanPath, note.filename);
-    const content = fs.readFileSync(fullNotePath, 'utf-8');
-    // Simple append at end
+    const fullNotePath = path.join(getNotePlanPath(), note.filename);
+    const content = (await readFileUtf8(fullNotePath)) ?? '';
     const newContent = content.endsWith('\n')
       ? content + markdownLink + '\n'
       : content + '\n' + markdownLink + '\n';
-    fs.writeFileSync(fullNotePath, newContent, 'utf-8');
+    await writeFileUtf8(fullNotePath, newContent);
   }
 
   return {
@@ -258,8 +267,8 @@ export function addAttachment(params: z.infer<typeof attachmentsSchema>) {
 /**
  * List attachments for a note.
  */
-export function listAttachments(params: z.infer<typeof attachmentsSchema>) {
-  const { note, error } = resolveNoteForAttachment(params);
+export async function listAttachments(params: z.infer<typeof attachmentsSchema>) {
+  const { note, error } = await resolveNoteForAttachment(params);
   if (!note) {
     return { success: false, error: error || 'Note not found' };
   }
@@ -270,7 +279,7 @@ export function listAttachments(params: z.infer<typeof attachmentsSchema>) {
 
   const attachmentsFolder = getAttachmentsFolderPath(note.filename);
 
-  if (!fs.existsSync(attachmentsFolder)) {
+  if (!(await pathExists(attachmentsFolder))) {
     return {
       success: true,
       noteFilename: note.filename,
@@ -281,21 +290,43 @@ export function listAttachments(params: z.infer<typeof attachmentsSchema>) {
     };
   }
 
-  const entries = fs.readdirSync(attachmentsFolder, { withFileTypes: true });
+  // Bridge.list returns size+mtime per entry in one round-trip; falls back
+  // to fs.promises.readdir + a stat per entry when the bridge isn't there.
+  const bridge = await getBridgeClient();
+  type Entry = { name: string; isDir: boolean; size: number; modifiedAt: string };
+  let entries: Entry[];
+  if (bridge) {
+    const rows = await bridge.list(toRelative(attachmentsFolder));
+    entries = rows.map((r) => ({
+      name: r.name,
+      isDir: r.isDir,
+      size: r.size,
+      modifiedAt: new Date(r.mtime).toISOString(),
+    }));
+  } else {
+    const dirents = await fs.promises.readdir(attachmentsFolder, { withFileTypes: true });
+    entries = await Promise.all(
+      dirents.map(async (e) => {
+        const stats = await fs.promises.stat(path.join(attachmentsFolder, e.name));
+        return {
+          name: e.name,
+          isDir: e.isDirectory(),
+          size: stats.size,
+          modifiedAt: stats.mtime.toISOString(),
+        };
+      }),
+    );
+  }
   const attachments = entries
-    .filter((e) => e.isFile() && !e.name.startsWith('.'))
-    .map((e) => {
-      const filePath = path.join(attachmentsFolder, e.name);
-      const stats = fs.statSync(filePath);
-      return {
-        filename: e.name,
-        relativePath: getRelativeAttachmentPath(note.filename, e.name),
-        markdownLink: toMarkdownLink(note.filename, e.name),
-        isImage: isImageFile(e.name),
-        size: stats.size,
-        modifiedAt: stats.mtime.toISOString(),
-      };
-    })
+    .filter((e) => !e.isDir && !e.name.startsWith('.'))
+    .map((e) => ({
+      filename: e.name,
+      relativePath: getRelativeAttachmentPath(note.filename, e.name),
+      markdownLink: toMarkdownLink(note.filename, e.name),
+      isImage: isImageFile(e.name),
+      size: e.size,
+      modifiedAt: e.modifiedAt,
+    }))
     .sort((a, b) => a.filename.localeCompare(b.filename));
 
   return {
@@ -311,14 +342,14 @@ export function listAttachments(params: z.infer<typeof attachmentsSchema>) {
 /**
  * Get a specific attachment's metadata and optionally its base64 data.
  */
-export function getAttachment(params: z.infer<typeof attachmentsSchema>) {
+export async function getAttachment(params: z.infer<typeof attachmentsSchema>) {
   const attachmentName = params.attachmentFilename;
 
   if (!attachmentName) {
     return { success: false, error: 'attachmentFilename is required for get' };
   }
 
-  const { note, error } = resolveNoteForAttachment(params);
+  const { note, error } = await resolveNoteForAttachment(params);
   if (!note) {
     return { success: false, error: error || 'Note not found' };
   }
@@ -334,11 +365,10 @@ export function getAttachment(params: z.infer<typeof attachmentsSchema>) {
     return { success: false, error: 'Attachment path escapes NotePlan directory' };
   }
 
-  if (!fs.existsSync(filePath)) {
+  const stats = await statPath(filePath);
+  if (!stats.exists) {
     return { success: false, error: `Attachment not found: ${attachmentName}` };
   }
-
-  const stats = fs.statSync(filePath);
   const ext = path.extname(filePath).toLowerCase().replace('.', '');
   const mimeMap: Record<string, string> = {
     png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
@@ -361,7 +391,7 @@ export function getAttachment(params: z.infer<typeof attachmentsSchema>) {
   };
 
   if (params.includeData) {
-    const fileData = fs.readFileSync(filePath);
+    const fileData = (await readFileBinary(filePath)) ?? Buffer.alloc(0);
     const maxSize = params.maxDataSize;
 
     if (maxSize && isImageFile(filePath) && fileData.length > maxSize) {
@@ -384,7 +414,7 @@ export function getAttachment(params: z.infer<typeof attachmentsSchema>) {
  * - Removes the old markdown link from the source note
  * - Returns the new markdown link for the AI to place in the destination note
  */
-export function moveAttachment(params: z.infer<typeof attachmentsSchema>) {
+export async function moveAttachment(params: z.infer<typeof attachmentsSchema>) {
   const attachmentName = params.attachmentFilename;
 
   if (!attachmentName) {
@@ -392,7 +422,7 @@ export function moveAttachment(params: z.infer<typeof attachmentsSchema>) {
   }
 
   // Resolve source note
-  const { note: sourceNote, error: srcError } = resolveNoteForAttachment(params);
+  const { note: sourceNote, error: srcError } = await resolveNoteForAttachment(params);
   if (!sourceNote) {
     return { success: false, error: srcError || 'Source note not found' };
   }
@@ -401,7 +431,7 @@ export function moveAttachment(params: z.infer<typeof attachmentsSchema>) {
   }
 
   // Resolve destination note
-  const { note: destNote, error: destError } = resolveNoteForAttachment({
+  const { note: destNote, error: destError } = await resolveNoteForAttachment({
     id: params.destinationId,
     filename: params.destinationFilename,
     title: params.destinationTitle,
@@ -423,7 +453,7 @@ export function moveAttachment(params: z.infer<typeof attachmentsSchema>) {
   if (!ensureInsideRoot(srcPath)) {
     return { success: false, error: 'Source attachment path escapes NotePlan directory' };
   }
-  if (!fs.existsSync(srcPath)) {
+  if (!(await pathExists(srcPath))) {
     return { success: false, error: `Attachment not found in source note: ${attachmentName}` };
   }
 
@@ -435,32 +465,18 @@ export function moveAttachment(params: z.infer<typeof attachmentsSchema>) {
     return { success: false, error: 'Destination attachment path escapes NotePlan directory' };
   }
 
-  // Create destination folder if needed
-  if (!fs.existsSync(destFolder)) {
-    fs.mkdirSync(destFolder, { recursive: true });
+  if (!(await pathExists(destFolder))) {
+    await makeDirectory(destFolder);
   }
 
-  // Move the file (with fallback for sandboxed filesystems)
-  try {
-    fs.renameSync(srcPath, destPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'EPERM' || code === 'EXDEV') {
-      fs.copyFileSync(srcPath, destPath);
-      fs.unlinkSync(srcPath);
-    } else {
-      throw error;
-    }
-  }
+  await moveFile(srcPath, destPath);
 
   // Remove the old markdown link from the source note content
-  const notePlanPath = getNotePlanPath();
-  const srcNotePath = path.join(notePlanPath, sourceNote.filename);
-  const srcContent = fs.readFileSync(srcNotePath, 'utf-8');
+  const srcNotePath = path.join(getNotePlanPath(), sourceNote.filename);
+  const srcContent = (await readFileUtf8(srcNotePath)) ?? '';
   const oldLink = toMarkdownLink(sourceNote.filename, cleanName);
   const oldLinkEncoded = toMarkdownLink(sourceNote.filename, attachmentName); // try original name too
   let newSrcContent = srcContent;
-  // Remove the line containing the old link (try both clean and original names)
   for (const link of [oldLink, oldLinkEncoded]) {
     newSrcContent = newSrcContent
       .split('\n')
@@ -468,14 +484,14 @@ export function moveAttachment(params: z.infer<typeof attachmentsSchema>) {
       .join('\n');
   }
   if (newSrcContent !== srcContent) {
-    fs.writeFileSync(srcNotePath, newSrcContent, 'utf-8');
+    await writeFileUtf8(srcNotePath, newSrcContent);
   }
 
   // Clean up empty source attachments folder
   try {
-    const remaining = fs.readdirSync(srcFolder).filter((f) => !f.startsWith('.'));
+    const remaining = (await readDir(srcFolder)).filter((e) => !e.name.startsWith('.'));
     if (remaining.length === 0) {
-      fs.rmdirSync(srcFolder);
+      await removePath(srcFolder);
     }
   } catch { /* ignore cleanup errors */ }
 

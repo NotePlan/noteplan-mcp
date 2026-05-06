@@ -3,6 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 vi.mock('fs');
+vi.mock('../transport/bridge-availability.js', () => ({
+  getBridgeClient: vi.fn(async () => null),
+  invalidateBridgeClient: vi.fn(),
+}));
 vi.mock('./file-reader.js', () => ({
   getNotePlanPath: vi.fn(() => '/np'),
   getNotesPath: vi.fn(() => '/np/Notes'),
@@ -46,19 +50,52 @@ import { getCalendarNote } from './file-reader.js';
 
 const mockFs = vi.mocked(fs);
 
+// Production code uses fs.promises; tests assert against fs.*Sync. The proxy
+// forwards every promise call to its sync counterpart, with existsSync gating
+// stat/readFile/access so ENOENT surfaces consistently.
 beforeEach(() => {
   vi.resetAllMocks();
-  // Default: directories exist, files do not
   mockFs.existsSync.mockReturnValue(false);
+
+  const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+
+  mockFs.promises = {
+    writeFile: vi.fn(async (p: any, content: any, opts?: any) => {
+      const normalized = typeof opts === 'string' ? { encoding: opts } : opts;
+      return mockFs.writeFileSync(p, content, normalized);
+    }),
+    mkdir: vi.fn(async (p: any, opts?: any) => mockFs.mkdirSync(p, opts)),
+    rename: vi.fn(async (a: any, b: any) => mockFs.renameSync(a, b)),
+    copyFile: vi.fn(async (a: any, b: any) => mockFs.copyFileSync(a, b)),
+    unlink: vi.fn(async (p: any) => mockFs.unlinkSync(p)),
+    rm: vi.fn(async (p: any) => {
+      if (mockFs.rmSync) mockFs.rmSync(p, { recursive: true });
+      else mockFs.unlinkSync(p);
+    }),
+    readFile: vi.fn(async (p: any, enc?: any) => {
+      if (!mockFs.existsSync(p)) throw enoent();
+      return mockFs.readFileSync(p, enc);
+    }),
+    readdir: vi.fn(async (p: any, opts?: any) => mockFs.readdirSync(p, opts)),
+    stat: vi.fn(async (p: any) => {
+      if (!mockFs.existsSync(p)) throw enoent();
+      const explicit = mockFs.statSync(p);
+      if (explicit !== undefined && explicit !== null) return explicit as any;
+      return { isDirectory: () => false, isFile: () => true } as any;
+    }),
+    access: vi.fn(async (p: any) => {
+      if (!mockFs.existsSync(p)) throw enoent();
+    }),
+  } as any;
 });
 
 // ---------------------------------------------------------------------------
 // writeNoteFile
 // ---------------------------------------------------------------------------
 describe('writeNoteFile', () => {
-  it('normalizes CRLF to LF', () => {
+  it('normalizes CRLF to LF', async () => {
     mockFs.existsSync.mockReturnValue(true); // dir exists, file exists
-    writeNoteFile('Notes/test.md', 'line1\r\nline2\r\n');
+    await writeNoteFile('Notes/test.md', 'line1\r\nline2\r\n');
     expect(mockFs.writeFileSync).toHaveBeenCalledWith(
       '/np/Notes/test.md',
       'line1\nline2\n',
@@ -66,17 +103,17 @@ describe('writeNoteFile', () => {
     );
   });
 
-  it('creates parent directories when they do not exist', () => {
+  it('creates parent directories when they do not exist', async () => {
     // First call: dir check -> false, second call: file check -> false
     mockFs.existsSync.mockReturnValue(false);
-    writeNoteFile('Notes/sub/test.md', 'content');
+    await writeNoteFile('Notes/sub/test.md', 'content');
     expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/Notes/sub', { recursive: true });
   });
 
-  it('does in-place write for existing files (no wx flag)', () => {
+  it('does in-place write for existing files (no wx flag)', async () => {
     // dir exists, file exists
     mockFs.existsSync.mockReturnValue(true);
-    writeNoteFile('Notes/existing.md', 'updated');
+    await writeNoteFile('Notes/existing.md', 'updated');
     expect(mockFs.writeFileSync).toHaveBeenCalledTimes(1);
     expect(mockFs.writeFileSync).toHaveBeenCalledWith(
       '/np/Notes/existing.md',
@@ -85,14 +122,14 @@ describe('writeNoteFile', () => {
     );
   });
 
-  it('uses wx flag for new files', () => {
+  it('uses wx flag for new files', async () => {
     // dir exists (first call), file does not exist (second call)
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes') return true; // dir
       return false; // file
     });
-    writeNoteFile('Notes/new.md', 'hello');
+    await writeNoteFile('Notes/new.md', 'hello');
     expect(mockFs.writeFileSync).toHaveBeenCalledWith(
       '/np/Notes/new.md',
       'hello',
@@ -100,7 +137,7 @@ describe('writeNoteFile', () => {
     );
   });
 
-  it('falls back to plain write on EPERM from wx', () => {
+  it('falls back to plain write on EPERM from wx', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       if (String(p) === '/np/Notes') return true;
       return false;
@@ -109,7 +146,7 @@ describe('writeNoteFile', () => {
     mockFs.writeFileSync.mockImplementationOnce(() => {
       throw eperm;
     });
-    writeNoteFile('Notes/new.md', 'data');
+    await writeNoteFile('Notes/new.md', 'data');
     expect(mockFs.writeFileSync).toHaveBeenCalledTimes(2);
     expect(mockFs.writeFileSync).toHaveBeenLastCalledWith(
       '/np/Notes/new.md',
@@ -118,7 +155,7 @@ describe('writeNoteFile', () => {
     );
   });
 
-  it('falls back to plain write on EEXIST from wx', () => {
+  it('falls back to plain write on EEXIST from wx', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       if (String(p) === '/np/Notes') return true;
       return false;
@@ -127,11 +164,11 @@ describe('writeNoteFile', () => {
     mockFs.writeFileSync.mockImplementationOnce(() => {
       throw eexist;
     });
-    writeNoteFile('Notes/new.md', 'data');
+    await writeNoteFile('Notes/new.md', 'data');
     expect(mockFs.writeFileSync).toHaveBeenCalledTimes(2);
   });
 
-  it('re-throws non-EPERM/EEXIST errors', () => {
+  it('re-throws non-EPERM/EEXIST errors', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       if (String(p) === '/np/Notes') return true;
       return false;
@@ -140,11 +177,11 @@ describe('writeNoteFile', () => {
     mockFs.writeFileSync.mockImplementationOnce(() => {
       throw eacces;
     });
-    expect(() => writeNoteFile('Notes/new.md', 'data')).toThrow('EACCES');
+    await expect(writeNoteFile('Notes/new.md', 'data')).rejects.toThrow('EACCES');
   });
 
-  it('rejects paths outside NotePlan root', () => {
-    expect(() => writeNoteFile('/outside/path.md', 'x')).toThrow();
+  it('rejects paths outside NotePlan root', async () => {
+    await expect(writeNoteFile('/outside/path.md', 'x')).rejects.toThrow();
   });
 });
 
@@ -152,64 +189,64 @@ describe('writeNoteFile', () => {
 // createProjectNote
 // ---------------------------------------------------------------------------
 describe('createProjectNote', () => {
-  it('creates note with sanitized filename and returns relative path', () => {
+  it('creates note with sanitized filename and returns relative path', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createProjectNote('My Note');
+    const result = await createProjectNote('My Note');
     expect(result).toBe(path.join('Notes', 'My Note.md'));
     expect(mockFs.writeFileSync).toHaveBeenCalled();
   });
 
-  it('uses default content when content is empty', () => {
+  it('uses default content when content is empty', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    createProjectNote('Title');
+    await createProjectNote('Title');
     // The writeFileSync should be called with "# Title\n\n" (after CRLF normalization, still same)
     const calls = mockFs.writeFileSync.mock.calls;
     const contentArg = calls[0]?.[1];
     expect(contentArg).toBe('# Title\n\n');
   });
 
-  it('uses provided content when given', () => {
+  it('uses provided content when given', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    createProjectNote('Title', 'custom body');
+    await createProjectNote('Title', 'custom body');
     const calls = mockFs.writeFileSync.mock.calls;
     expect(calls[0]?.[1]).toBe('custom body');
   });
 
-  it('creates note in specified folder', () => {
+  it('creates note in specified folder', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createProjectNote('Note', '', 'Work');
+    const result = await createProjectNote('Note', '', 'Work');
     expect(result).toBe(path.join('Notes', 'Work', 'Note.md'));
   });
 
-  it('strips Notes/ prefix from folder to avoid double-nesting', () => {
+  it('strips Notes/ prefix from folder to avoid double-nesting', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createProjectNote('Note', '', 'Notes/Work');
+    const result = await createProjectNote('Note', '', 'Notes/Work');
     expect(result).toBe(path.join('Notes', 'Work', 'Note.md'));
   });
 
-  it('throws if note already exists with same extension', () => {
+  it('throws if note already exists with same extension', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       return String(p) === '/np/Notes/Dup.md';
     });
-    expect(() => createProjectNote('Dup')).toThrow('Note already exists');
+    await expect(createProjectNote('Dup')).rejects.toThrow('Note already exists');
   });
 
-  it('throws if note exists with alternate extension (.txt)', () => {
+  it('throws if note exists with alternate extension (.txt)', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       return String(p) === '/np/Notes/Dup.txt';
     });
-    expect(() => createProjectNote('Dup')).toThrow('Note already exists');
+    await expect(createProjectNote('Dup')).rejects.toThrow('Note already exists');
   });
 
-  it('sanitizes special characters in title', () => {
+  it('sanitizes special characters in title', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createProjectNote('Hello/World?');
+    const result = await createProjectNote('Hello/World?');
     expect(result).toBe(path.join('Notes', 'Hello-World-.md'));
   });
 
-  it('sanitizes all illegal filename chars', () => {
+  it('sanitizes all illegal filename chars', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createProjectNote('a\\b?c%d*e:f|g"h<i>j');
+    const result = await createProjectNote('a\\b?c%d*e:f|g"h<i>j');
     // Each illegal char replaced with -
     expect(result).toBe(path.join('Notes', 'a-b-c-d-e-f-g-h-i-j.md'));
   });
@@ -219,9 +256,9 @@ describe('createProjectNote', () => {
 // createCalendarNote
 // ---------------------------------------------------------------------------
 describe('createCalendarNote', () => {
-  it('creates calendar note and returns path', () => {
+  it('creates calendar note and returns path', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createCalendarNote('20240115', '# Jan 15');
+    const result = await createCalendarNote('20240115', '# Jan 15');
     expect(result).toBe('Calendar/20240115.md');
   });
 });
@@ -230,19 +267,19 @@ describe('createCalendarNote', () => {
 // ensureCalendarNote
 // ---------------------------------------------------------------------------
 describe('ensureCalendarNote', () => {
-  it('returns existing note path when found', () => {
-    vi.mocked(getCalendarNote).mockReturnValueOnce({
+  it('returns existing note path when found', async () => {
+    vi.mocked(getCalendarNote).mockResolvedValueOnce({
       filename: 'Calendar/20240115.md',
     } as any);
-    const result = ensureCalendarNote('20240115');
+    const result = await ensureCalendarNote('20240115');
     expect(result).toBe('Calendar/20240115.md');
     expect(mockFs.writeFileSync).not.toHaveBeenCalled();
   });
 
-  it('creates new note when none exists', () => {
-    vi.mocked(getCalendarNote).mockReturnValueOnce(null);
+  it('creates new note when none exists', async () => {
+    vi.mocked(getCalendarNote).mockResolvedValueOnce(null);
     mockFs.existsSync.mockReturnValue(false);
-    const result = ensureCalendarNote('20240115');
+    const result = await ensureCalendarNote('20240115');
     expect(result).toBe('Calendar/20240115.md');
     expect(mockFs.writeFileSync).toHaveBeenCalled();
   });
@@ -252,25 +289,25 @@ describe('ensureCalendarNote', () => {
 // appendToNote
 // ---------------------------------------------------------------------------
 describe('appendToNote', () => {
-  it('appends content to existing note', () => {
+  it('appends content to existing note', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.readFileSync.mockReturnValue('existing\n' as any);
-    appendToNote('Notes/test.md', 'appended');
+    await appendToNote('Notes/test.md', 'appended');
     const written = mockFs.writeFileSync.mock.calls[0]?.[1];
     expect(written).toBe('existing\nappended');
   });
 
-  it('adds newline before content if note does not end with one', () => {
+  it('adds newline before content if note does not end with one', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.readFileSync.mockReturnValue('existing' as any);
-    appendToNote('Notes/test.md', 'appended');
+    await appendToNote('Notes/test.md', 'appended');
     const written = mockFs.writeFileSync.mock.calls[0]?.[1];
     expect(written).toBe('existing\nappended');
   });
 
-  it('throws if note does not exist', () => {
+  it('throws if note does not exist', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => appendToNote('Notes/nope.md', 'x')).toThrow('Note not found');
+    await expect(appendToNote('Notes/nope.md', 'x')).rejects.toThrow('Note not found');
   });
 });
 
@@ -278,27 +315,27 @@ describe('appendToNote', () => {
 // prependToNote
 // ---------------------------------------------------------------------------
 describe('prependToNote', () => {
-  it('inserts after frontmatter', () => {
+  it('inserts after frontmatter', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.readFileSync.mockReturnValue('---\ntitle: X\n---\nbody' as any);
-    prependToNote('Notes/test.md', 'PREPENDED');
+    await prependToNote('Notes/test.md', 'PREPENDED');
     const written = mockFs.writeFileSync.mock.calls[0]?.[1];
     // lines: ['---', 'title: X', '---', 'body']
     // insertIndex = 3, so content goes at index 3
     expect(written).toBe('---\ntitle: X\n---\nPREPENDED\nbody');
   });
 
-  it('inserts at top if no frontmatter', () => {
+  it('inserts at top if no frontmatter', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.readFileSync.mockReturnValue('# Title\nBody' as any);
-    prependToNote('Notes/test.md', 'PREPENDED');
+    await prependToNote('Notes/test.md', 'PREPENDED');
     const written = mockFs.writeFileSync.mock.calls[0]?.[1];
     expect(written).toBe('PREPENDED\n# Title\nBody');
   });
 
-  it('throws if note does not exist', () => {
+  it('throws if note does not exist', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => prependToNote('Notes/nope.md', 'x')).toThrow('Note not found');
+    await expect(prependToNote('Notes/nope.md', 'x')).rejects.toThrow('Note not found');
   });
 });
 
@@ -306,16 +343,16 @@ describe('prependToNote', () => {
 // updateNote
 // ---------------------------------------------------------------------------
 describe('updateNote', () => {
-  it('replaces entire note content', () => {
+  it('replaces entire note content', async () => {
     mockFs.existsSync.mockReturnValue(true);
-    updateNote('Notes/test.md', 'new content');
+    await updateNote('Notes/test.md', 'new content');
     const written = mockFs.writeFileSync.mock.calls[0]?.[1];
     expect(written).toBe('new content');
   });
 
-  it('throws if note does not exist', () => {
+  it('throws if note does not exist', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => updateNote('Notes/nope.md', 'x')).toThrow('Note not found');
+    await expect(updateNote('Notes/nope.md', 'x')).rejects.toThrow('Note not found');
   });
 });
 
@@ -323,29 +360,29 @@ describe('updateNote', () => {
 // deleteNote
 // ---------------------------------------------------------------------------
 describe('deleteNote', () => {
-  it('moves file to @Trash folder', () => {
+  it('moves file to @Trash folder', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
       if (s === '/np/Notes/@Trash') return true;
       return false; // trash target does not exist yet
     });
-    const result = deleteNote('Notes/test.md');
+    const result = await deleteNote('Notes/test.md');
     expect(result).toBe(path.join('Notes', '@Trash', 'test.md'));
     expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/test.md', '/np/Notes/@Trash/test.md');
   });
 
-  it('creates @Trash if it does not exist', () => {
+  it('creates @Trash if it does not exist', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
       return false;
     });
-    deleteNote('Notes/test.md');
+    await deleteNote('Notes/test.md');
     expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/Notes/@Trash', { recursive: true });
   });
 
-  it('handles duplicate names in trash (appends -1, -2, etc.)', () => {
+  it('handles duplicate names in trash (appends -1, -2, etc.)', async () => {
     let callCount = 0;
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
@@ -356,16 +393,16 @@ describe('deleteNote', () => {
       if (s === '/np/Notes/@Trash/test-2.md') return false; // free
       return false;
     });
-    const result = deleteNote('Notes/test.md');
+    const result = await deleteNote('Notes/test.md');
     expect(result).toBe(path.join('Notes', '@Trash', 'test-2.md'));
   });
 
-  it('throws if file does not exist', () => {
+  it('throws if file does not exist', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => deleteNote('Notes/nope.md')).toThrow('Note not found');
+    await expect(deleteNote('Notes/nope.md')).rejects.toThrow('Note not found');
   });
 
-  it('uses EPERM fallback for moveFile (copy + delete)', () => {
+  it('uses EPERM fallback for moveFile (copy + delete)', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
@@ -376,12 +413,12 @@ describe('deleteNote', () => {
     mockFs.renameSync.mockImplementationOnce(() => {
       throw eperm;
     });
-    deleteNote('Notes/test.md');
+    await deleteNote('Notes/test.md');
     expect(mockFs.copyFileSync).toHaveBeenCalledWith('/np/Notes/test.md', '/np/Notes/@Trash/test.md');
     expect(mockFs.unlinkSync).toHaveBeenCalledWith('/np/Notes/test.md');
   });
 
-  it('uses EXDEV fallback for moveFile (copy + delete)', () => {
+  it('uses EXDEV fallback for moveFile (copy + delete)', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
@@ -392,7 +429,7 @@ describe('deleteNote', () => {
     mockFs.renameSync.mockImplementationOnce(() => {
       throw exdev;
     });
-    deleteNote('Notes/test.md');
+    await deleteNote('Notes/test.md');
     expect(mockFs.copyFileSync).toHaveBeenCalled();
     expect(mockFs.unlinkSync).toHaveBeenCalled();
   });
@@ -411,46 +448,46 @@ describe('previewMoveLocalNote', () => {
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
   }
 
-  it('returns preview with fromFilename, toFilename, destinationFolder', () => {
+  it('returns preview with fromFilename, toFilename, destinationFolder', async () => {
     setupMovePreview();
-    const result = previewMoveLocalNote('Notes/test.md', 'Notes/Work');
+    const result = await previewMoveLocalNote('Notes/test.md', 'Notes/Work');
     expect(result.fromFilename).toBe(path.join('Notes', 'test.md'));
     expect(result.toFilename).toBe(path.join('Notes', 'Work', 'test.md'));
     expect(result.destinationFolder).toBe('Notes/Work');
   });
 
-  it('validates source exists', () => {
+  it('validates source exists', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => previewMoveLocalNote('Notes/nope.md', 'Notes/Work')).toThrow('Note not found');
+    await expect(previewMoveLocalNote('Notes/nope.md', 'Notes/Work')).rejects.toThrow('Note not found');
   });
 
-  it('rejects directories', () => {
+  it('rejects directories', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
-    expect(() => previewMoveLocalNote('Notes/folder', 'Notes/Work')).toThrow('Not a note file');
+    await expect(previewMoveLocalNote('Notes/folder', 'Notes/Work')).rejects.toThrow('Not a note file');
   });
 
-  it('rejects if source is outside Notes folder', () => {
+  it('rejects if source is outside Notes folder', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewMoveLocalNote('Calendar/20240101.md', 'Notes/Work')).toThrow(
+    await expect(previewMoveLocalNote('Calendar/20240101.md', 'Notes/Work')).rejects.toThrow(
       'must be inside Notes',
     );
   });
 
-  it('rejects if already at destination', () => {
+  it('rejects if already at destination', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Work/test.md') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewMoveLocalNote('Notes/Work/test.md', 'Notes/Work')).toThrow(
+    await expect(previewMoveLocalNote('Notes/Work/test.md', 'Notes/Work')).rejects.toThrow(
       'already in the destination',
     );
   });
 
-  it('rejects if conflict at destination', () => {
+  it('rejects if conflict at destination', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
@@ -458,33 +495,33 @@ describe('previewMoveLocalNote', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewMoveLocalNote('Notes/test.md', 'Notes/Work')).toThrow(
+    await expect(previewMoveLocalNote('Notes/test.md', 'Notes/Work')).rejects.toThrow(
       'already exists at destination',
     );
   });
 
-  it('handles folder input without Notes/ prefix', () => {
+  it('handles folder input without Notes/ prefix', async () => {
     setupMovePreview();
-    const result = previewMoveLocalNote('Notes/test.md', 'Work');
+    const result = await previewMoveLocalNote('Notes/test.md', 'Work');
     expect(result.destinationFolder).toBe('Notes/Work');
   });
 
-  it('handles folder input with trailing slash', () => {
+  it('handles folder input with trailing slash', async () => {
     setupMovePreview();
-    const result = previewMoveLocalNote('Notes/test.md', 'Work/');
+    const result = await previewMoveLocalNote('Notes/test.md', 'Work/');
     expect(result.destinationFolder).toBe('Notes/Work');
   });
 
-  it('rejects when destinationFolder looks like a different filename', () => {
+  it('rejects when destinationFolder looks like a different filename', async () => {
     setupMovePreview();
-    expect(() => previewMoveLocalNote('Notes/test.md', 'Work/other.md')).toThrow(
+    await expect(previewMoveLocalNote('Notes/test.md', 'Work/other.md')).rejects.toThrow(
       'must be a folder path, not a filename',
     );
   });
 
-  it('strips same filename from destination path', () => {
+  it('strips same filename from destination path', async () => {
     setupMovePreview();
-    const result = previewMoveLocalNote('Notes/test.md', 'Work/test.md');
+    const result = await previewMoveLocalNote('Notes/test.md', 'Work/test.md');
     expect(result.destinationFolder).toBe('Notes/Work');
   });
 });
@@ -493,7 +530,7 @@ describe('previewMoveLocalNote', () => {
 // moveLocalNote
 // ---------------------------------------------------------------------------
 describe('moveLocalNote', () => {
-  it('moves note between folders', () => {
+  it('moves note between folders', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
@@ -502,13 +539,13 @@ describe('moveLocalNote', () => {
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
 
-    const result = moveLocalNote('Notes/test.md', 'Work');
+    const result = await moveLocalNote('Notes/test.md', 'Work');
     expect(result).toBe(path.join('Notes', 'Work', 'test.md'));
     expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/Notes/Work', { recursive: true });
     expect(mockFs.renameSync).toHaveBeenCalled();
   });
 
-  it('creates destination folder if needed', () => {
+  it('creates destination folder if needed', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/test.md') return true;
@@ -516,7 +553,7 @@ describe('moveLocalNote', () => {
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
 
-    moveLocalNote('Notes/test.md', 'NewFolder');
+    await moveLocalNote('Notes/test.md', 'NewFolder');
     expect(mockFs.mkdirSync).toHaveBeenCalled();
   });
 });
@@ -525,7 +562,7 @@ describe('moveLocalNote', () => {
 // previewRestoreLocalNoteFromTrash
 // ---------------------------------------------------------------------------
 describe('previewRestoreLocalNoteFromTrash', () => {
-  it('returns preview for restoring from trash', () => {
+  it('returns preview for restoring from trash', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/@Trash/test.md') return true;
@@ -533,27 +570,27 @@ describe('previewRestoreLocalNoteFromTrash', () => {
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
 
-    const result = previewRestoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes');
+    const result = await previewRestoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes');
     expect(result.fromFilename).toBe(path.join('Notes', '@Trash', 'test.md'));
     expect(result.toFilename).toBe(path.join('Notes', 'test.md'));
   });
 
-  it('throws if source not found', () => {
+  it('throws if source not found', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => previewRestoreLocalNoteFromTrash('Notes/@Trash/nope.md', 'Notes')).toThrow(
+    await expect(previewRestoreLocalNoteFromTrash('Notes/@Trash/nope.md', 'Notes')).rejects.toThrow(
       'Note not found',
     );
   });
 
-  it('throws if source is not inside @Trash', () => {
+  it('throws if source is not inside @Trash', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewRestoreLocalNoteFromTrash('Notes/test.md', 'Notes')).toThrow(
+    await expect(previewRestoreLocalNoteFromTrash('Notes/test.md', 'Notes')).rejects.toThrow(
       'must be inside @Trash',
     );
   });
 
-  it('throws if conflict at destination', () => {
+  it('throws if conflict at destination', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/@Trash/test.md') return true;
@@ -561,7 +598,7 @@ describe('previewRestoreLocalNoteFromTrash', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewRestoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes')).toThrow(
+    await expect(previewRestoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes')).rejects.toThrow(
       'already exists at destination',
     );
   });
@@ -571,7 +608,7 @@ describe('previewRestoreLocalNoteFromTrash', () => {
 // restoreLocalNoteFromTrash
 // ---------------------------------------------------------------------------
 describe('restoreLocalNoteFromTrash', () => {
-  it('restores note from trash to destination', () => {
+  it('restores note from trash to destination', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/@Trash/test.md') return true;
@@ -580,7 +617,7 @@ describe('restoreLocalNoteFromTrash', () => {
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
 
-    const result = restoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes');
+    const result = await restoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes');
     expect(result).toBe(path.join('Notes', 'test.md'));
     expect(mockFs.renameSync).toHaveBeenCalled();
   });
@@ -599,34 +636,34 @@ describe('previewRenameLocalNoteFile', () => {
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
   }
 
-  it('returns preview with fromFilename and toFilename', () => {
+  it('returns preview with fromFilename and toFilename', async () => {
     setupRenamePreview();
-    const result = previewRenameLocalNoteFile('Notes/old.md', 'new');
+    const result = await previewRenameLocalNoteFile('Notes/old.md', 'new');
     expect(result.fromFilename).toBe(path.join('Notes', 'old.md'));
     expect(result.toFilename).toBe(path.join('Notes', 'new.md'));
   });
 
-  it('keepExtension=true preserves original extension', () => {
+  it('keepExtension=true preserves original extension', async () => {
     setupRenamePreview();
-    const result = previewRenameLocalNoteFile('Notes/old.md', 'new.txt', true);
+    const result = await previewRenameLocalNoteFile('Notes/old.md', 'new.txt', true);
     // keepExtension=true means keep .md
     expect(result.toFilename).toBe(path.join('Notes', 'new.md'));
   });
 
-  it('keepExtension=false uses provided extension', () => {
+  it('keepExtension=false uses provided extension', async () => {
     setupRenamePreview();
-    const result = previewRenameLocalNoteFile('Notes/old.md', 'new.txt', false);
+    const result = await previewRenameLocalNoteFile('Notes/old.md', 'new.txt', false);
     expect(result.toFilename).toBe(path.join('Notes', 'new.txt'));
   });
 
-  it('throws if new name matches current name', () => {
+  it('throws if new name matches current name', async () => {
     setupRenamePreview();
-    expect(() => previewRenameLocalNoteFile('Notes/old.md', 'old')).toThrow(
+    await expect(previewRenameLocalNoteFile('Notes/old.md', 'old')).rejects.toThrow(
       'matches current filename',
     );
   });
 
-  it('throws if new name already exists', () => {
+  it('throws if new name already exists', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/old.md') return true;
@@ -634,36 +671,36 @@ describe('previewRenameLocalNoteFile', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewRenameLocalNoteFile('Notes/old.md', 'taken')).toThrow(
+    await expect(previewRenameLocalNoteFile('Notes/old.md', 'taken')).rejects.toThrow(
       'already exists with filename',
     );
   });
 
-  it('throws if source not found', () => {
+  it('throws if source not found', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => previewRenameLocalNoteFile('Notes/nope.md', 'new')).toThrow('Note not found');
+    await expect(previewRenameLocalNoteFile('Notes/nope.md', 'new')).rejects.toThrow('Note not found');
   });
 
-  it('throws if source is a directory', () => {
+  it('throws if source is a directory', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
-    expect(() => previewRenameLocalNoteFile('Notes/folder', 'new')).toThrow('Not a note file');
+    await expect(previewRenameLocalNoteFile('Notes/folder', 'new')).rejects.toThrow('Not a note file');
   });
 
-  it('sanitizes special characters in rename', () => {
+  it('sanitizes special characters in rename', async () => {
     setupRenamePreview();
-    const result = previewRenameLocalNoteFile('Notes/old.md', 'he?lo');
+    const result = await previewRenameLocalNoteFile('Notes/old.md', 'he?lo');
     expect(result.toFilename).toBe(path.join('Notes', 'he-lo.md'));
   });
 
-  it('rejects rename that changes folder', () => {
+  it('rejects rename that changes folder', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/old.md') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    expect(() => previewRenameLocalNoteFile('Notes/old.md', 'OtherFolder/new')).toThrow(
+    await expect(previewRenameLocalNoteFile('Notes/old.md', 'OtherFolder/new')).rejects.toThrow(
       'must stay in the same folder',
     );
   });
@@ -673,14 +710,14 @@ describe('previewRenameLocalNoteFile', () => {
 // renameLocalNoteFile
 // ---------------------------------------------------------------------------
 describe('renameLocalNoteFile', () => {
-  it('renames file within same folder', () => {
+  it('renames file within same folder', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/old.md') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
-    const result = renameLocalNoteFile('Notes/old.md', 'new');
+    const result = await renameLocalNoteFile('Notes/old.md', 'new');
     expect(result).toBe(path.join('Notes', 'new.md'));
     expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/old.md', '/np/Notes/new.md');
   });
@@ -690,29 +727,29 @@ describe('renameLocalNoteFile', () => {
 // previewCreateFolder
 // ---------------------------------------------------------------------------
 describe('previewCreateFolder', () => {
-  it('returns normalized folder path', () => {
+  it('returns normalized folder path', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = previewCreateFolder('MyFolder');
+    const result = await previewCreateFolder('MyFolder');
     expect(result).toBe('MyFolder');
   });
 
-  it('strips Notes/ prefix', () => {
+  it('strips Notes/ prefix', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = previewCreateFolder('Notes/MyFolder');
+    const result = await previewCreateFolder('Notes/MyFolder');
     expect(result).toBe('MyFolder');
   });
 
-  it('throws if folder already exists', () => {
+  it('throws if folder already exists', async () => {
     mockFs.existsSync.mockReturnValue(true);
-    expect(() => previewCreateFolder('ExistingFolder')).toThrow('Folder already exists');
+    await expect(previewCreateFolder('ExistingFolder')).rejects.toThrow('Folder already exists');
   });
 
-  it('throws on empty folder path', () => {
-    expect(() => previewCreateFolder('  ')).toThrow();
+  it('throws on empty folder path', async () => {
+    await expect(previewCreateFolder('  ')).rejects.toThrow();
   });
 
-  it('throws on invalid segments (..)', () => {
-    expect(() => previewCreateFolder('a/../b')).toThrow('invalid');
+  it('throws on invalid segments (..)', async () => {
+    await expect(previewCreateFolder('a/../b')).rejects.toThrow('invalid');
   });
 });
 
@@ -720,16 +757,16 @@ describe('previewCreateFolder', () => {
 // createFolder
 // ---------------------------------------------------------------------------
 describe('createFolder', () => {
-  it('creates folder under Notes and returns normalized path', () => {
+  it('creates folder under Notes and returns normalized path', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createFolder('Projects');
+    const result = await createFolder('Projects');
     expect(result).toBe('Projects');
     expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/Notes/Projects', { recursive: true });
   });
 
-  it('creates nested folder', () => {
+  it('creates nested folder', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    const result = createFolder('Projects/Work');
+    const result = await createFolder('Projects/Work');
     expect(result).toBe('Projects/Work');
   });
 });
@@ -738,32 +775,32 @@ describe('createFolder', () => {
 // previewDeleteLocalFolder
 // ---------------------------------------------------------------------------
 describe('previewDeleteLocalFolder', () => {
-  it('returns normalized folder path', () => {
+  it('returns normalized folder path', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    const result = previewDeleteLocalFolder('MyFolder');
+    const result = await previewDeleteLocalFolder('MyFolder');
     expect(result).toBe('MyFolder');
   });
 
-  it('throws if folder does not exist', () => {
+  it('throws if folder does not exist', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => previewDeleteLocalFolder('Nope')).toThrow('Folder not found');
+    await expect(previewDeleteLocalFolder('Nope')).rejects.toThrow('Folder not found');
   });
 
-  it('throws if target is not a directory', () => {
+  it('throws if target is not a directory', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => false } as any);
-    expect(() => previewDeleteLocalFolder('file.md')).toThrow('Not a folder');
+    await expect(previewDeleteLocalFolder('file.md')).rejects.toThrow('Not a folder');
   });
 
-  it('cannot delete @Trash folder', () => {
+  it('cannot delete @Trash folder', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewDeleteLocalFolder('@Trash')).toThrow('Cannot delete the @Trash folder');
+    await expect(previewDeleteLocalFolder('@Trash')).rejects.toThrow('Cannot delete the @Trash folder');
   });
 
-  it('throws on empty path', () => {
-    expect(() => previewDeleteLocalFolder('  ')).toThrow();
+  it('throws on empty path', async () => {
+    await expect(previewDeleteLocalFolder('  ')).rejects.toThrow();
   });
 });
 
@@ -771,7 +808,7 @@ describe('previewDeleteLocalFolder', () => {
 // deleteLocalFolder
 // ---------------------------------------------------------------------------
 describe('deleteLocalFolder', () => {
-  it('moves folder to @Trash', () => {
+  it('moves folder to @Trash', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
@@ -780,12 +817,12 @@ describe('deleteLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    const result = deleteLocalFolder('Old');
+    const result = await deleteLocalFolder('Old');
     expect(result).toBe(path.join('Notes', '@Trash', 'Old'));
     expect(mockFs.renameSync).toHaveBeenCalled();
   });
 
-  it('handles duplicate folder names in trash', () => {
+  it('handles duplicate folder names in trash', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
@@ -795,11 +832,11 @@ describe('deleteLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    const result = deleteLocalFolder('Old');
+    const result = await deleteLocalFolder('Old');
     expect(result).toBe(path.join('Notes', '@Trash', 'Old-1'));
   });
 
-  it('creates @Trash if it does not exist', () => {
+  it('creates @Trash if it does not exist', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
@@ -807,7 +844,7 @@ describe('deleteLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    deleteLocalFolder('Old');
+    await deleteLocalFolder('Old');
     expect(mockFs.mkdirSync).toHaveBeenCalledWith('/np/Notes/@Trash', { recursive: true });
   });
 });
@@ -826,22 +863,22 @@ describe('previewMoveLocalFolder', () => {
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
   }
 
-  it('returns preview with fromFolder and toFolder', () => {
+  it('returns preview with fromFolder and toFolder', async () => {
     setupFolderMove();
-    const result = previewMoveLocalFolder('Source', 'Dest');
+    const result = await previewMoveLocalFolder('Source', 'Dest');
     expect(result.fromFolder).toBe('Source');
     expect(result.toFolder).toBe('Dest/Source');
   });
 
-  it('cannot move folder into itself', () => {
+  it('cannot move folder into itself', async () => {
     mockFs.existsSync.mockReturnValue(true);
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewMoveLocalFolder('Source', 'Source')).toThrow(
+    await expect(previewMoveLocalFolder('Source', 'Source')).rejects.toThrow(
       'Cannot move a folder into itself',
     );
   });
 
-  it('cannot move folder into its descendants', () => {
+  it('cannot move folder into its descendants', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Source') return true;
@@ -849,29 +886,29 @@ describe('previewMoveLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewMoveLocalFolder('Source', 'Source/Child')).toThrow(
+    await expect(previewMoveLocalFolder('Source', 'Source/Child')).rejects.toThrow(
       'Cannot move a folder into itself',
     );
   });
 
-  it('throws if source folder not found', () => {
+  it('throws if source folder not found', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => previewMoveLocalFolder('Nope', 'Dest')).toThrow('Source folder not found');
+    await expect(previewMoveLocalFolder('Nope', 'Dest')).rejects.toThrow('Source folder not found');
   });
 
-  it('throws if destination folder not found', () => {
+  it('throws if destination folder not found', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Source') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewMoveLocalFolder('Source', 'NoDest')).toThrow(
+    await expect(previewMoveLocalFolder('Source', 'NoDest')).rejects.toThrow(
       'Destination folder not found',
     );
   });
 
-  it('throws if folder already at destination', () => {
+  it('throws if folder already at destination', async () => {
     // Source is already inside Dest, meaning the target path resolves to the same place
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
@@ -880,12 +917,12 @@ describe('previewMoveLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewMoveLocalFolder('Dest/Source', 'Dest')).toThrow(
+    await expect(previewMoveLocalFolder('Dest/Source', 'Dest')).rejects.toThrow(
       'already in the destination',
     );
   });
 
-  it('throws if conflict at destination', () => {
+  it('throws if conflict at destination', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Source') return true;
@@ -894,12 +931,12 @@ describe('previewMoveLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewMoveLocalFolder('Source', 'Dest')).toThrow(
+    await expect(previewMoveLocalFolder('Source', 'Dest')).rejects.toThrow(
       'already exists at destination',
     );
   });
 
-  it('allows moving to Notes root', () => {
+  it('allows moving to Notes root', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Sub/Source') return true;
@@ -907,7 +944,7 @@ describe('previewMoveLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    const result = previewMoveLocalFolder('Sub/Source', 'Notes');
+    const result = await previewMoveLocalFolder('Sub/Source', 'Notes');
     expect(result.toFolder).toBe('Source');
     expect(result.destinationFolder).toBe('Notes');
   });
@@ -917,7 +954,7 @@ describe('previewMoveLocalFolder', () => {
 // moveLocalFolder
 // ---------------------------------------------------------------------------
 describe('moveLocalFolder', () => {
-  it('moves folder to destination', () => {
+  it('moves folder to destination', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Source') return true;
@@ -925,7 +962,7 @@ describe('moveLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    const result = moveLocalFolder('Source', 'Dest');
+    const result = await moveLocalFolder('Source', 'Dest');
     expect(result.fromFolder).toBe('Source');
     expect(result.toFolder).toBe('Dest/Source');
     expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/Source', '/np/Notes/Dest/Source');
@@ -945,25 +982,25 @@ describe('previewRenameLocalFolder', () => {
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
   }
 
-  it('returns preview with fromFolder and toFolder', () => {
+  it('returns preview with fromFolder and toFolder', async () => {
     setupFolderRename();
-    const result = previewRenameLocalFolder('Old', 'New');
+    const result = await previewRenameLocalFolder('Old', 'New');
     expect(result.fromFolder).toBe('Old');
     expect(result.toFolder).toBe('New');
   });
 
-  it('sanitizes new folder name', () => {
+  it('sanitizes new folder name', async () => {
     setupFolderRename();
-    const result = previewRenameLocalFolder('Old', 'He?lo');
+    const result = await previewRenameLocalFolder('Old', 'He?lo');
     expect(result.toFolder).toBe('He-lo');
   });
 
-  it('throws if new name matches current name', () => {
+  it('throws if new name matches current name', async () => {
     setupFolderRename();
-    expect(() => previewRenameLocalFolder('Old', 'Old')).toThrow('matches current name');
+    await expect(previewRenameLocalFolder('Old', 'Old')).rejects.toThrow('matches current name');
   });
 
-  it('throws if new name already exists', () => {
+  it('throws if new name already exists', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
@@ -971,27 +1008,27 @@ describe('previewRenameLocalFolder', () => {
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewRenameLocalFolder('Old', 'Taken')).toThrow('already exists');
+    await expect(previewRenameLocalFolder('Old', 'Taken')).rejects.toThrow('already exists');
   });
 
-  it('throws if source not found', () => {
+  it('throws if source not found', async () => {
     mockFs.existsSync.mockReturnValue(false);
-    expect(() => previewRenameLocalFolder('Nope', 'New')).toThrow('Source folder not found');
+    await expect(previewRenameLocalFolder('Nope', 'New')).rejects.toThrow('Source folder not found');
   });
 
-  it('throws on empty new name', () => {
+  it('throws on empty new name', async () => {
     setupFolderRename();
-    expect(() => previewRenameLocalFolder('Old', '  ')).toThrow('required');
+    await expect(previewRenameLocalFolder('Old', '  ')).rejects.toThrow('required');
   });
 
-  it('must stay in same parent folder', () => {
+  it('must stay in same parent folder', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    expect(() => previewRenameLocalFolder('Old', 'Other/New')).toThrow(
+    await expect(previewRenameLocalFolder('Old', 'Other/New')).rejects.toThrow(
       'must stay in the same parent folder',
     );
   });
@@ -1001,14 +1038,14 @@ describe('previewRenameLocalFolder', () => {
 // renameLocalFolder
 // ---------------------------------------------------------------------------
 describe('renameLocalFolder', () => {
-  it('renames folder and returns preview', () => {
+  it('renames folder and returns preview', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       const s = String(p);
       if (s === '/np/Notes/Old') return true;
       return false;
     });
     mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
-    const result = renameLocalFolder('Old', 'New');
+    const result = await renameLocalFolder('Old', 'New');
     expect(result.fromFolder).toBe('Old');
     expect(result.toFolder).toBe('New');
     expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/Old', '/np/Notes/New');

@@ -237,15 +237,17 @@ export async function searchNotes(params: z.infer<typeof searchSchema>) {
   const isWildcardQuery = query === '*';
   if (isWildcardQuery) {
     const allNotes = normalizedFolders.length > 0
-      ? normalizedFolders.flatMap((folder) =>
-          store.listNotes({
-            folder,
-            space: params.space,
-          })
-        )
-      : store.listNotes({ space: params.space });
+      ? (await Promise.all(
+          normalizedFolders.map((folder) =>
+            store.listNotes({
+              folder,
+              space: params.space,
+            })
+          )
+        )).flat()
+      : await store.listNotes({ space: params.space });
 
-    const uniqueByKey = new Map<string, ReturnType<typeof store.listNotes>[number]>();
+    const uniqueByKey = new Map<string, Awaited<ReturnType<typeof store.listNotes>>[number]>();
     for (const note of allNotes) {
       const key = note.id?.trim().length > 0 ? `id:${note.id}` : `file:${note.filename}`;
       if (!uniqueByKey.has(key)) {

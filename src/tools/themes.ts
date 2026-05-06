@@ -52,7 +52,7 @@ const VALID_STYLE_PROPERTIES = [
   'type', 'kern', 'headIndent', 'firstLineHeadIndent',
   'lineSpacing', 'paragraphSpacing', 'paragraphSpacingBefore',
   'underlineStyle', 'underlineColor', 'strikethroughStyle', 'strikethroughColor',
-  'leadingBorder', 'borderRadius', 'horizontalMargin',
+  'leadingBorder', 'leadingBorderColor', 'borderRadius', 'horizontalMargin',
   'leftBorderPadding', 'rightBorderPadding', 'isFullWidthBorder', 'inlineBorder',
   'regex', 'matchPosition',
 ];

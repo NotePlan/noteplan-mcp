@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { NoteType, TaskStatus } from '../noteplan/types.js';
 import * as filterStore from '../noteplan/filter-store.js';
-import * as taskTools from './tasks.js';
+import { getBridgeClient } from '../transport/bridge-availability.js';
+import { BridgeHttpError } from '../transport/bridge-client.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -89,73 +89,6 @@ function parseFilterItemValue(param: string, value: string): unknown {
   return value;
 }
 
-function boolParam(items: Array<{ param: string; value: string }>, param: string): boolean | undefined {
-  const raw = items.find((item) => item.param === param)?.value;
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  return undefined;
-}
-
-function stringParam(items: Array<{ param: string; value: string }>, param: string): string | undefined {
-  const raw = items.find((item) => item.param === param)?.value;
-  if (typeof raw !== 'string') return undefined;
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function mapFilterToTaskQuery(items: Array<{ param: string; value: string }>): {
-  query: string;
-  status?: TaskStatus[];
-  noteTypes?: NoteType[];
-  preferCalendar: boolean;
-  periodicOnly: boolean;
-  unsupportedRules: string[];
-} {
-  const unsupportedRules: string[] = [];
-
-  const statuses: TaskStatus[] = [];
-  if (boolParam(items, 'fp_open') === true) statuses.push('open');
-  if (boolParam(items, 'fp_done') === true) statuses.push('done');
-  if (boolParam(items, 'fp_scheduled') === true) statuses.push('scheduled');
-  if (boolParam(items, 'fp_canceled') === true) statuses.push('cancelled');
-
-  const includeProject = boolParam(items, 'fp_noteItem');
-  const includeCalendar = boolParam(items, 'fp_datedNoteItem') === true || boolParam(items, 'fp_calendarItem') === true;
-
-  const noteTypes: NoteType[] = [];
-  if (includeProject === true) noteTypes.push('note');
-  if (includeCalendar) noteTypes.push('calendar');
-
-  const keyword = stringParam(items, 'fp_keyword');
-  const query = keyword ?? '*';
-
-  const periodicOnly = boolParam(items, 'fp_showWeekly') === true || boolParam(items, 'fp_showMonthly') === true;
-  const preferCalendar = includeCalendar || periodicOnly;
-
-  const timeframe = stringParam(items, 'fp_timeframe');
-  if (timeframe && timeframe !== 'fptf_allTime' && timeframe !== 'fptf_custom') {
-    unsupportedRules.push(`timeframe (${timeframe}) is not fully mapped yet`);
-  }
-  if (stringParam(items, 'fp_underHeading')) {
-    unsupportedRules.push('underHeading is not mapped in global task search');
-  }
-  if (boolParam(items, 'fp_noStatus') === true) {
-    unsupportedRules.push('noStatus includes non-task lines in NotePlan UI and is not represented in MCP task search');
-  }
-  if (boolParam(items, 'fp_event') === true || boolParam(items, 'fp_reminder') === true || boolParam(items, 'fp_listReminders') === true) {
-    unsupportedRules.push('event/reminder filter rules are not included in noteplan_get_filter_tasks');
-  }
-
-  return {
-    query,
-    status: statuses.length > 0 ? statuses : undefined,
-    noteTypes: noteTypes.length > 0 ? noteTypes : undefined,
-    preferCalendar,
-    periodicOnly,
-    unsupportedRules,
-  };
-}
-
 export const listFiltersSchema = z.object({
   query: z.string().optional().describe('Filter names by substring'),
   limit: z.number().min(1).max(200).optional().default(50).describe('Maximum filters to return'),
@@ -192,18 +125,14 @@ export const renameFilterSchema = z.object({
 
 export const getFilterTasksSchema = z.object({
   name: z.string().describe('Filter name to execute against note tasks'),
-  maxNotes: z.number().min(1).max(2000).optional().default(500).describe('Maximum notes to scan'),
   limit: z.number().min(1).max(300).optional().default(30).describe('Maximum matches to return'),
   offset: z.number().min(0).optional().default(0).describe('Pagination offset'),
-  cursor: z.string().optional().describe('Cursor token from previous page (preferred over offset)'),
-  space: z.string().optional().describe('Optional space name or ID scope'),
-  folder: z.string().optional().describe('Optional folder scope'),
 });
 
-export function listFilters(params: z.infer<typeof listFiltersSchema>) {
+export async function listFilters(params: z.infer<typeof listFiltersSchema>) {
   try {
     const query = typeof params.query === 'string' ? params.query.trim().toLowerCase() : '';
-    const all = filterStore.listFilters();
+    const all = await filterStore.listFilters();
     const filtered = query
       ? all.filter((entry) => entry.name.toLowerCase().includes(query))
       : all;
@@ -236,9 +165,9 @@ export function listFilters(params: z.infer<typeof listFiltersSchema>) {
   }
 }
 
-export function getFilter(params: z.infer<typeof getFilterSchema>) {
+export async function getFilter(params: z.infer<typeof getFilterSchema>) {
   try {
-    const filter = filterStore.getFilter(params.name);
+    const filter = await filterStore.getFilter(params.name);
     if (!filter) {
       return {
         success: false,
@@ -269,9 +198,9 @@ export function getFilter(params: z.infer<typeof getFilterSchema>) {
   }
 }
 
-export function saveFilter(params: z.infer<typeof saveFilterSchema>) {
+export async function saveFilter(params: z.infer<typeof saveFilterSchema>) {
   try {
-    const stored = filterStore.saveFilter(params.name, params.items, {
+    const stored = await filterStore.saveFilter(params.name, params.items, {
       overwrite: params.overwrite !== false,
     });
 
@@ -294,9 +223,9 @@ export function saveFilter(params: z.infer<typeof saveFilterSchema>) {
   }
 }
 
-export function renameFilter(params: z.infer<typeof renameFilterSchema>) {
+export async function renameFilter(params: z.infer<typeof renameFilterSchema>) {
   try {
-    const stored = filterStore.renameFilter(
+    const stored = await filterStore.renameFilter(
       params.oldName,
       params.newName,
       params.overwrite === true
@@ -319,46 +248,43 @@ export function renameFilter(params: z.infer<typeof renameFilterSchema>) {
   }
 }
 
-export function getFilterTasks(params: z.infer<typeof getFilterTasksSchema>) {
+export async function getFilterTasks(params: z.infer<typeof getFilterTasksSchema>) {
   try {
-    const filter = filterStore.getFilter(params.name);
-    if (!filter) {
+    // Filter execution requires NotePlan to be running so SearchHelper
+    // can apply every rule (timeframe, underHeading, noStatus, events,
+    // reminders, exclude archive, ...) the way the UI does. There's no
+    // reasonable offline approximation — the previous mapping fallback
+    // silently dropped most rules.
+    const bridge = await getBridgeClient();
+    if (!bridge) {
       return {
         success: false,
-        error: `Filter not found: ${params.name}`,
+        error: 'Filter execution requires NotePlan to be running. Open NotePlan and retry.',
       };
     }
 
-    const mapped = mapFilterToTaskQuery(filter.items);
-    const searchResult = taskTools.searchTasksGlobal({
-      query: mapped.query,
-      status: mapped.status,
-      noteTypes: mapped.noteTypes,
-      preferCalendar: mapped.preferCalendar,
-      periodicOnly: mapped.periodicOnly,
-      maxNotes: params.maxNotes,
-      limit: params.limit,
-      offset: params.offset,
-      cursor: params.cursor,
-      space: params.space,
-      folder: params.folder,
-    } as any) as Record<string, unknown>;
-
-    return {
-      ...searchResult,
-      filter: {
-        name: filter.name,
-        itemCount: filter.items.length,
-      },
-      mappedQuery: {
-        query: mapped.query,
-        status: mapped.status,
-        noteTypes: mapped.noteTypes,
-        preferCalendar: mapped.preferCalendar,
-        periodicOnly: mapped.periodicOnly,
-      },
-      unsupportedRules: mapped.unsupportedRules,
-    };
+    try {
+      const matches = await bridge.filterTasks(params.name, { limit: params.limit });
+      const offset = params.offset ?? 0;
+      const page = matches.slice(offset, offset + (params.limit ?? matches.length));
+      return {
+        success: true,
+        count: page.length,
+        totalCount: matches.length,
+        offset,
+        limit: params.limit,
+        hasMore: offset + page.length < matches.length,
+        nextCursor: offset + page.length < matches.length ? String(offset + page.length) : null,
+        matches: page,
+        filter: { name: params.name },
+        executionBackend: 'bridge',
+      };
+    } catch (err) {
+      if (err instanceof BridgeHttpError && err.status === 404) {
+        return { success: false, error: `Filter not found: ${params.name}` };
+      }
+      throw err;
+    }
   } catch (error) {
     return {
       success: false,

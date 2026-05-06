@@ -141,7 +141,7 @@ export function areEmbeddingsToolsEnabled(): boolean {
   return isSqliteAvailable() && areEmbeddingsEnabled();
 }
 
-export function embeddingsStatus(params?: z.infer<typeof embeddingsStatusSchema>) {
+export async function embeddingsStatus(params?: z.infer<typeof embeddingsStatusSchema>) {
   const parsed = embeddingsStatusSchema.safeParse(params ?? {});
   if (!parsed.success) {
     return {
@@ -151,7 +151,7 @@ export function embeddingsStatus(params?: z.infer<typeof embeddingsStatusSchema>
   }
 
   return getEmbeddingsStatus({
-    space: resolveSpaceId(parsed.data.space),
+    space: await resolveSpaceId(parsed.data.space),
   });
 }
 
@@ -164,7 +164,7 @@ export async function embeddingsSync(params?: z.infer<typeof embeddingsSyncSchem
     };
   }
 
-  return syncEmbeddings({ ...parsed.data, space: resolveSpaceId(parsed.data.space) });
+  return syncEmbeddings({ ...parsed.data, space: await resolveSpaceId(parsed.data.space) });
 }
 
 export async function embeddingsSearch(params?: z.infer<typeof embeddingsSearchSchema>) {
@@ -187,11 +187,11 @@ export async function embeddingsSearch(params?: z.infer<typeof embeddingsSearchS
   return searchEmbeddings({
     ...parsed.data,
     query,
-    space: resolveSpaceId(parsed.data.space),
+    space: await resolveSpaceId(parsed.data.space),
   });
 }
 
-export function embeddingsReset(params?: z.infer<typeof embeddingsResetSchema>) {
+export async function embeddingsReset(params?: z.infer<typeof embeddingsResetSchema>) {
   const parsed = embeddingsResetSchema.safeParse(params ?? {});
   if (!parsed.success) {
     return {
@@ -209,7 +209,7 @@ export function embeddingsReset(params?: z.infer<typeof embeddingsResetSchema>) 
   }
 
   const toolName = 'noteplan_embeddings_reset';
-  const resolvedSpace = resolveSpaceId(parsed.data.space);
+  const resolvedSpace = await resolveSpaceId(parsed.data.space);
   const scopeKey = resolvedSpace
     ? `space:${resolvedSpace}`
     : 'scope:all';

@@ -22,6 +22,11 @@ export const MIN_BUILD_EMBED_TEXT = 1490;
 // Build that ships the createBackup AppleScript command
 export const MIN_BUILD_CREATE_BACKUP = 1492;
 
+// Build that ships the local HTTP MCP bridge (getMCPBridgeInfo command).
+// Set to 0 = no gate; bump to the actual ship build once known so older
+// NotePlan installs skip the AppleScript probe.
+export const MIN_BUILD_BRIDGE = 0;
+
 const CACHE_TTL_MS = 60_000;
 let cachedVersion: NotePlanVersion | null = null;
 let cachedAt = 0;
@@ -42,7 +47,7 @@ export function getDetectedAppName(): string {
 
 // AppleScript may resolve the app by CFBundleName or by .app filename depending on macOS version.
 // MAS installs can use the store marketing name as the .app folder name, so we try multiple names.
-const APPLESCRIPT_APP_NAMES = [
+export const APPLESCRIPT_APP_NAMES = [
   'NotePlan',
   'NotePlan 3',
   'NotePlan Beta',

@@ -593,7 +593,7 @@ export async function syncEmbeddings(params: EmbeddingsSyncParams = {}) {
 
   const typeFilter = params.types && params.types.length > 0 ? new Set(params.types) : null;
 
-  const allNotes = store.listNotes({
+  const allNotes = await store.listNotes({
     space: params.space,
   });
 

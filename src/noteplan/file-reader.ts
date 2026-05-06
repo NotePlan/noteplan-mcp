@@ -1,4 +1,10 @@
 // File system reader for local NotePlan notes
+//
+// All exported I/O functions are async and route through the MCP bridge
+// when NotePlan is running (avoiding TCC prompts), falling back to direct
+// fs access otherwise. The path detection at the bottom of the file stays
+// synchronous because it bootstraps once at startup before any caller can
+// await anything.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -9,6 +15,9 @@ import { extractTitle, extractTagsFromContent } from './markdown-parser.js';
 import { extractDateFromFilename } from '../utils/date-utils.js';
 import { getDetectedAppName } from '../utils/version.js';
 import { normalizeFilename } from '../utils/filename-normalize.js';
+import { getBridgeClient } from '../transport/bridge-availability.js';
+import { readFileUtf8, statPath, pathExists, readDir } from '../transport/bridge-fs.js';
+import { isRipgrepAvailable, ripgrepOnlyMatching } from './ripgrep-search.js';
 
 /** Valid note file extensions in NotePlan */
 const VALID_NOTE_EXTENSIONS = ['.md', '.txt'];
@@ -22,6 +31,24 @@ export function isValidNoteExtension(filename: string): boolean {
   const ext = path.extname(filename).toLowerCase();
   return VALID_NOTE_EXTENSIONS.includes(ext);
 }
+
+/**
+ * Folders that should be skipped when listing/recursing the user's notes:
+ *   - dot-prefixed (e.g. .DS_Store, .git)
+ *   - NotePlan's @Trash and @Archive system folders
+ *   - <NoteName>_attachments folders that NotePlan auto-creates next to
+ *     notes that have images/files attached. They're not user-organized
+ *     folders and surfacing them confuses tools that just want the
+ *     organizational tree.
+ */
+function isHiddenFolder(name: string): boolean {
+  if (name.startsWith('.')) return true;
+  if (name === '@Trash' || name === '@Archive') return true;
+  if (name.endsWith('_attachments')) return true;
+  return false;
+}
+
+// MARK: - Storage path detection (sync, runs once at startup)
 
 // Possible NotePlan storage paths (in order of preference)
 const POSSIBLE_PATHS = [
@@ -39,7 +66,6 @@ const POSSIBLE_PATHS = [
   path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan-setapp/Documents'),
 ];
 
-// Cached configuration
 interface NotePlanConfig {
   storagePath: string;
   fileExtension: '.txt' | '.md';
@@ -48,9 +74,6 @@ interface NotePlanConfig {
 
 let cachedConfig: NotePlanConfig | null = null;
 
-/**
- * Detect the file extension used in a directory by examining existing files
- */
 function detectFileExtension(calendarPath: string): '.txt' | '.md' {
   try {
     const entries = fs.readdirSync(calendarPath, { withFileTypes: true });
@@ -62,7 +85,6 @@ function detectFileExtension(calendarPath: string): '.txt' | '.md' {
 
     for (const entry of entries) {
       if (entry.isFile()) {
-        // Check for daily note pattern (YYYYMMDD)
         if (/^\d{8}\.(txt|md)$/.test(entry.name)) {
           const filePath = path.join(calendarPath, entry.name);
           const stats = fs.statSync(filePath);
@@ -78,28 +100,21 @@ function detectFileExtension(calendarPath: string): '.txt' | '.md' {
       }
     }
 
-    // Prefer the extension with the most recent file, then by count
     if (newestTxt > newestMd) return '.txt';
     if (newestMd > newestTxt) return '.md';
     if (txtCount > mdCount) return '.txt';
-    return '.md'; // Default to .md
+    return '.md';
   } catch {
-    return '.txt'; // Default to .txt
+    return '.txt';
   }
 }
 
-/**
- * Check if calendar notes use year subfolders (Calendar/2024/20240101.txt)
- * or flat structure (Calendar/20240101.txt)
- */
 function detectYearSubfolders(calendarPath: string): boolean {
   try {
     const entries = fs.readdirSync(calendarPath, { withFileTypes: true });
 
-    // Check for year directories (4 digits)
     for (const entry of entries) {
       if (entry.isDirectory() && /^\d{4}$/.test(entry.name)) {
-        // Verify it contains calendar notes
         const yearPath = path.join(calendarPath, entry.name);
         const yearEntries = fs.readdirSync(yearPath);
         if (yearEntries.some(f => /^\d{8}\.(txt|md)$/.test(f))) {
@@ -108,80 +123,54 @@ function detectYearSubfolders(calendarPath: string): boolean {
       }
     }
 
-    // Check for flat structure (files directly in Calendar/)
     for (const entry of entries) {
       if (entry.isFile() && /^\d{8}\.(txt|md)$/.test(entry.name)) {
         return false;
       }
     }
 
-    return false; // Default to flat
+    return false;
   } catch {
     return false;
   }
 }
 
-/**
- * Score a storage path based on most recent modification time
- * Checks the root folder and top-level folders (Calendar, Notes) - folder mtime updates when contents change
- */
 function scoreStoragePath(storagePath: string): number {
   let newestMtime = 0;
-
   try {
-    // Check the root storage folder
     const rootStats = fs.statSync(storagePath);
     newestMtime = Math.max(newestMtime, rootStats.mtimeMs);
 
-    // Check Calendar folder
     const calendarPath = path.join(storagePath, 'Calendar');
     if (fs.existsSync(calendarPath)) {
-      const calendarStats = fs.statSync(calendarPath);
-      newestMtime = Math.max(newestMtime, calendarStats.mtimeMs);
+      newestMtime = Math.max(newestMtime, fs.statSync(calendarPath).mtimeMs);
     }
 
-    // Check Notes folder
     const notesPath = path.join(storagePath, 'Notes');
     if (fs.existsSync(notesPath)) {
-      const notesStats = fs.statSync(notesPath);
-      newestMtime = Math.max(newestMtime, notesStats.mtimeMs);
+      newestMtime = Math.max(newestMtime, fs.statSync(notesPath).mtimeMs);
     }
   } catch {
     return 0;
   }
-
   return newestMtime;
 }
 
-/**
- * Check if a path contains a valid NotePlan structure (has Calendar or Notes folder)
- */
 function isValidNotePlanPath(storagePath: string): boolean {
   if (!fs.existsSync(storagePath)) return false;
-
-  const hasCalendar = fs.existsSync(path.join(storagePath, 'Calendar'));
-  const hasNotes = fs.existsSync(path.join(storagePath, 'Notes'));
-
-  return hasCalendar || hasNotes;
+  return fs.existsSync(path.join(storagePath, 'Calendar')) ||
+    fs.existsSync(path.join(storagePath, 'Notes'));
 }
 
-/**
- * Ask the running NotePlan app for its storage path via AppleScript.
- * Returns the path if successful, null otherwise.
- */
 function detectStoragePathViaAppleScript(): string | null {
   try {
     const appName = getDetectedAppName();
-
-    // Check if NotePlan is running first — avoid launching the app via AppleScript
     const isRunning = execFileSync('osascript', ['-e', `application "${appName}" is running`], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 3_000,
     }).trim();
-    if (isRunning !== 'true') {
-      return null;
-    }
+    if (isRunning !== 'true') return null;
 
     const result = execFileSync('osascript', ['-e', `tell application "${appName}" to getStoragePath`], {
       encoding: 'utf-8',
@@ -198,17 +187,11 @@ function detectStoragePathViaAppleScript(): string | null {
   return null;
 }
 
-/**
- * CloudKit (container) paths — used when isUsingCloudKit is true
- */
 const CLOUDKIT_PATHS = [
   path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan3/Data/Library/Application Support/co.noteplan.NotePlan3'),
   path.join(os.homedir(), 'Library/Containers/co.noteplan.NotePlan-setapp/Data/Library/Application Support/co.noteplan.NotePlan-setapp'),
 ];
 
-/**
- * iCloud Drive paths — used when isUsingCloudKit is false
- */
 const ICLOUD_DRIVE_PATHS = [
   path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~Today/Documents'),
   path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan3/Documents'),
@@ -216,11 +199,6 @@ const ICLOUD_DRIVE_PATHS = [
   path.join(os.homedir(), 'Library/Mobile Documents/iCloud~co~noteplan~NotePlan-setapp/Documents'),
 ];
 
-/**
- * Read the sync method from NotePlan's UserDefaults and return the matching storage path.
- * More reliable than filesystem scoring since it reads the actual user preference.
- * Returns null if the preference can't be read or no valid path is found.
- */
 function detectStoragePathViaUserDefaults(): string | null {
   try {
     const result = execFileSync('defaults', ['read', 'co.noteplan.NotePlan3', 'isUsingCloudKit'], {
@@ -244,24 +222,17 @@ function detectStoragePathViaUserDefaults(): string | null {
   return null;
 }
 
-/**
- * Detect and cache NotePlan configuration
- */
 function detectConfig(): NotePlanConfig {
   if (cachedConfig) return cachedConfig;
 
-  // First, ask the running app directly
   let bestPath: string | null = detectStoragePathViaAppleScript();
 
-  // Try UserDefaults to determine sync method before falling back to filesystem scoring
   if (!bestPath) {
     bestPath = detectStoragePathViaUserDefaults();
   }
 
-  // Last resort: filesystem scoring (least reliable — can pick wrong folder)
   if (!bestPath) {
     let bestScore = -1;
-
     for (const storagePath of POSSIBLE_PATHS) {
       if (isValidNotePlanPath(storagePath)) {
         const score = scoreStoragePath(storagePath);
@@ -280,7 +251,6 @@ function detectConfig(): NotePlanConfig {
   const calendarPath = path.join(bestPath, 'Calendar');
   const hasYearSubfolders = detectYearSubfolders(calendarPath);
 
-  // Detect extension in the right location
   const extensionDetectPath = hasYearSubfolders
     ? path.join(calendarPath, new Date().getFullYear().toString())
     : calendarPath;
@@ -300,71 +270,53 @@ function detectConfig(): NotePlanConfig {
   return cachedConfig;
 }
 
-/**
- * Get the NotePlan storage path
- */
+// MARK: - Synchronous path getters (read cached config)
+
 export function getNotePlanPath(): string {
   return detectConfig().storagePath;
 }
 
-/**
- * Get the detected file extension
- */
 export function getFileExtension(): '.txt' | '.md' {
   return detectConfig().fileExtension;
 }
 
-/**
- * Get whether year subfolders are used
- */
 export function hasYearSubfolders(): boolean {
   return detectConfig().hasYearSubfolders;
 }
 
-/**
- * Get all available NotePlan storage paths (for multi-source searching)
- */
 export function getAllNotePlanPaths(): string[] {
   return POSSIBLE_PATHS.filter(isValidNotePlanPath);
 }
 
-/**
- * Get the Calendar notes directory
- */
 export function getCalendarPath(): string {
   return path.join(getNotePlanPath(), 'Calendar');
 }
 
-/**
- * Get the project Notes directory
- */
 export function getNotesPath(): string {
   return path.join(getNotePlanPath(), 'Notes');
 }
 
-/**
- * Build the calendar note file path for a given date
- */
 export function buildCalendarNotePath(dateStr: string): string {
   const config = detectConfig();
   const ext = config.fileExtension;
-
   if (config.hasYearSubfolders) {
     const year = dateStr.substring(0, 4);
     return `Calendar/${year}/${dateStr}${ext}`;
   }
-
   return `Calendar/${dateStr}${ext}`;
 }
 
+// MARK: - Async I/O exports
+
 /**
- * Read a note file from the file system
+ * Read a note file from the file system (or via the bridge when NotePlan
+ * is running). Handles Unicode NFC/NFD path mismatches and rejects paths
+ * outside the storage root.
  */
-export function readNoteFile(filePath: string): Note | null {
+export async function readNoteFile(filePath: string): Promise<Note | null> {
   try {
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
 
-    // Reject paths outside the NotePlan data directory
     const resolvedFull = path.resolve(fullPath);
     const resolvedRoot = path.resolve(getNotePlanPath());
     if (resolvedFull !== resolvedRoot && !resolvedFull.startsWith(`${resolvedRoot}${path.sep}`)) {
@@ -372,57 +324,49 @@ export function readNoteFile(filePath: string): Note | null {
     }
 
     let resolvedPath = fullPath;
+    let stats = await statPath(resolvedPath);
 
-    if (!fs.existsSync(resolvedPath)) {
+    if (!stats.exists) {
       // Try Unicode-normalized form (NFC) — handles NFD/NFC mismatches on macOS
       const nfcPath = normalizeFilename(resolvedPath);
-      if (nfcPath !== resolvedPath && fs.existsSync(nfcPath)) {
-        resolvedPath = nfcPath;
-      } else {
-        // Last resort: scan the parent directory for a Unicode-equivalent match
-        const dir = path.dirname(fullPath);
-        const targetBase = normalizeFilename(path.basename(fullPath));
-        if (fs.existsSync(dir)) {
-          try {
-            const entries = fs.readdirSync(dir);
-            const match = entries.find(
-              (e) => e.normalize('NFC') === targetBase
-            );
-            if (match) {
-              resolvedPath = path.join(dir, match);
-            } else {
-              return null;
-            }
-          } catch {
-            return null;
-          }
-        } else {
-          return null;
+      if (nfcPath !== resolvedPath) {
+        const nfcStats = await statPath(nfcPath);
+        if (nfcStats.exists) {
+          resolvedPath = nfcPath;
+          stats = nfcStats;
         }
       }
     }
 
-    // Re-check that the resolved path is still within the NotePlan data directory
+    if (!stats.exists) {
+      // Last resort: scan the parent directory for a Unicode-equivalent match
+      const dir = path.dirname(fullPath);
+      const targetBase = normalizeFilename(path.basename(fullPath));
+      const entries = await readDir(dir);
+      const match = entries.find((e) => e.name.normalize('NFC') === targetBase);
+      if (!match) return null;
+      resolvedPath = path.join(dir, match.name);
+      stats = await statPath(resolvedPath);
+      if (!stats.exists) return null;
+    }
+
+    if (stats.isDir) return null;
+
     const resolvedFinal = path.resolve(resolvedPath);
     if (resolvedFinal !== resolvedRoot && !resolvedFinal.startsWith(`${resolvedRoot}${path.sep}`)) {
       return null;
     }
 
-    const stats = fs.statSync(resolvedPath);
-    if (stats.isDirectory()) {
-      return null;
-    }
-
-    // Only read files with valid note extensions (.md, .txt)
     if (!isValidNoteExtension(path.basename(resolvedPath))) {
       return null;
     }
 
-    const content = fs.readFileSync(resolvedPath, 'utf-8');
+    const content = await readFileUtf8(resolvedPath);
+    if (content === null) return null;
+
     const relativePath = path.relative(getNotePlanPath(), resolvedPath);
     const filename = path.basename(resolvedPath);
 
-    // Determine note type
     let type: NoteType = 'note';
     let date: string | undefined;
 
@@ -434,7 +378,6 @@ export function readNoteFile(filePath: string): Note | null {
       type = 'trash';
     }
 
-    // Extract folder from path
     const folder = path.dirname(relativePath);
 
     return {
@@ -447,7 +390,7 @@ export function readNoteFile(filePath: string): Note | null {
       folder: folder !== '.' ? folder : undefined,
       date,
       modifiedAt: stats.mtime,
-      createdAt: stats.birthtime,
+      createdAt: stats.ctime,
     };
   } catch (error) {
     console.error(`Error reading note file ${filePath}:`, error);
@@ -456,42 +399,33 @@ export function readNoteFile(filePath: string): Note | null {
 }
 
 /**
- * List all notes in a directory (recursive)
+ * List all notes in a directory (recursive).
  */
-export function listNotesInDirectory(dirPath: string, type: NoteType = 'note'): Note[] {
+export async function listNotesInDirectory(dirPath: string, type: NoteType = 'note'): Promise<Note[]> {
   const notes: Note[] = [];
 
   try {
     const fullPath = path.isAbsolute(dirPath) ? dirPath : path.join(getNotePlanPath(), dirPath);
 
-    // Reject paths outside the NotePlan data directory
     const resolvedFull = path.resolve(fullPath);
     const resolvedRoot = path.resolve(getNotePlanPath());
     if (resolvedFull !== resolvedRoot && !resolvedFull.startsWith(`${resolvedRoot}${path.sep}`)) {
       return notes;
     }
 
-    if (!fs.existsSync(fullPath)) {
-      return notes;
-    }
-
-    const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+    // readDir returns [] for missing dirs, so an explicit pathExists check
+    // would be a redundant stat round-trip per recursion level.
+    const entries = await readDir(fullPath);
 
     for (const entry of entries) {
       const entryPath = path.join(fullPath, entry.name);
 
-      if (entry.isDirectory()) {
-        // Skip hidden directories and Trash
-        if (entry.name.startsWith('.') || entry.name === '@Trash' || entry.name === '@Archive') {
-          continue;
-        }
-        // Recurse into subdirectories
-        notes.push(...listNotesInDirectory(entryPath, type));
+      if (entry.isDir) {
+        if (isHiddenFolder(entry.name)) continue;
+        notes.push(...(await listNotesInDirectory(entryPath, type)));
       } else if (entry.name.endsWith('.md') || entry.name.endsWith('.txt')) {
-        const note = readNoteFile(entryPath);
-        if (note) {
-          notes.push(note);
-        }
+        const note = await readNoteFile(entryPath);
+        if (note) notes.push(note);
       }
     }
   } catch (error) {
@@ -502,21 +436,19 @@ export function listNotesInDirectory(dirPath: string, type: NoteType = 'note'): 
 }
 
 /**
- * Count notes and subfolders in a directory (recursive, lightweight — no file reads)
+ * Count notes and subfolders in a directory (recursive, lightweight — no file reads).
  */
-export function countNotesInDirectory(dirPath: string): { noteCount: number; folderCount: number } {
+export async function countNotesInDirectory(dirPath: string): Promise<{ noteCount: number; folderCount: number }> {
   let noteCount = 0;
   let folderCount = 0;
   try {
     const fullPath = path.isAbsolute(dirPath) ? dirPath : path.join(getNotePlanPath(), dirPath);
-    if (!fs.existsSync(fullPath)) return { noteCount, folderCount };
-
-    const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+    const entries = await readDir(fullPath);
     for (const entry of entries) {
-      if (entry.isDirectory()) {
-        if (entry.name.startsWith('.') || entry.name === '@Trash' || entry.name === '@Archive') continue;
+      if (entry.isDir) {
+        if (isHiddenFolder(entry.name)) continue;
         folderCount++;
-        const sub = countNotesInDirectory(path.join(fullPath, entry.name));
+        const sub = await countNotesInDirectory(path.join(fullPath, entry.name));
         noteCount += sub.noteCount;
         folderCount += sub.folderCount;
       } else if (entry.name.endsWith('.md') || entry.name.endsWith('.txt')) {
@@ -529,36 +461,26 @@ export function countNotesInDirectory(dirPath: string): { noteCount: number; fol
   return { noteCount, folderCount };
 }
 
-/**
- * List all project notes
- */
-export function listProjectNotes(folder?: string): Note[] {
+export async function listProjectNotes(folder?: string): Promise<Note[]> {
   const basePath = folder ? path.join(getNotesPath(), folder) : getNotesPath();
   return listNotesInDirectory(basePath, 'note');
 }
 
-/**
- * List all calendar notes
- */
-export function listCalendarNotes(year?: string): Note[] {
+export async function listCalendarNotes(year?: string): Promise<Note[]> {
   const basePath = year ? path.join(getCalendarPath(), year) : getCalendarPath();
   return listNotesInDirectory(basePath, 'calendar');
 }
 
 /**
- * Get a calendar note by date - tries multiple file paths
+ * Get a calendar note by date — tries multiple file paths.
  */
-export function getCalendarNote(dateStr: string): Note | null {
+export async function getCalendarNote(dateStr: string): Promise<Note | null> {
   const config = detectConfig();
   const year = dateStr.substring(0, 4);
 
-  // Build list of paths to try (in order of preference)
   const pathsToTry: string[] = [];
-
-  // First try the detected configuration
   if (config.hasYearSubfolders) {
     pathsToTry.push(`Calendar/${year}/${dateStr}${config.fileExtension}`);
-    // Also try the other extension
     const otherExt = config.fileExtension === '.txt' ? '.md' : '.txt';
     pathsToTry.push(`Calendar/${year}/${dateStr}${otherExt}`);
   } else {
@@ -567,19 +489,15 @@ export function getCalendarNote(dateStr: string): Note | null {
     pathsToTry.push(`Calendar/${dateStr}${otherExt}`);
   }
 
-  // Try flat structure with both extensions
   pathsToTry.push(`Calendar/${dateStr}.txt`);
   pathsToTry.push(`Calendar/${dateStr}.md`);
-
-  // Try year subfolder with both extensions
   pathsToTry.push(`Calendar/${year}/${dateStr}.txt`);
   pathsToTry.push(`Calendar/${year}/${dateStr}.md`);
 
-  // Deduplicate
   const uniquePaths = [...new Set(pathsToTry)];
 
   for (const filePath of uniquePaths) {
-    const note = readNoteFile(filePath);
+    const note = await readNoteFile(filePath);
     if (note) return note;
   }
 
@@ -587,74 +505,105 @@ export function getCalendarNote(dateStr: string): Note | null {
 }
 
 /**
- * Get a note by title (searches project notes)
+ * Get a note by title (searches project notes).
  */
-export function getNoteByTitle(title: string): Note | null {
-  const notes = listProjectNotes();
+export async function getNoteByTitle(title: string): Promise<Note | null> {
+  const notes = await listProjectNotes();
   const lowerTitle = title.toLowerCase();
 
-  // Try exact match first
   const exactMatch = notes.find((n) => n.title.toLowerCase() === lowerTitle);
   if (exactMatch) return exactMatch;
 
-  // Try filename match (without extension)
   const filenameMatch = notes.find((n) => {
     const basename = path.basename(n.filename, path.extname(n.filename));
     return basename.toLowerCase() === lowerTitle;
   });
   if (filenameMatch) return filenameMatch;
 
-  // Try partial match
   const partialMatch = notes.find((n) => n.title.toLowerCase().includes(lowerTitle));
   return partialMatch || null;
 }
 
 /**
- * List all folders in the Notes directory
+ * List all folders in the Notes directory.
  */
-export function listFolders(maxDepth?: number): Folder[] {
+export async function listFolders(maxDepth?: number): Promise<Folder[]> {
   const folders: Folder[] = [];
 
-  function scanDir(dirPath: string, relativePath: string = '', depth: number = 0) {
-    try {
-      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  async function scanDir(dirPath: string, relativePath: string = '', depth: number = 0): Promise<void> {
+    const entries = await readDir(dirPath);
 
-      for (const entry of entries) {
-        if (entry.isDirectory() && !entry.name.startsWith('.') &&
-            entry.name !== '@Trash' && entry.name !== '@Archive') {
-          const nextDepth = depth + 1;
-          if (typeof maxDepth === 'number' && nextDepth > maxDepth) {
-            continue;
-          }
+    for (const entry of entries) {
+      if (entry.isDir && !isHiddenFolder(entry.name)) {
+        const nextDepth = depth + 1;
+        if (typeof maxDepth === 'number' && nextDepth > maxDepth) {
+          continue;
+        }
 
-          const folderRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-          folders.push({
-            path: folderRelPath,
-            name: entry.name,
-            source: 'local',
-          });
+        const folderRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+        folders.push({
+          path: folderRelPath,
+          name: entry.name,
+          source: 'local',
+        });
 
-          // Recurse unless max depth reached
-          if (typeof maxDepth !== 'number' || nextDepth < maxDepth) {
-            scanDir(path.join(dirPath, entry.name), folderRelPath, nextDepth);
-          }
+        if (typeof maxDepth !== 'number' || nextDepth < maxDepth) {
+          await scanDir(path.join(dirPath, entry.name), folderRelPath, nextDepth);
         }
       }
-    } catch (error) {
-      console.error(`Error scanning folder ${dirPath}:`, error);
     }
   }
 
-  scanDir(getNotesPath(), '', 0);
+  await scanDir(getNotesPath(), '', 0);
   return folders;
 }
 
 /**
- * Extract all unique tags from local notes
+ * Extract all unique tags from local notes.
+ *
+ * Preferred path: a single `/notes/tags` request to the bridge. NotePlan
+ * iterates its own files (no TCC, no per-file HTTP overhead) and returns
+ * the deduped, hierarchy-expanded tag list using its native parser.
+ *
+ * Second path: ripgrep `--only-matching` over Notes/ + Calendar/ — works
+ * when running outside the bridge but is unreliable when the calling
+ * process lacks Full Disk Access (ripgrep gets interrupted by TCC).
+ *
+ * Last-resort fallback: read every note via the bridge / fs and extract
+ * tags individually. This was the only path before Phase 2c; ~67s on a
+ * 5700-note vault.
  */
-export function extractAllTags(): string[] {
+export async function extractAllTags(): Promise<string[]> {
+  const bridge = await getBridgeClient();
+  if (bridge) {
+    try {
+      return (await bridge.tags()).sort();
+    } catch {
+      // Older NotePlan build without the /notes/tags endpoint, or other
+      // transient failure — drop through to the slower paths.
+    }
+  }
+
   const tags = new Set<string>();
-  const notes = [...listProjectNotes(), ...listCalendarNotes()];
+
+  if (await isRipgrepAvailable()) {
+    const matches = await ripgrepOnlyMatching(
+      String.raw`[@#][\w/-]+(\([^)]*\))?`,
+      [getNotesPath(), getCalendarPath()]
+    );
+    if (matches !== null) {
+      for (const tag of extractTagsFromContent(matches.join('\n'))) {
+        tags.add(tag);
+      }
+      return Array.from(tags).sort();
+    }
+  }
+
+  const [projectNotes, calendarNotes] = await Promise.all([
+    listProjectNotes(),
+    listCalendarNotes(),
+  ]);
+  const notes = [...projectNotes, ...calendarNotes];
 
   for (const note of notes) {
     for (const tag of extractTagsFromContent(note.content)) {
@@ -666,30 +615,28 @@ export function extractAllTags(): string[] {
 }
 
 /**
- * Search notes by content
+ * Search notes by content.
  */
-export function searchLocalNotes(
+export async function searchLocalNotes(
   query: string,
   options: {
     types?: NoteType[];
     folder?: string;
     limit?: number;
   } = {}
-): Note[] {
+): Promise<Note[]> {
   const { types, folder, limit = 50 } = options;
   const results: Note[] = [];
   const lowerQuery = query.toLowerCase();
 
-  // Get notes to search
   let notes: Note[] = [];
   if (!types || types.includes('note')) {
-    notes.push(...listProjectNotes(folder));
+    notes.push(...(await listProjectNotes(folder)));
   }
   if (!types || types.includes('calendar')) {
-    notes.push(...listCalendarNotes());
+    notes.push(...(await listCalendarNotes()));
   }
 
-  // Search
   for (const note of notes) {
     if (
       note.content.toLowerCase().includes(lowerQuery) ||
