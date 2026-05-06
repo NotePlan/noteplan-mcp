@@ -6,7 +6,7 @@ import {
   getCalendarPath,
   getFileExtension,
   hasYearSubfolders,
-  buildCalendarNotePath,
+  buildCalendarNotePathAsync,
   getCalendarNote,
   isValidNoteExtension,
 } from './file-reader.js';
@@ -311,7 +311,7 @@ export async function createProjectNote(title: string, content: string = '', fol
  * Create or update a calendar note
  */
 export async function createCalendarNote(dateStr: string, content: string): Promise<string> {
-  const filePath = buildCalendarNotePath(dateStr);
+  const filePath = await buildCalendarNotePathAsync(dateStr);
   await writeNoteFile(filePath, content);
   return filePath;
 }
@@ -833,7 +833,7 @@ export async function ensureCalendarNote(dateStr: string): Promise<string> {
   }
 
   // Create a new one using detected configuration
-  const filePath = buildCalendarNotePath(dateStr);
+  const filePath = await buildCalendarNotePathAsync(dateStr);
   await writeNoteFile(filePath, '');
   return filePath;
 }

@@ -306,6 +306,51 @@ export function buildCalendarNotePath(dateStr: string): string {
   return `Calendar/${dateStr}${ext}`;
 }
 
+// NotePlan stores `defaultNoteExtension` as a real preference; the fs
+// heuristic in detectFileExtension only counts existing files, so a user
+// who recently switched to .md will still get .txt for new calendar notes
+// until the new files outnumber the old. Calendar notes are extension-
+// sensitive (NotePlan ignores wrong-extension files), so we ask the
+// bridge for the truth whenever NotePlan is running.
+const BRIDGE_EXT_TTL_MS = 60_000;
+let bridgeFileExtensionCache: { ext: '.txt' | '.md'; expiresAt: number } | null = null;
+
+/** @internal exposed for tests; the cache TTL prevents real-world leaks. */
+export function __resetCalendarExtensionCache(): void {
+  bridgeFileExtensionCache = null;
+}
+
+export async function resolveNotePlanFileExtension(): Promise<'.txt' | '.md'> {
+  if (bridgeFileExtensionCache && bridgeFileExtensionCache.expiresAt > Date.now()) {
+    return bridgeFileExtensionCache.ext;
+  }
+  const bridge = await getBridgeClient();
+  if (bridge) {
+    try {
+      const config = await bridge.config();
+      if (config.fileExtension === '.md' || config.fileExtension === '.txt') {
+        bridgeFileExtensionCache = {
+          ext: config.fileExtension,
+          expiresAt: Date.now() + BRIDGE_EXT_TTL_MS,
+        };
+        return config.fileExtension;
+      }
+    } catch {
+      // Fall through to fs heuristic.
+    }
+  }
+  return detectConfig().fileExtension;
+}
+
+export async function buildCalendarNotePathAsync(dateStr: string): Promise<string> {
+  const ext = await resolveNotePlanFileExtension();
+  if (detectConfig().hasYearSubfolders) {
+    const year = dateStr.substring(0, 4);
+    return `Calendar/${year}/${dateStr}${ext}`;
+  }
+  return `Calendar/${dateStr}${ext}`;
+}
+
 // MARK: - Async I/O exports
 
 /**
@@ -476,16 +521,17 @@ export async function listCalendarNotes(year?: string): Promise<Note[]> {
  */
 export async function getCalendarNote(dateStr: string): Promise<Note | null> {
   const config = detectConfig();
+  const preferredExt = await resolveNotePlanFileExtension();
   const year = dateStr.substring(0, 4);
 
   const pathsToTry: string[] = [];
   if (config.hasYearSubfolders) {
-    pathsToTry.push(`Calendar/${year}/${dateStr}${config.fileExtension}`);
-    const otherExt = config.fileExtension === '.txt' ? '.md' : '.txt';
+    pathsToTry.push(`Calendar/${year}/${dateStr}${preferredExt}`);
+    const otherExt = preferredExt === '.txt' ? '.md' : '.txt';
     pathsToTry.push(`Calendar/${year}/${dateStr}${otherExt}`);
   } else {
-    pathsToTry.push(`Calendar/${dateStr}${config.fileExtension}`);
-    const otherExt = config.fileExtension === '.txt' ? '.md' : '.txt';
+    pathsToTry.push(`Calendar/${dateStr}${preferredExt}`);
+    const otherExt = preferredExt === '.txt' ? '.md' : '.txt';
     pathsToTry.push(`Calendar/${dateStr}${otherExt}`);
   }
 
