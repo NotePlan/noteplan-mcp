@@ -233,6 +233,21 @@ export class BridgeClient {
   }
 
   /**
+   * Rewrite every `[[from]]` wikilink across the vault to `[[to]]`. Uses
+   * NotePlan's indexed reverse-link lookup and posts `.noteTitleChanged`,
+   * matching what the in-app rename does. Returns the number of distinct
+   * notes updated.
+   */
+  async rewriteWikilinks(from: string, to: string): Promise<{ updatedCount: number }> {
+    const res = await this.requestJson<{ ok: true; updatedCount: number }>(
+      'POST',
+      '/notes/rewrite-wikilinks',
+      { from, to },
+    );
+    return { updatedCount: res.updatedCount };
+  }
+
+  /**
    * Server-side full-text search via NotePlan's SearchHelper (the same
    * engine used by the app's UI and JS plugin bridge). All-words match,
    * case-insensitive, multi-threaded, supports inline operators like

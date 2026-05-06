@@ -12,6 +12,7 @@ import {
 import { parseParagraphLine, parseAllParagraphLines, buildParagraphLine, stripRawMarkers } from '../noteplan/markdown-parser.js';
 import { NoteType, ParagraphType, ParagraphMetadata, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
 import { normalizeFilename } from '../utils/filename-normalize.js';
+import { getBridgeClient } from '../transport/bridge-availability.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -355,6 +356,13 @@ export const getNoteSchema = z.object({
     .optional()
     .default(280)
     .describe('Preview length when includeContent=false (default: 280)'),
+  format: z
+    .enum(['flat', 'lines', 'both'])
+    .optional()
+    .default('flat')
+    .describe(
+      'Response shape when includeContent=true. "flat" (default): only the joined "content" string — token-efficient, fine for reading. "lines": only the per-line "lines" array — use when you need line numbers for follow-up edits. "both": both fields (highest token cost; previous default).'
+    ),
 });
 
 export const listNotesSchema = z.object({
@@ -613,8 +621,13 @@ export async function getNote(params: z.infer<typeof getNoteSchema>) {
   result.limit = lineWindow.limit;
   result.hasMore = lineWindow.hasMore;
   result.nextCursor = lineWindow.nextCursor;
-  result.content = lineWindow.content;
-  result.lines = lineWindow.lines;
+  const format = (params as { format?: 'flat' | 'lines' | 'both' }).format ?? 'flat';
+  if (format !== 'lines') {
+    result.content = lineWindow.content;
+  }
+  if (format !== 'flat') {
+    result.lines = lineWindow.lines;
+  }
   if (lineWindow.hasMore) {
     result.performanceHints = [NEXT_CURSOR_HINT];
   }
@@ -1303,27 +1316,50 @@ export async function renameNoteFile(params: z.infer<typeof renameNoteFileSchema
 
     const renamed = await store.renameNoteFile(note.filename, effectiveNewFilename, keepExtension);
 
-    // Also update the # Title heading in the note content if it matches the old title
+    // Also update the # Title heading in the note content if it matches the old title.
+    // When the heading actually changes, propagate the rename to wikilinks across the
+    // vault via the bridge — matches what the NotePlan UI rename does.
     const newTitle = params.newTitle || params.newFilename;
+    let headingRewritten = false;
+    let oldHeadingTitle: string | null = null;
     if (newTitle && renamed.note.content) {
       const lines = renamed.note.content.split('\n');
       const titleLineIndex = lines.findIndex((l) => /^#\s+/.test(l));
       if (titleLineIndex !== -1) {
-        const oldHeadingTitle = lines[titleLineIndex].replace(/^#\s+/, '');
-        // Update heading if it matches the old note title (or old filename without extension)
+        const currentHeading = lines[titleLineIndex].replace(/^#\s+/, '');
         const oldTitle = note.title || '';
         const oldFilenameBase = note.filename.replace(/^.*\//, '').replace(/\.\w+$/, '');
-        if (oldHeadingTitle === oldTitle || oldHeadingTitle === oldFilenameBase) {
+        if (currentHeading === oldTitle || currentHeading === oldFilenameBase) {
           lines[titleLineIndex] = `# ${newTitle}`;
           const writeTarget = getWritableIdentifier(renamed.note);
           await store.updateNote(writeTarget.identifier, lines.join('\n'), {
             source: writeTarget.source,
           });
+          headingRewritten = true;
+          oldHeadingTitle = currentHeading;
         }
       }
     }
 
-    return {
+    let wikilinksUpdatedCount: number | undefined;
+    let wikilinkPropagationWarning: string | undefined;
+    if (headingRewritten && oldHeadingTitle && newTitle && oldHeadingTitle !== newTitle) {
+      const bridge = await getBridgeClient();
+      if (bridge) {
+        try {
+          const res = await bridge.rewriteWikilinks(oldHeadingTitle, newTitle);
+          wikilinksUpdatedCount = res.updatedCount;
+        } catch (err) {
+          wikilinkPropagationWarning =
+            err instanceof Error ? err.message : 'Failed to update wikilinks';
+        }
+      } else {
+        wikilinkPropagationWarning =
+          'Wikilinks pointing to the old title were NOT updated because NotePlan is not running. Open NotePlan and re-run rename, or fix references manually.';
+      }
+    }
+
+    const result: Record<string, unknown> = {
       success: true,
       message: `Note renamed to ${renamed.toFilename}`,
       fromFilename: renamed.fromFilename,
@@ -1337,6 +1373,13 @@ export async function renameNoteFile(params: z.infer<typeof renameNoteFileSchema
         folder: renamed.note.folder,
       },
     };
+    if (wikilinksUpdatedCount !== undefined) {
+      result.wikilinksUpdatedCount = wikilinksUpdatedCount;
+    }
+    if (wikilinkPropagationWarning) {
+      result.warnings = [wikilinkPropagationWarning];
+    }
+    return result;
   } catch (error) {
     return {
       success: false,

@@ -7,6 +7,7 @@ interface CapturedRequest {
   method?: string;
   url?: string;
   authorization?: string;
+  body?: string;
 }
 
 type ResponseSpec =
@@ -31,17 +32,22 @@ function startTestServer(spec: ResponseSpec): Promise<{
       captured.url = req.url;
       captured.authorization = req.headers['authorization'] as string | undefined;
 
-      if (spec.kind === 'hang') {
-        // Never respond — let the client hit its timeout.
-        return;
-      }
-      if (spec.kind === 'raw') {
-        res.writeHead(spec.status, { 'Content-Type': spec.contentType ?? 'text/plain' });
-        res.end(spec.body);
-        return;
-      }
-      res.writeHead(spec.status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(spec.body));
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        captured.body = Buffer.concat(chunks).toString('utf8');
+
+        if (spec.kind === 'hang') {
+          return;
+        }
+        if (spec.kind === 'raw') {
+          res.writeHead(spec.status, { 'Content-Type': spec.contentType ?? 'text/plain' });
+          res.end(spec.body);
+          return;
+        }
+        res.writeHead(spec.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(spec.body));
+      });
     });
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as AddressInfo).port;
@@ -409,6 +415,23 @@ describe('BridgeClient', () => {
       const client = new BridgeClient(port, 'tok', { onFailure: () => { failed = true; } });
       await expect(client.delete('missing.md')).rejects.toThrow(/-> 404/);
       expect(failed).toBe(false);
+    });
+  });
+
+  describe('rewriteWikilinks', () => {
+    it('POSTs /notes/rewrite-wikilinks with from + to and returns updatedCount', async () => {
+      const { port, captured, close: stop } = await startTestServer({
+        kind: 'json',
+        status: 200,
+        body: { ok: true, updatedCount: 4 },
+      });
+      close = stop;
+
+      const res = await new BridgeClient(port, 'tok').rewriteWikilinks('Old Title', 'New Title');
+      expect(captured.method).toBe('POST');
+      expect(captured.url).toBe('/notes/rewrite-wikilinks');
+      expect(JSON.parse(captured.body!)).toEqual({ from: 'Old Title', to: 'New Title' });
+      expect(res).toEqual({ updatedCount: 4 });
     });
   });
 
