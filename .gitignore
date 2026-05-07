@@ -8,8 +8,10 @@ dist/
 scripts/calendar-helper
 scripts/reminders-helper
 
-# Environment files
+# Environment files (real values are local-only; templates are committed)
 .env*
+!.env.build.example
+!scripts/.env.build.example
 
 # OS files
 .DS_Store
