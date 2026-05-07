@@ -814,9 +814,46 @@ export async function createNote(
     space?: string;
     createNewFolder?: boolean;
     filename?: string;
+    /**
+     * Periodic-note identifier — when present, creates a calendar note
+     * at `Calendar/{date}.{ext}` instead of a project note. Title is
+     * ignored for the on-disk path; the date drives the filename.
+     */
+    calendarDate?: string;
   } = {}
 ): Promise<CreateNoteResult> {
-  const { folder, space, createNewFolder = false, filename } = options;
+  const { folder, space, createNewFolder = false, filename, calendarDate } = options;
+
+  // Calendar-note path: short-circuit BEFORE the project-note logic so
+  // we don't pass a missing title through sanitizeFilename, which used
+  // to surface as `Cannot read properties of undefined (reading 'replace')`.
+  if (calendarDate) {
+    if (space) {
+      throw new Error('Calendar notes cannot live inside a TeamSpace via this tool — omit `space` and target the local Calendar folder.');
+    }
+    if (filename) {
+      throw new Error('Calendar notes derive their filename from the date — pass `date` instead of `filename`.');
+    }
+    const writtenFilename = await fileWriter.createCalendarNoteIfNew(calendarDate, content ?? '');
+    const note = await fileReader.readNoteFile(writtenFilename);
+    if (!note) throw new Error('Failed to create calendar note');
+    invalidateListingCaches();
+    const calendarFolderResolution: FolderResolution = {
+      requested: 'Calendar',
+      resolved: 'Calendar',
+      matched: true,
+      ambiguous: false,
+      score: 1,
+      alternatives: [],
+    };
+    return { note, folderResolution: calendarFolderResolution };
+  }
+
+  // Project- and space-note path requires a non-empty title; reject up
+  // front with a clear error rather than crashing in sanitizeFilename.
+  if (!title?.trim()) {
+    throw new Error('title is required for project notes. To create a calendar note instead, pass `date` (e.g. "2026-W16", "2026-05-07", "today").');
+  }
 
   // Initialize folder resolution info
   const folderResolution: FolderResolution = {

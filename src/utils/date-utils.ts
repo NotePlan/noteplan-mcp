@@ -263,6 +263,64 @@ export function extractDateFromFilename(filename: string): string | null {
 }
 
 /**
+ * Normalize a periodic-note title to NotePlan's on-disk filename form.
+ *
+ * Returns the normalized identifier (e.g. `2026-W04`, `2026-05`,
+ * `2026-Q2`, `20260411`, `2026`) or `null` if `input` doesn't look
+ * like a periodic note. Sloppy inputs are quietly canonicalized:
+ *   - `2026-W4` → `2026-W04`
+ *   - `2026-w16` → `2026-W16`
+ *   - `2026-5` → `2026-05`
+ *   - `2026-q2` → `2026-Q2`
+ *   - `2026-04-11` → `20260411`
+ * NotePlan only recognizes the canonical forms; anything else creates
+ * a file the app can't open as a periodic note.
+ */
+export function normalizePeriodicTitle(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  // Daily: YYYYMMDD
+  if (/^\d{8}$/.test(trimmed)) return trimmed;
+
+  // Daily: YYYY-MM-DD → YYYYMMDD
+  const isoDaily = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDaily) return `${isoDaily[1]}${isoDaily[2]}${isoDaily[3]}`;
+
+  // Weekly: YYYY-Www (1–2 digit week, any case)
+  const weekly = trimmed.match(/^(\d{4})-[Ww](\d{1,2})$/);
+  if (weekly) return `${weekly[1]}-W${weekly[2].padStart(2, '0')}`;
+
+  // Monthly: YYYY-M or YYYY-MM
+  const monthly = trimmed.match(/^(\d{4})-(\d{1,2})$/);
+  if (monthly) return `${monthly[1]}-${monthly[2].padStart(2, '0')}`;
+
+  // Quarterly: YYYY-Qn (1–4)
+  const quarterly = trimmed.match(/^(\d{4})-[Qq]([1-4])$/);
+  if (quarterly) return `${quarterly[1]}-Q${quarterly[2]}`;
+
+  // Yearly: YYYY
+  if (/^\d{4}$/.test(trimmed)) return trimmed;
+
+  return null;
+}
+
+/** True if `input` looks like any periodic-note identifier. */
+export function isPeriodicCalendarTitle(input: string): boolean {
+  return normalizePeriodicTitle(input) !== null;
+}
+
+/**
+ * True only when `input` is *already* in NotePlan's canonical periodic
+ * form — i.e. `normalizePeriodicTitle` returns it unchanged. Used to
+ * distinguish unambiguous calendar intent (`title: "2026-W16"`) from
+ * sloppy variants (`title: "2026-W4"`) that need an explicit signal.
+ */
+export function isCanonicalPeriodicTitle(input: string): boolean {
+  return normalizePeriodicTitle(input) === input;
+}
+
+/**
  * Calendar note types
  */
 export type CalendarNoteType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';

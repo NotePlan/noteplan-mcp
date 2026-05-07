@@ -309,6 +309,28 @@ function resolveExplicitFilename(filename: string, defaultExt: string): string {
 }
 
 /**
+ * Reject creation if a note already exists at `filePath` under either
+ * `.md` or `.txt`. NotePlan treats both as equivalent for a given base
+ * name, so creating `Foo.md` while `Foo.txt` is on disk would produce
+ * a duplicate that the app silently merges. Shared by both project- and
+ * calendar-note creation.
+ */
+async function assertNoteDoesNotExistAtPath(filePath: string): Promise<void> {
+  const fullPath = path.join(getNotePlanPath(), filePath);
+  const ext = path.extname(filePath);
+  const altExt = ext === '.txt' ? '.md' : '.txt';
+  const altRelative = `${filePath.slice(0, -ext.length)}${altExt}`;
+  const altFullPath = `${fullPath.slice(0, -ext.length)}${altExt}`;
+
+  if (await pathExists(fullPath)) {
+    throw new Error(`Note already exists: ${filePath}`);
+  }
+  if (await pathExists(altFullPath)) {
+    throw new Error(`Note already exists: ${altRelative}`);
+  }
+}
+
+/**
  * Create a new project note. When `filename` is provided it overrides
  * the title-derived basename — callers can keep the on-disk name (e.g.
  * `_context.md`) decoupled from the human-readable title.
@@ -325,20 +347,9 @@ export async function createProjectNote(
   const fileBasename = filename
     ? resolveExplicitFilename(filename, defaultExt)
     : `${sanitizeFilename(title)}${defaultExt}`;
-  const ext = path.extname(fileBasename) as '.md' | '.txt';
-  const baseWithoutExt = fileBasename.slice(0, -ext.length);
-
   const filePath = path.join(folderPath, fileBasename);
-  const fullPath = path.join(getNotePlanPath(), filePath);
-  const altExt = ext === '.txt' ? '.md' : '.txt';
-  const altPath = path.join(getNotePlanPath(), folderPath, `${baseWithoutExt}${altExt}`);
 
-  if (await pathExists(fullPath)) {
-    throw new Error(`Note already exists: ${filePath}`);
-  }
-  if (await pathExists(altPath)) {
-    throw new Error(`Note already exists: ${path.join(folderPath, `${baseWithoutExt}${altExt}`)}`);
-  }
+  await assertNoteDoesNotExistAtPath(filePath);
 
   const noteContent = content || `# ${title}\n\n`;
   await writeNoteFile(filePath, noteContent);
@@ -350,6 +361,20 @@ export async function createProjectNote(
  */
 export async function createCalendarNote(dateStr: string, content: string): Promise<string> {
   const filePath = await buildCalendarNotePathAsync(dateStr);
+  await writeNoteFile(filePath, content);
+  return filePath;
+}
+
+/**
+ * Create a calendar note only if one doesn't already exist for that date,
+ * checking both extensions. Mirrors the collision semantics of
+ * `createProjectNote` so the `noteplan_manage_note(action: create)` flow
+ * can reject duplicates loudly instead of clobbering a periodic note the
+ * user has been working on.
+ */
+export async function createCalendarNoteIfNew(dateStr: string, content: string): Promise<string> {
+  const filePath = await buildCalendarNotePathAsync(dateStr);
+  await assertNoteDoesNotExistAtPath(filePath);
   await writeNoteFile(filePath, content);
   return filePath;
 }

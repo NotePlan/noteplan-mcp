@@ -12,6 +12,7 @@ import {
 import { parseParagraphLine, parseAllParagraphLines, buildParagraphLine, stripRawMarkers } from '../noteplan/markdown-parser.js';
 import { NoteType, ParagraphType, ParagraphMetadata, TaskStatus as ParagraphTaskStatus } from '../noteplan/types.js';
 import { normalizeFilename } from '../utils/filename-normalize.js';
+import { normalizePeriodicTitle, isCanonicalPeriodicTitle, parseFlexibleDate } from '../utils/date-utils.js';
 import { getBridgeClient } from '../transport/bridge-availability.js';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
@@ -401,15 +402,21 @@ export const resolveNoteSchema = z.object({
 });
 
 export const createNoteSchema = z.object({
-  title: z.string().describe('Title for the new note'),
+  title: z.string().optional().describe('Title for the new note. Required for project notes. Ignored for calendar notes (their identifier comes from `date` or a periodic title).'),
+  date: z
+    .string()
+    .optional()
+    .describe(
+      'Periodic-note identifier — set this to create a calendar note at `Calendar/{date}.{ext}`. Accepts daily (`YYYY-MM-DD`, `YYYYMMDD`, `today`/`tomorrow`/`yesterday`), weekly (`YYYY-Www` — sloppy `2026-W4` is normalized to `2026-W04`), monthly (`YYYY-MM`), quarterly (`YYYY-Qn`), and yearly (`YYYY`). Title and folder are ignored when date is present.'
+    ),
   filename: z
     .string()
     .optional()
     .describe(
-      'Optional on-disk basename for the note (e.g. "_context.md"). Independent of title — the title still controls the H1 inside the file. Path separators are rejected; pass folder via the "folder" parameter. Extension is preserved if .md/.txt, otherwise the configured default extension is appended. Local notes only — space notes are addressed by ID, not filename.'
+      'Optional on-disk basename for the note (e.g. "_context.md"). Independent of title — the title still controls the H1 inside the file. Path separators are rejected; pass folder via the "folder" parameter. Extension is preserved if .md/.txt, otherwise the configured default extension is appended. Project notes only — space and calendar notes derive filenames automatically.'
     ),
   content: z.string().optional().describe('Initial content for the note. Can include YAML frontmatter between --- delimiters for styling (icon, icon-color, bg-color, bg-color-dark, bg-pattern, status, priority, summary, type, domain)'),
-  folder: z.string().optional().describe('Folder to create the note in. Supports smart matching (e.g., "projects" matches "10 - Projects")'),
+  folder: z.string().optional().describe('Folder to create the note in. Supports smart matching (e.g., "projects" matches "10 - Projects"). Setting this to "Calendar" together with a periodic title (e.g. `2026-W16`) is treated as creating a calendar note.'),
   create_new_folder: z.boolean().optional().describe('Set to true to create a new folder instead of matching existing ones'),
   space: z.string().optional().describe('Space name or ID to create in (e.g., "My Team" or a UUID)'),
   noteType: z.enum(['note', 'template']).optional().default('note').describe('Type of note to create. Use "template" to create in @Templates with proper frontmatter'),
@@ -855,13 +862,58 @@ export async function resolveNote(params: z.infer<typeof resolveNoteSchema>) {
 
 export async function createNote(params: z.infer<typeof createNoteSchema>) {
   try {
+    // Auto-route to calendar only when intent is unambiguous. A project
+    // note titled "2026" would otherwise be hijacked, so sloppy variants
+    // (e.g. "2026-W4") require an explicit folder=Calendar or date.
+    const titlePeriodic = params.title ? normalizePeriodicTitle(params.title) : null;
+    const folderHintsCalendar = (params.folder ?? '').trim().toLowerCase() === 'calendar';
+    let calendarDate: string | null = null;
+    if (params.date) {
+      const normalizedDate = normalizePeriodicTitle(parseFlexibleDate(params.date));
+      if (!normalizedDate) {
+        throw new Error(
+          `Invalid calendar date "${params.date}". Use a periodic identifier like "today", "2026-05-07", "20260507", "2026-W16", "2026-05", "2026-Q2", or "2026".`
+        );
+      }
+      calendarDate = normalizedDate;
+    } else if (folderHintsCalendar) {
+      if (!titlePeriodic) {
+        throw new Error(
+          'folder="Calendar" requires a periodic title (e.g. "2026-W16", "2026-05", "2026-Q2", "20260507") or pass `date` directly. Got title: ' +
+            JSON.stringify(params.title ?? null)
+        );
+      }
+      calendarDate = titlePeriodic;
+    } else if (params.title && isCanonicalPeriodicTitle(params.title)) {
+      calendarDate = params.title;
+    }
+
+    if (calendarDate) {
+      const result = await store.createNote(params.title ?? calendarDate, params.content, {
+        space: params.space,
+        filename: params.filename,
+        calendarDate,
+      });
+      return {
+        success: true,
+        tip: 'Calendar notes are auto-created when you write to them via noteplan_edit_content / noteplan_paragraphs with a `date` parameter — explicit create is rarely needed.',
+        note: {
+          title: result.note.title,
+          filename: result.note.filename,
+          type: result.note.type,
+          source: result.note.source,
+          folder: result.note.folder,
+        },
+      };
+    }
+
     const isTemplate = params.noteType === 'template';
     const folder = isTemplate && !params.folder ? '@Templates' : params.folder;
     const content = isTemplate
-      ? ensureTemplateFrontmatter(params.title, params.content, params.templateTypes)
+      ? ensureTemplateFrontmatter(params.title ?? '', params.content, params.templateTypes)
       : params.content;
 
-    const result = await store.createNote(params.title, content, {
+    const result = await store.createNote(params.title ?? '', content, {
       folder,
       space: params.space,
       createNewFolder: params.create_new_folder,

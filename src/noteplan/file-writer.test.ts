@@ -25,6 +25,7 @@ import {
   writeNoteFile,
   createProjectNote,
   createCalendarNote,
+  createCalendarNoteIfNew,
   ensureCalendarNote,
   appendToNote,
   prependToNote,
@@ -340,6 +341,36 @@ describe('createCalendarNote', () => {
     mockFs.existsSync.mockReturnValue(false);
     const result = await createCalendarNote('20240115', '# Jan 15');
     expect(result).toBe('Calendar/20240115.md');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createCalendarNoteIfNew — collision-aware variant used by the
+// noteplan_manage_note(action: create) calendar path.
+// ---------------------------------------------------------------------------
+describe('createCalendarNoteIfNew', () => {
+  it('creates a new calendar note when no file exists at either extension', async () => {
+    mockFs.existsSync.mockReturnValue(false);
+    const result = await createCalendarNoteIfNew('2026-W16', '## Goals');
+    expect(result).toBe('Calendar/2026-W16.md');
+    expect(mockFs.writeFileSync).toHaveBeenCalled();
+  });
+
+  it('writes the provided content (empty string allowed)', async () => {
+    mockFs.existsSync.mockReturnValue(false);
+    await createCalendarNoteIfNew('2026-Q2', '');
+    const calls = mockFs.writeFileSync.mock.calls;
+    expect(calls[0]?.[1]).toBe('');
+  });
+
+  it('rejects when a calendar note already exists at the same extension', async () => {
+    mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Calendar/2026-W16.md');
+    await expect(createCalendarNoteIfNew('2026-W16', '')).rejects.toThrow(/already exists/);
+  });
+
+  it('rejects when a calendar note exists at the alternate extension', async () => {
+    mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Calendar/2026-W16.txt');
+    await expect(createCalendarNoteIfNew('2026-W16', '')).rejects.toThrow(/already exists/);
   });
 });
 
