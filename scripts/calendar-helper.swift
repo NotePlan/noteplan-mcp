@@ -220,6 +220,7 @@ store.requestFullAccessToEvents { granted, error in
         }
         if let location = updates["location"] { event.location = location }
         if let notes = updates["notes"] { event.notes = notes }
+        if let allDayStr = updates["allDay"] { event.isAllDay = (allDayStr == "true") }
 
         do {
             try store.save(event, span: .thisEvent)

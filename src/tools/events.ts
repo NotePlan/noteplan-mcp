@@ -34,6 +34,26 @@ function toLocalDateString(d: Date): string {
   return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
+function toLocalDateOnlyString(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Returns user-facing start/end strings for an event response. All-day
+ * events are echoed as YYYY-MM-DD because EventKit ignores the time
+ * component when isAllDay=true; including the synthetic 00:00/23:59
+ * timestamps caused users to think the all-day flag wasn't applied.
+ */
+function formatEventDates(start: Date, end: Date, isAllDay: boolean) {
+  if (isAllDay) {
+    return { startDate: toLocalDateOnlyString(start), endDate: toLocalDateOnlyString(end) };
+  }
+  return { startDate: start.toISOString(), endDate: end.toISOString() };
+}
+
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return defaultValue;
@@ -162,6 +182,10 @@ export const updateEventSchema = z.object({
   endDate: z.string().optional().describe('New end date/time'),
   location: z.string().optional().describe('New location'),
   notes: z.string().optional().describe('New notes'),
+  allDay: z
+    .boolean()
+    .optional()
+    .describe('Toggle the event between all-day and timed. EventKit ignores the time component when allDay=true.'),
 });
 
 export const deleteEventSchema = z.object({
@@ -355,23 +379,32 @@ export function createEvent(params: z.infer<typeof createEventSchema>) {
       return {
         success: true,
         message: `Event "${params.title}" created`,
-        event: { id: asResult.id || '', title: params.title, startDate: startStr, endDate: endStr },
+        event: {
+          id: asResult.id || '',
+          title: params.title,
+          ...formatEventDates(startDate, endDate, isAllDay),
+          allDay: isAllDay,
+        },
       };
     }
 
-    // Fall back to Swift helper
+    // Fall back to Swift helper. Positional args MUST stay aligned with
+    // calendar-helper.swift `create-event` (calendar=5, location=6,
+    // notes=7, allDay=8). Pad missing optionals with empty strings —
+    // skipping them used to push allDay's "true" into the next free
+    // slot, so an all-day event with no location came out non-all-day
+    // with the literal "true" stored as its location.
     console.error('[noteplan-mcp] createEvent: falling back to calendar-helper binary');
-    const args = ['create-event', params.title, startStr, endStr];
-    if (params.calendar) {
-      args.push(params.calendar);
-    }
-    if (params.location) {
-      args.push(params.location);
-    }
-    if (params.notes) {
-      args.push(params.notes);
-    }
-    args.push(isAllDay ? 'true' : 'false');
+    const args = [
+      'create-event',
+      params.title,
+      startStr,
+      endStr,
+      params.calendar ?? '',
+      params.location ?? '',
+      params.notes ?? '',
+      isAllDay ? 'true' : 'false',
+    ];
 
     const result = runSwiftHelper(args);
 
@@ -385,8 +418,8 @@ export function createEvent(params: z.infer<typeof createEventSchema>) {
       event: {
         id: result?.id || '',
         title: params.title,
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
+        ...formatEventDates(startDate, endDate, isAllDay),
+        allDay: isAllDay,
       },
     };
   } catch (error) {
@@ -402,13 +435,16 @@ export function createEvent(params: z.infer<typeof createEventSchema>) {
  */
 export function updateEvent(params: z.infer<typeof updateEventSchema>) {
   try {
-    // Build JSON payload for updates
+    // Build JSON payload for updates. allDay is shipped as a string so the
+    // payload type stays Record<string, string>; both AppleScript and the
+    // Swift CLI parse it back into a Bool on the receiving side.
     const updates: Record<string, string> = {};
     if (params.title) updates.title = params.title;
     if (params.startDate) updates.startDate = toLocalDateString(new Date(params.startDate.replace(' ', 'T')));
     if (params.endDate) updates.endDate = toLocalDateString(new Date(params.endDate.replace(' ', 'T')));
     if (params.location !== undefined) updates.location = params.location;
     if (params.notes !== undefined) updates.notes = params.notes;
+    if (params.allDay !== undefined) updates.allDay = params.allDay ? 'true' : 'false';
 
     if (Object.keys(updates).length === 0) {
       return { success: false, error: 'No updates provided' };
