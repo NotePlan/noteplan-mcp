@@ -402,6 +402,12 @@ export const resolveNoteSchema = z.object({
 
 export const createNoteSchema = z.object({
   title: z.string().describe('Title for the new note'),
+  filename: z
+    .string()
+    .optional()
+    .describe(
+      'Optional on-disk basename for the note (e.g. "_context.md"). Independent of title — the title still controls the H1 inside the file. Path separators are rejected; pass folder via the "folder" parameter. Extension is preserved if .md/.txt, otherwise the configured default extension is appended. Local notes only — space notes are addressed by ID, not filename.'
+    ),
   content: z.string().optional().describe('Initial content for the note. Can include YAML frontmatter between --- delimiters for styling (icon, icon-color, bg-color, bg-color-dark, bg-pattern, status, priority, summary, type, domain)'),
   folder: z.string().optional().describe('Folder to create the note in. Supports smart matching (e.g., "projects" matches "10 - Projects")'),
   create_new_folder: z.boolean().optional().describe('Set to true to create a new folder instead of matching existing ones'),
@@ -859,6 +865,7 @@ export async function createNote(params: z.infer<typeof createNoteSchema>) {
       folder,
       space: params.space,
       createNewFolder: params.create_new_folder,
+      filename: params.filename,
     });
 
     return {

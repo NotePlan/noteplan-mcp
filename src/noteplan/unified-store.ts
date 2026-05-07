@@ -813,9 +813,10 @@ export async function createNote(
     folder?: string;
     space?: string;
     createNewFolder?: boolean;
+    filename?: string;
   } = {}
 ): Promise<CreateNoteResult> {
-  const { folder, space, createNewFolder = false } = options;
+  const { folder, space, createNewFolder = false, filename } = options;
 
   // Initialize folder resolution info
   const folderResolution: FolderResolution = {
@@ -851,8 +852,14 @@ export async function createNote(
 
   const resolvedSpace = await resolveSpaceId(space);
   if (resolvedSpace) {
-    const filename = sqliteWriter.createSpaceNote(resolvedSpace, title, effectiveContent);
-    const note = await sqliteReader.getSpaceNote(filename);
+    // Space notes don't use filesystem filenames; the explicit-filename
+    // override is a local-note feature only. Surface that explicitly
+    // rather than silently dropping the parameter.
+    if (filename) {
+      throw new Error('filename is not supported for space notes — they are addressed by ID, not by filesystem path.');
+    }
+    const writtenFilename = sqliteWriter.createSpaceNote(resolvedSpace, title, effectiveContent);
+    const note = await sqliteReader.getSpaceNote(writtenFilename);
     if (!note) throw new Error('Failed to create space note');
     invalidateListingCaches();
     return { note, folderResolution };
@@ -875,8 +882,8 @@ export async function createNote(
     }
   }
 
-  const filename = await fileWriter.createProjectNote(title, effectiveContent, resolvedFolder);
-  const note = await fileReader.readNoteFile(filename);
+  const writtenFilename = await fileWriter.createProjectNote(title, effectiveContent, resolvedFolder, filename);
+  const note = await fileReader.readNoteFile(writtenFilename);
   if (!note) throw new Error('Failed to create note');
   invalidateListingCaches();
   return { note, folderResolution };

@@ -282,24 +282,62 @@ export async function writeNoteFile(filePath: string, content: string): Promise<
 }
 
 /**
- * Create a new project note
+ * Resolve a caller-supplied filename to a safe basename + extension. Path
+ * separators and `..` are rejected up-front because they bypass the
+ * folder argument; everything else is run through sanitizeFilename and
+ * given the configured default extension if none was provided.
  */
-export async function createProjectNote(title: string, content: string = '', folder?: string): Promise<string> {
-  const safeTitle = sanitizeFilename(title);
+function resolveExplicitFilename(filename: string, defaultExt: string): string {
+  const trimmed = filename.trim();
+  if (trimmed.length === 0) {
+    throw new Error('filename is empty');
+  }
+  if (/[/\\]/.test(trimmed) || trimmed.split(/[/\\]/).some((segment) => segment === '..')) {
+    throw new Error(
+      'filename must be a basename only (no path separators). Use the "folder" parameter to choose a folder.'
+    );
+  }
+  const ext = path.extname(trimmed).toLowerCase();
+  const hasKnownExt = ext === '.md' || ext === '.txt';
+  const base = hasKnownExt ? trimmed.slice(0, -ext.length) : trimmed;
+  const finalExt = hasKnownExt ? ext : defaultExt;
+  const safeBase = sanitizeFilename(base);
+  if (safeBase.length === 0) {
+    throw new Error('filename is invalid after sanitization');
+  }
+  return `${safeBase}${finalExt}`;
+}
+
+/**
+ * Create a new project note. When `filename` is provided it overrides
+ * the title-derived basename — callers can keep the on-disk name (e.g.
+ * `_context.md`) decoupled from the human-readable title.
+ */
+export async function createProjectNote(
+  title: string,
+  content: string = '',
+  folder?: string,
+  filename?: string,
+): Promise<string> {
   const cleanFolder = folder?.replace(/^Notes\//, '');
   const folderPath = cleanFolder ? path.join('Notes', cleanFolder) : 'Notes';
-  const ext = getFileExtension();
+  const defaultExt = getFileExtension();
+  const fileBasename = filename
+    ? resolveExplicitFilename(filename, defaultExt)
+    : `${sanitizeFilename(title)}${defaultExt}`;
+  const ext = path.extname(fileBasename) as '.md' | '.txt';
+  const baseWithoutExt = fileBasename.slice(0, -ext.length);
 
-  const filePath = path.join(folderPath, `${safeTitle}${ext}`);
+  const filePath = path.join(folderPath, fileBasename);
   const fullPath = path.join(getNotePlanPath(), filePath);
   const altExt = ext === '.txt' ? '.md' : '.txt';
-  const altPath = path.join(getNotePlanPath(), folderPath, `${safeTitle}${altExt}`);
+  const altPath = path.join(getNotePlanPath(), folderPath, `${baseWithoutExt}${altExt}`);
 
   if (await pathExists(fullPath)) {
     throw new Error(`Note already exists: ${filePath}`);
   }
   if (await pathExists(altPath)) {
-    throw new Error(`Note already exists: ${path.join(folderPath, `${safeTitle}${altExt}`)}`);
+    throw new Error(`Note already exists: ${path.join(folderPath, `${baseWithoutExt}${altExt}`)}`);
   }
 
   const noteContent = content || `# ${title}\n\n`;

@@ -250,6 +250,86 @@ describe('createProjectNote', () => {
     // Each illegal char replaced with -
     expect(result).toBe(path.join('Notes', 'a-b-c-d-e-f-g-h-i-j.md'));
   });
+
+  // Regression: the explicit `filename` parameter used to be silently dropped
+  // by the schema, so callers had to do create + rename in two steps. These
+  // tests pin the new behavior — title and filename are independent inputs.
+  describe('explicit filename parameter', () => {
+    it('uses the explicit filename instead of deriving from title', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      const result = await createProjectNote('Human Readable Title', '', undefined, '_context.md');
+      expect(result).toBe(path.join('Notes', '_context.md'));
+    });
+
+    it('appends the configured default extension when filename has none', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      const result = await createProjectNote('Title', '', undefined, '_context');
+      expect(result).toBe(path.join('Notes', '_context.md'));
+    });
+
+    it('keeps an explicit .txt extension', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      const result = await createProjectNote('Title', '', undefined, '_context.txt');
+      expect(result).toBe(path.join('Notes', '_context.txt'));
+    });
+
+    it('combines explicit filename with the folder argument', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      const result = await createProjectNote('Title', '', 'Work', 'shortname');
+      expect(result).toBe(path.join('Notes', 'Work', 'shortname.md'));
+    });
+
+    it('preserves the title-derived heading even when filename overrides the on-disk name', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      await createProjectNote('Human Title', '', undefined, '_short.md');
+      const calls = mockFs.writeFileSync.mock.calls;
+      // Default content path: "# {title}\n\n"
+      expect(calls[0]?.[1]).toBe('# Human Title\n\n');
+    });
+
+    it('rejects a filename containing a path separator', async () => {
+      await expect(
+        createProjectNote('Title', '', undefined, 'Work/_context.md')
+      ).rejects.toThrow(/path separator/);
+    });
+
+    it('rejects path traversal via ".."', async () => {
+      // The regex catches `/`/`\\` first, but a bare ".." with no separator
+      // would also be split-checked. Verify both rejections.
+      await expect(
+        createProjectNote('Title', '', undefined, '../escape.md')
+      ).rejects.toThrow();
+    });
+
+    it('rejects an empty filename', async () => {
+      await expect(
+        createProjectNote('Title', '', undefined, '   ')
+      ).rejects.toThrow(/empty/);
+    });
+
+    it('replaces illegal filename chars (matching title-derived behavior)', async () => {
+      // `*` is illegal in filenames; sanitizeFilename replaces it with `-`,
+      // matching the behavior we apply to title-derived filenames.
+      mockFs.existsSync.mockReturnValue(false);
+      const result = await createProjectNote('Title', '', undefined, '*.md');
+      expect(result).toBe(path.join('Notes', '-.md'));
+    });
+
+    it('detects collision against the same extension', async () => {
+      mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Notes/_dup.md');
+      await expect(
+        createProjectNote('Title', '', undefined, '_dup.md')
+      ).rejects.toThrow(/already exists/);
+    });
+
+    it('detects collision against the alternate extension', async () => {
+      // _dup.md requested but _dup.txt already on disk → still a collision.
+      mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Notes/_dup.txt');
+      await expect(
+        createProjectNote('Title', '', undefined, '_dup.md')
+      ).rejects.toThrow(/already exists/);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
