@@ -7,12 +7,14 @@ import * as fileWriter from './file-writer.js';
 import * as sqliteReader from './sqlite-reader.js';
 import * as sqliteWriter from './sqlite-writer.js';
 import * as frontmatter from './frontmatter-parser.js';
+import { extractTagsFromContent } from './markdown-parser.js';
 import { getTodayDateString, parseFlexibleDate } from '../utils/date-utils.js';
 import { matchFolder, FolderMatchResult } from '../utils/folder-matcher.js';
 import { searchWithRipgrep, isRipgrepAvailable, RipgrepMatch } from './ripgrep-search.js';
 import { fuzzySearch } from './fuzzy-search.js';
 import { parseFlexibleDateFilter, isDateInRange } from '../utils/date-filters.js';
 import { normalizeFilename } from '../utils/filename-normalize.js';
+import { isFolderAllowed, hasFolderAccessRules } from '../utils/folder-access.js';
 import { getBridgeClient } from '../transport/bridge-availability.js';
 
 // Cache ripgrep availability check
@@ -51,7 +53,7 @@ function setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value
   return value;
 }
 
-function invalidateListingCaches(): void {
+export function invalidateListingCaches(): void {
   listNotesCache.clear();
   listFoldersCache.clear();
   listTagsCache.clear();
@@ -161,9 +163,25 @@ export async function resolveSpaceId(space: string | undefined): Promise<string 
 }
 
 /**
- * Get a note by various identifiers
+ * Get a note by various identifiers. Outer wrapper applies the
+ * configured folder allow/deny rules — pretending the note doesn't
+ * exist if it sits inside a blocked folder, so the agent can't sneak
+ * around the filter via id/filename/date/title resolution.
  */
 export async function getNote(options: {
+  id?: string;
+  title?: string;
+  filename?: string;
+  date?: string;
+  space?: string;
+}): Promise<Note | null> {
+  const note = await getNoteUnchecked(options);
+  if (!note) return null;
+  if (!isFolderAllowed(note.filename)) return null;
+  return note;
+}
+
+async function getNoteUnchecked(options: {
   id?: string;
   title?: string;
   filename?: string;
@@ -279,14 +297,17 @@ export async function listNotes(options: {
     notes.push(...spaceNotes);
   }
 
-  // Sort by modified date (newest first)
-  notes.sort((a, b) => {
+  const accessFiltered = notes.filter((n) => isFolderAllowed(n.filename));
+
+  // Sort by modified date (newest first) AFTER folder filtering — no
+  // point sorting entries we're about to discard.
+  accessFiltered.sort((a, b) => {
     const dateA = a.modifiedAt?.getTime() || 0;
     const dateB = b.modifiedAt?.getTime() || 0;
     return dateB - dateA;
   });
 
-  return setCachedValue(listNotesCache, cacheKey, notes, LIST_NOTES_CACHE_TTL_MS);
+  return setCachedValue(listNotesCache, cacheKey, accessFiltered, LIST_NOTES_CACHE_TTL_MS);
 }
 
 /**
@@ -437,6 +458,10 @@ export async function searchNotes(
       .map((note) => scoreMetadataMatch(note, query, searchField, options.caseSensitive === true))
       .filter((entry): entry is SearchResult => entry !== null);
   }
+
+  // Drop denied folders before any per-result work (frontmatter parsing,
+  // date math, scoring) — they're going out the window anyway.
+  results = results.filter((r) => isFolderAllowed(r.note.filename));
 
   // Apply date filters
   if (modifiedAfter || modifiedBefore || createdAfter || createdBefore) {
@@ -1282,7 +1307,10 @@ export async function getCalendarNote(date: string, space?: string): Promise<Not
     return await sqliteReader.getSpaceCalendarNote(dateStr, resolvedSpace);
   }
 
-  return fileReader.getCalendarNote(dateStr);
+  const note = await fileReader.getCalendarNote(dateStr);
+  if (!note) return null;
+  if (!isFolderAllowed(note.filename)) return null;
+  return note;
 }
 
 /**
@@ -1486,13 +1514,18 @@ export async function listFolders(options: ListFoldersOptions = {}): Promise<Fol
     ) === index;
   });
 
+  const accessFiltered = deduped.filter((folder) => {
+    if (folder.source !== 'local') return true;
+    return isFolderAllowed(`Notes/${folder.path}`);
+  });
+
   let filtered = normalizedQuery
-    ? deduped.filter((folder) => {
+    ? accessFiltered.filter((folder) => {
         const path = folder.path.toLowerCase();
         const name = folder.name.toLowerCase();
         return path.includes(normalizedQuery) || name.includes(normalizedQuery);
       })
-    : deduped;
+    : accessFiltered;
 
   if (normalizedParentPath) {
     const parentPrefix = `${normalizedParentPath}/`;
@@ -1846,7 +1879,20 @@ export async function listTags(space?: string): Promise<string[]> {
   const tags = new Set<string>();
 
   if (!resolvedSpace) {
-    (await fileReader.extractAllTags()).forEach((tag) => tags.add(tag));
+    if (hasFolderAccessRules()) {
+      // The fast paths (bridge tags endpoint, ripgrep) scan everything on
+      // disk and can't tell us which file a tag came from — so they would
+      // surface tag names that exist only inside a denied folder. Fall
+      // back to iterating filtered notes so the rules apply.
+      const notes = await listNotes();
+      for (const note of notes) {
+        for (const tag of extractTagsFromContent(note.content)) {
+          tags.add(tag);
+        }
+      }
+    } else {
+      (await fileReader.extractAllTags()).forEach((tag) => tags.add(tag));
+    }
   }
 
   (await sqliteReader.extractSpaceTags(resolvedSpace)).forEach((tag) => tags.add(tag));

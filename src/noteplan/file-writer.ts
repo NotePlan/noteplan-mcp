@@ -25,6 +25,7 @@ import {
   getAttachmentsAbsolutePath,
   getNoteBaseName,
 } from './attachments-paths.js';
+import { assertFolderAllowed } from '../utils/folder-access.js';
 
 function ensurePathInsideRoot(candidatePath: string, rootPath: string, label: string): void {
   const resolvedCandidate = path.resolve(candidatePath);
@@ -354,6 +355,7 @@ export async function createProjectNote(
     : `${sanitizeFilename(title)}${defaultExt}`;
   const filePath = path.join(folderPath, fileBasename);
 
+  assertFolderAllowed(filePath, 'create note in');
   await assertNoteDoesNotExistAtPath(filePath);
 
   const noteContent = content || `# ${title}\n\n`;
@@ -379,6 +381,7 @@ export async function createCalendarNote(dateStr: string, content: string): Prom
  */
 export async function createCalendarNoteIfNew(dateStr: string, content: string): Promise<string> {
   const filePath = await buildCalendarNotePathAsync(dateStr);
+  assertFolderAllowed(filePath, 'create calendar note in');
   await assertNoteDoesNotExistAtPath(filePath);
   await writeNoteFile(filePath, content);
   return filePath;
@@ -390,6 +393,7 @@ export async function createCalendarNoteIfNew(dateStr: string, content: string):
 export async function appendToNote(filePath: string, content: string): Promise<void> {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
   ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
+  assertFolderAllowed(filePath, 'append to');
 
   const existingContent = await readFileUtf8(fullPath);
   if (existingContent === null) {
@@ -409,6 +413,7 @@ export async function appendToNote(filePath: string, content: string): Promise<v
 export async function prependToNote(filePath: string, content: string): Promise<void> {
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getNotePlanPath(), filePath);
   ensurePathInsideRoot(fullPath, getNotePlanPath(), 'File path');
+  assertFolderAllowed(filePath, 'prepend to');
 
   const existingContent = await readFileUtf8(fullPath);
   if (existingContent === null) {
@@ -436,6 +441,7 @@ export async function prependToNote(filePath: string, content: string): Promise<
  */
 export async function updateNote(filePath: string, content: string): Promise<void> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
+  assertFolderAllowed(filePath, 'update');
 
   if (!(await pathExists(fullPath))) {
     throw new Error(`Note not found: ${filePath}`);
@@ -483,6 +489,7 @@ async function rewriteAttachmentLinksAfterRename(
 
 export async function deleteNote(filePath: string): Promise<string> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
+  assertFolderAllowed(filePath, 'delete');
 
   if (!(await pathExists(fullPath))) {
     throw new Error(`Note not found: ${filePath}`);
@@ -574,9 +581,18 @@ export async function previewMoveLocalNote(filePath: string, destinationFolder: 
     throw new Error(`A note already exists at destination: ${path.relative(getNotePlanPath(), nextAbsolutePath)}`);
   }
 
+  const fromFilename = path.relative(getNotePlanPath(), fullPath);
+  const toFilename = path.relative(getNotePlanPath(), nextAbsolutePath);
+  // Both source and destination must be accessible — otherwise an agent
+  // could exfiltrate from a denied folder by moving notes out of it.
+  // Asserting at preview time means dry-run requests also fail loudly
+  // instead of leaking path-existence info.
+  assertFolderAllowed(fromFilename, 'move from');
+  assertFolderAllowed(toFilename, 'move to');
+
   return {
-    fromFilename: path.relative(getNotePlanPath(), fullPath),
-    toFilename: path.relative(getNotePlanPath(), nextAbsolutePath),
+    fromFilename,
+    toFilename,
     destinationFolder: normalizedDestinationFolder,
   };
 }
@@ -627,9 +643,15 @@ export async function previewRestoreLocalNoteFromTrash(
     throw new Error(`A note already exists at destination: ${path.relative(getNotePlanPath(), nextAbsolutePath)}`);
   }
 
+  const toFilename = path.relative(getNotePlanPath(), nextAbsolutePath);
+  // The trash itself isn't filtered (users restore there even if it
+  // sits outside their allowlist), but the destination must be accessible.
+  // Asserting at preview time also blocks dry-run probes.
+  assertFolderAllowed(toFilename, 'restore to');
+
   return {
     fromFilename: path.relative(getNotePlanPath(), fullPath),
-    toFilename: path.relative(getNotePlanPath(), nextAbsolutePath),
+    toFilename,
     destinationFolder: normalizedDestinationFolder,
   };
 }
@@ -685,8 +707,13 @@ export async function previewRenameLocalNoteFile(
     throw new Error(`A note already exists with filename: ${path.relative(getNotePlanPath(), nextAbsolutePath)}`);
   }
 
+  const fromFilename = path.relative(getNotePlanPath(), fullPath);
+  // Rename stays in the same folder, so checking the source folder
+  // alone covers both. Asserting at preview time also gates dry-run.
+  assertFolderAllowed(fromFilename, 'rename');
+
   return {
-    fromFilename: path.relative(getNotePlanPath(), fullPath),
+    fromFilename,
     toFilename: path.relative(getNotePlanPath(), nextAbsolutePath),
   };
 }
@@ -722,6 +749,10 @@ export async function previewCreateFolder(folderPath: string): Promise<string> {
   }
   const fullPath = path.join(getNotesPath(), normalized);
   ensurePathInsideRoot(fullPath, getNotesPath(), 'Folder path');
+  // Block creating a folder inside a denied subtree — that subtree is
+  // off-limits for any new content. `Notes/<normalized>` is the
+  // relative path the access rules match against.
+  assertFolderAllowed(`Notes/${normalized}`, 'create folder at');
   if (await pathExists(fullPath)) {
     throw new Error(`Folder already exists: ${normalized}`);
   }
@@ -750,6 +781,8 @@ export async function previewDeleteLocalFolder(folderPath: string): Promise<stri
   }
   const fullPath = path.join(getNotesPath(), normalized);
   ensurePathInsideRoot(fullPath, getNotesPath(), 'Source folder');
+  // Deleting a denied folder would bypass the rule for everything inside it.
+  assertFolderAllowed(`Notes/${normalized}`, 'delete folder');
   const stat = await statPath(fullPath);
   if (!stat.exists) {
     throw new Error(`Folder not found: ${normalized}`);
@@ -842,9 +875,17 @@ export async function previewMoveLocalFolder(sourceFolder: string, destinationFo
     );
   }
 
+  const fromFolder = normalizedSource;
+  const toFolder = path.relative(getNotesPath(), targetPath).replace(/\\/g, '/');
+  // Both endpoints must be accessible — moving a denied folder out
+  // would expose its contents, moving any folder INTO a denied subtree
+  // would smuggle content past the rule.
+  assertFolderAllowed(`Notes/${fromFolder}`, 'move folder from');
+  assertFolderAllowed(`Notes/${toFolder}`, 'move folder to');
+
   return {
-    fromFolder: normalizedSource,
-    toFolder: path.relative(getNotesPath(), targetPath).replace(/\\/g, '/'),
+    fromFolder,
+    toFolder,
     destinationFolder: normalizedDestination || 'Notes',
   };
 }
@@ -926,10 +967,15 @@ export async function previewRenameLocalFolder(sourceFolder: string, newName: st
     );
   }
 
-  return {
-    fromFolder: normalizedSource,
-    toFolder: path.relative(getNotesPath(), targetPath).replace(/\\/g, '/'),
-  };
+  const fromFolder = normalizedSource;
+  const toFolder = path.relative(getNotesPath(), targetPath).replace(/\\/g, '/');
+  // Renaming the source folder bypasses any deny rule that pinned it;
+  // asserting source covers the case. We also gate destination because
+  // renaming TO a denied name is incoherent.
+  assertFolderAllowed(`Notes/${fromFolder}`, 'rename folder');
+  assertFolderAllowed(`Notes/${toFolder}`, 'rename folder to');
+
+  return { fromFolder, toFolder };
 }
 
 /**
@@ -966,6 +1012,10 @@ export async function ensureCalendarNote(dateStr: string): Promise<string> {
 
   // Create a new one using detected configuration
   const filePath = await buildCalendarNotePathAsync(dateStr);
+  // Otherwise the addToToday / append-to-date flows could materialize a
+  // file inside a denied folder before the asserting writer downstream
+  // gets a chance to reject the write.
+  assertFolderAllowed(filePath, 'create calendar note in');
   await writeNoteFile(filePath, '');
   return filePath;
 }

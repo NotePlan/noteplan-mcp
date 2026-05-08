@@ -88,6 +88,12 @@ To enable semantic search, add environment variables to the config:
 - `NOTEPLAN_EMBEDDINGS_ENABLED`: defaults to `false`; when false, embeddings tools are not listed.
 - `NOTEPLAN_READ_ONLY`: defaults to `false`; when `true`, all write actions are rejected. Useful for read-only MCP clients.
 - `NOTEPLAN_SKIP_DRY_RUN`: defaults to `false`; when `true`, skips the two-step dryRun/confirmationToken flow for write actions. This halves the number of tool calls for writes — useful for bulk operations or when the per-turn tool call limit is a bottleneck.
+- `NOTEPLAN_ALLOWED_FOLDERS` / `NOTEPLAN_DENIED_FOLDERS`: optional folder-level access control. **Both default to empty, in which case the MCP behaves exactly as it does without these variables — every folder is accessible and no extra checks run.** Set one or both as a comma-separated list of folder prefixes when you want to scope the MCP's view of your vault.
+  - `NOTEPLAN_ALLOWED_FOLDERS` — when set, ONLY paths inside the listed prefixes are reachable. Everything else is hidden. Example: `"NOTEPLAN_ALLOWED_FOLDERS": "Work, Projects, Calendar"` exposes `Notes/Work`, `Notes/Projects`, and the entire `Calendar` tree.
+  - `NOTEPLAN_DENIED_FOLDERS` — when set, the listed prefixes are blocked even if the allowlist would otherwise include them. Example: `"NOTEPLAN_DENIED_FOLDERS": "Personal, Finance"` hides those project subtrees. Denylist wins over allowlist, so you can broadly allow `Notes` while carving out specific sensitive subfolders.
+  - **Reads** (search, list, get, list-tags, list-folders) silently filter denied paths out of the response. **Writes** (create, update, delete, move, rename, restore, plus all folder-level operations) are rejected with a clear error so the agent knows it hit a configured boundary instead of silently misbehaving. Calendar notes can be denied: use `Calendar` (everything) or a sub-path like `Calendar/2026` (one yearFolders subtree).
+  - **Path format**: bare entries are sugar for `Notes/<entry>`, since project notes always live under `Notes/`. So `Personal` and `Notes/Personal` are equivalent. `Notes/...` and `Calendar/...` are the two reserved top-levels and pass through unchanged. Whitespace, leading/trailing slashes, and backslashes are tolerated.
+  - **Matching**: by path-prefix with directory-boundary awareness — `Personal` matches `Notes/Personal/Diary.md` but not `Notes/PersonalRecords.md`.
 
 <details>
 <summary><strong>Build from Source</strong> (for contributors and development)</summary>

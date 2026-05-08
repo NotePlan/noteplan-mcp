@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock preferences before importing markdown-parser (which reads UserDefaults at runtime)
 vi.mock('../noteplan/preferences.js', () => ({
@@ -3053,5 +3053,189 @@ describe('listNotes – folder scope inside a space', () => {
     const result = await listNotes({ space: 'My Space' });
     expect(result).toHaveLength(2);
     expect(sqliteReader.resolveSpaceFolder).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Folder access rules — read-side filtering in unified-store
+// ---------------------------------------------------------------------------
+import { searchNotes, listFolders, listTags, getCalendarNote, invalidateListingCaches } from '../noteplan/unified-store.js';
+import { __resetFolderAccessConfigForTests } from '../utils/folder-access.js';
+
+describe('folder-access read-side filtering', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.NOTEPLAN_ALLOWED_FOLDERS;
+    delete process.env.NOTEPLAN_DENIED_FOLDERS;
+    __resetFolderAccessConfigForTests();
+    // The listNotes cache is module-level so a previous test's filtered
+    // result would leak into this one. Reset before every case.
+    invalidateListingCaches();
+    // Reset readers to safe defaults — individual tests override.
+    vi.mocked(sqliteReader.listSpaces).mockResolvedValue([]);
+    vi.mocked(sqliteReader.listSpaceNotes).mockResolvedValue([]);
+    vi.mocked(sqliteReader.searchSpaceNotesFTS).mockResolvedValue({ results: [], backend: 'sqlite' } as any);
+    vi.mocked(fileReader.listProjectNotes).mockResolvedValue([]);
+    vi.mocked(fileReader.listCalendarNotes).mockResolvedValue([]);
+    vi.mocked(fileReader.searchLocalNotes).mockResolvedValue([]);
+    vi.mocked(fileReader.readNoteFile).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    delete process.env.NOTEPLAN_ALLOWED_FOLDERS;
+    delete process.env.NOTEPLAN_DENIED_FOLDERS;
+    __resetFolderAccessConfigForTests();
+  });
+
+  it('listNotes drops notes inside a denied folder', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    const personal = {
+      id: 'Notes/Personal/Diary.md',
+      title: 'Diary',
+      filename: 'Notes/Personal/Diary.md',
+      type: 'note' as const,
+      source: 'local' as const,
+      folder: 'Notes/Personal',
+      content: '',
+      modifiedAt: new Date(),
+      createdAt: new Date(),
+      spaceId: undefined,
+    };
+    const work = { ...personal, id: 'Notes/Work/Plan.md', filename: 'Notes/Work/Plan.md', folder: 'Notes/Work', title: 'Plan' };
+    vi.mocked(fileReader.listProjectNotes).mockResolvedValue([personal, work]);
+
+    const result = await listNotes();
+    expect(result.map((n) => n.filename)).toEqual(['Notes/Work/Plan.md']);
+  });
+
+  it('getNote returns null for a denied filename even if the reader has it', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    const personal = {
+      id: 'Notes/Personal/Diary.md',
+      title: 'Diary',
+      filename: 'Notes/Personal/Diary.md',
+      type: 'note' as const,
+      source: 'local' as const,
+      folder: 'Notes/Personal',
+      content: '',
+      modifiedAt: new Date(),
+      createdAt: new Date(),
+      spaceId: undefined,
+    };
+    vi.mocked(fileReader.readNoteFile).mockResolvedValue(personal);
+    vi.mocked(sqliteReader.getSpaceNote).mockResolvedValue(null);
+
+    const result = await getNote({ filename: 'Notes/Personal/Diary.md' });
+    expect(result).toBeNull();
+  });
+
+  it('searchNotes filters denied folders out of the result set', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    const personal = {
+      id: 'Notes/Personal/Diary.md',
+      title: 'Diary about work',
+      filename: 'Notes/Personal/Diary.md',
+      type: 'note' as const,
+      source: 'local' as const,
+      folder: 'Notes/Personal',
+      content: 'meeting work plan',
+      modifiedAt: new Date(),
+      createdAt: new Date(),
+      spaceId: undefined,
+    };
+    const work = { ...personal, id: 'Notes/Work/Plan.md', filename: 'Notes/Work/Plan.md', folder: 'Notes/Work', title: 'Diary at Work' };
+    // Use the metadata-search branch (searchField=title) so we don't need to
+    // wrangle the ripgrep mock — same filter site applies.
+    vi.mocked(fileReader.listProjectNotes).mockResolvedValue([personal, work]);
+
+    const result = await searchNotes('diary', { searchField: 'title' });
+    // Both notes have "diary" in their title; the denied one must be filtered out.
+    expect(result.results.map((r) => r.note.filename)).toEqual(['Notes/Work/Plan.md']);
+  });
+
+  // Folder *listings* themselves used to leak — `noteplan_folders(action: list/find/resolve)`
+  // would return a denied folder by name. The fix prepends `Notes/` to the folder's relative
+  // path so the same env-var match works ("Notes/Personal" rule against `Personal/Diary`).
+  it('listFolders drops local folders inside a denied subtree', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    vi.mocked(fileReader.listFolders).mockResolvedValue([
+      { path: 'Personal', name: 'Personal', source: 'local' },
+      { path: 'Personal/Finance', name: 'Finance', source: 'local' },
+      { path: 'Work', name: 'Work', source: 'local' },
+    ]);
+
+    const result = await listFolders();
+    expect(result.map((f) => f.path)).toEqual(['Work']);
+  });
+
+  // getCalendarNote / getTodayNote / per-day fetches in getNotesInRange used
+  // to call fileReader.getCalendarNote directly, bypassing isFolderAllowed.
+  // Important: a user can deny `Calendar` outright to hide all calendar notes.
+  it('getCalendarNote returns null when Calendar/ is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Calendar';
+    __resetFolderAccessConfigForTests();
+    vi.mocked(fileReader.getCalendarNote).mockResolvedValue({
+      id: 'Calendar/20260507.txt',
+      title: '20260507',
+      filename: 'Calendar/20260507.txt',
+      type: 'calendar',
+      source: 'local',
+      folder: 'Calendar',
+      content: 'private',
+      modifiedAt: new Date(),
+      createdAt: new Date(),
+      spaceId: undefined,
+    } as any);
+
+    const result = await getCalendarNote('20260507');
+    expect(result).toBeNull();
+  });
+
+  // listTags walked the bridge / ripgrep / filesystem indiscriminately, so
+  // tag NAMES from denied notes leaked through `noteplan_search(action:
+  // list_tags)` even though the notes themselves were filtered. When rules
+  // are configured we now iterate the already-filtered listNotes() output.
+  it('listTags excludes tags that exist only inside a denied folder', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    const personal = {
+      id: 'Notes/Personal/Diary.md',
+      title: 'Diary',
+      filename: 'Notes/Personal/Diary.md',
+      type: 'note' as const,
+      source: 'local' as const,
+      folder: 'Notes/Personal',
+      content: 'session with #therapist about #anxiety',
+      modifiedAt: new Date(),
+      createdAt: new Date(),
+      spaceId: undefined,
+    };
+    const work = {
+      ...personal,
+      id: 'Notes/Work/Plan.md',
+      filename: 'Notes/Work/Plan.md',
+      folder: 'Notes/Work',
+      title: 'Plan',
+      content: 'review #q2 plan with #team',
+    };
+    vi.mocked(fileReader.listProjectNotes).mockResolvedValue([personal, work]);
+
+    const tags = await listTags();
+    expect(tags).toEqual(expect.arrayContaining(['#q2', '#team']));
+    expect(tags).not.toContain('#therapist');
+    expect(tags).not.toContain('#anxiety');
+  });
+
+  // No rules configured → keep the fast bridge / ripgrep / extractAllTags path.
+  it('listTags uses the fast extractAllTags path when no rules are configured', async () => {
+    vi.mocked(fileReader.extractAllTags).mockResolvedValue(['#fast', '#path']);
+
+    const tags = await listTags();
+    expect(tags).toEqual(['#fast', '#path']);
+    expect(fileReader.extractAllTags).toHaveBeenCalled();
   });
 });

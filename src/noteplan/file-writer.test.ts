@@ -1371,3 +1371,227 @@ describe('renameLocalFolder', () => {
     expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/Old', '/np/Notes/New');
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// Folder access rules — wiring into write paths
+// ---------------------------------------------------------------------------
+import { __resetFolderAccessConfigForTests } from '../utils/folder-access.js';
+
+describe('folder-access wiring', () => {
+  beforeEach(() => {
+    delete process.env.NOTEPLAN_ALLOWED_FOLDERS;
+    delete process.env.NOTEPLAN_DENIED_FOLDERS;
+    __resetFolderAccessConfigForTests();
+  });
+
+  it('createProjectNote rejects when target folder is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    await expect(createProjectNote('Diary', '', 'Personal')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('createProjectNote allows targets in undenied folders', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockReturnValue(false);
+    const result = await createProjectNote('Plan', '', 'Work');
+    expect(result).toBe(path.join('Notes', 'Work', 'Plan.md'));
+  });
+
+  it('createCalendarNoteIfNew rejects when Calendar/ is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Calendar';
+    __resetFolderAccessConfigForTests();
+    await expect(createCalendarNoteIfNew('20260507', '')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+  });
+
+  it('updateNote rejects when the note sits in a denied folder', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    await expect(updateNote('Notes/Personal/Diary.md', 'new content')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('deleteNote rejects when the note sits in a denied folder', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockReturnValue(true);
+    await expect(deleteNote('Notes/Personal/Diary.md')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+    expect(mockFs.renameSync).not.toHaveBeenCalled();
+  });
+
+  it('moveLocalNote rejects when EITHER source or destination is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/Plan.md') return true;
+      if (s === '/np/Notes/Personal/Diary.md') return true;
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    // Moving INTO a denied folder is rejected.
+    await expect(moveLocalNote('Notes/Plan.md', 'Personal')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+    // Moving OUT of a denied folder is also rejected (would otherwise be
+    // an exfiltration path).
+    await expect(moveLocalNote('Notes/Personal/Diary.md', 'Work')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+  });
+
+  it('renameLocalNoteFile rejects when the source folder is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => {
+      return String(p) === '/np/Notes/Personal/Diary.md';
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+    await expect(
+      renameLocalNoteFile('Notes/Personal/Diary.md', 'Renamed')
+    ).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+  });
+
+  it('restoreLocalNoteFromTrash rejects when destination is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => {
+      return String(p) === '/np/Notes/@Trash/Diary.md';
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+    await expect(
+      restoreLocalNoteFromTrash('Notes/@Trash/Diary.md', 'Personal')
+    ).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+  });
+
+  it('appendToNote rejects when target is in a denied folder', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    await expect(
+      appendToNote('Notes/Personal/Diary.md', 'new line')
+    ).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('prependToNote rejects when target is in a denied folder', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    await expect(
+      prependToNote('Notes/Personal/Diary.md', 'preface')
+    ).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('ensureCalendarNote rejects when Calendar/ is denied (closes the addToToday gap)', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Calendar';
+    __resetFolderAccessConfigForTests();
+    // No existing calendar note → falls through to the create branch
+    // where the assert fires. Without the guard the .md would land on
+    // disk before the downstream writer's own filter could reject.
+    vi.mocked(getCalendarNote).mockResolvedValueOnce(null);
+    await expect(ensureCalendarNote('20260507')).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  // Dry-run leak guard: the preview functions used to skip the access check
+  // entirely, so an agent could call them to learn whether a path resolves
+  // (path-existence side channel). The asserts now live inside the preview
+  // functions themselves — both dry-run and execute pass through the same
+  // gate.
+  it('previewMoveLocalNote rejects when destination is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Notes/Plan.md');
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+    await expect(
+      previewMoveLocalNote('Notes/Plan.md', 'Personal')
+    ).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+  });
+
+  it('previewRestoreLocalNoteFromTrash rejects when destination is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Notes/@Trash/Diary.md');
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+    await expect(
+      previewRestoreLocalNoteFromTrash('Notes/@Trash/Diary.md', 'Personal')
+    ).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+  });
+
+  it('previewRenameLocalNoteFile rejects when source folder is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Notes/Personal/Diary.md');
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+    await expect(
+      previewRenameLocalNoteFile('Notes/Personal/Diary.md', 'Renamed')
+    ).rejects.toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+  });
+
+  // Folder-level operations were initially un-gated, so an agent could
+  // create / delete / rename / move a denied folder outright (or move a
+  // benign folder INTO a denied subtree) and bypass the rule for every
+  // file inside. The asserts now live at the preview layer so dry-run
+  // and execute share the same gate.
+  it('previewCreateFolder rejects when target sits inside a denied subtree', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockReturnValue(false);
+    await expect(previewCreateFolder('Personal/Sub')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+  });
+
+  it('previewDeleteLocalFolder rejects when target is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
+    await expect(previewDeleteLocalFolder('Personal')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+    expect(mockFs.renameSync).not.toHaveBeenCalled();
+  });
+
+  it('previewMoveLocalFolder rejects when EITHER source or destination is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/Personal') return true;
+      if (s === '/np/Notes/Work') return true;
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
+
+    // Moving a denied folder out is rejected (would expose its contents).
+    await expect(previewMoveLocalFolder('Personal', 'Work')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+    // Moving anything INTO a denied subtree is rejected (smuggling).
+    await expect(previewMoveLocalFolder('Work', 'Personal')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+  });
+
+  it('previewRenameLocalFolder rejects when source folder is denied', async () => {
+    process.env.NOTEPLAN_DENIED_FOLDERS = 'Notes/Personal';
+    __resetFolderAccessConfigForTests();
+    mockFs.existsSync.mockImplementation((p) => String(p) === '/np/Notes/Personal');
+    mockFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
+    await expect(previewRenameLocalFolder('Personal', 'Renamed')).rejects.toThrow(
+      /NOTEPLAN_DENIED_FOLDERS/
+    );
+  });
+});
