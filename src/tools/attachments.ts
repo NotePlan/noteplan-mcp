@@ -6,6 +6,11 @@ import { z } from 'zod';
 import * as store from '../noteplan/unified-store.js';
 import { getNotePlanPath } from '../noteplan/file-reader.js';
 import {
+  ATTACHMENT_SUFFIX,
+  getNoteBaseName,
+  getAttachmentsAbsolutePath,
+} from '../noteplan/attachments-paths.js';
+import {
   pathExists,
   statPath,
   readDir,
@@ -19,10 +24,6 @@ import {
   toRelative,
 } from '../transport/bridge-fs.js';
 import { getBridgeClient } from '../transport/bridge-availability.js';
-
-// ── Constants (mirrors FileAttachments.swift) ──
-
-const ATTACHMENT_SUFFIX = '_attachments';
 
 const IMAGE_EXTENSIONS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'heic', 'heif',
@@ -65,27 +66,16 @@ function cleanFilename(name: string): string {
 }
 
 /**
- * Get the note name (filename without extension) for building the attachments folder name.
- * Mirrors: noteUrl.deletingPathExtension().lastPathComponent
- */
-function getNoteBaseName(noteFilename: string): string {
-  const basename = path.basename(noteFilename);
-  const ext = path.extname(basename);
-  return ext ? basename.slice(0, -ext.length) : basename;
-}
-
-/**
- * Get the absolute path to a note's attachments folder.
- * Pattern: {noteDir}/{noteName}_attachments/
+ * Get the absolute path to a note's attachments folder. Resolves
+ * relative paths against the NotePlan storage root, then delegates to
+ * the shared `getAttachmentsAbsolutePath`.
  */
 function getAttachmentsFolderPath(noteFilename: string): string {
   const notePlanPath = getNotePlanPath();
   const fullNotePath = path.isAbsolute(noteFilename)
     ? noteFilename
     : path.join(notePlanPath, noteFilename);
-  const noteDir = path.dirname(fullNotePath);
-  const noteName = getNoteBaseName(fullNotePath);
-  return path.join(noteDir, `${noteName}${ATTACHMENT_SUFFIX}`);
+  return getAttachmentsAbsolutePath(fullNotePath);
 }
 
 /**

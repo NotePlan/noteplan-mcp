@@ -544,6 +544,85 @@ describe('deleteNote', () => {
     expect(mockFs.copyFileSync).toHaveBeenCalled();
     expect(mockFs.unlinkSync).toHaveBeenCalled();
   });
+
+  it('also trashes the sibling _attachments folder', async () => {
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/Photo.md') return true;
+      if (s === '/np/Notes/Photo_attachments') return true;
+      if (s === '/np/Notes/@Trash') return true;
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    await deleteNote('Notes/Photo.md');
+
+    const renameCalls = mockFs.renameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+    expect(renameCalls).toContainEqual(['/np/Notes/Photo.md', '/np/Notes/@Trash/Photo.md']);
+    expect(renameCalls).toContainEqual([
+      '/np/Notes/Photo_attachments',
+      '/np/Notes/@Trash/Photo_attachments',
+    ]);
+  });
+
+  it('matches the disambiguated trash basename when the note collides', async () => {
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/Dup.md') return true;
+      if (s === '/np/Notes/Dup_attachments') return true;
+      if (s === '/np/Notes/@Trash') return true;
+      if (s === '/np/Notes/@Trash/Dup.md') return true; // collision → suffix to Dup-1
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    const result = await deleteNote('Notes/Dup.md');
+    expect(result).toBe(path.join('Notes', '@Trash', 'Dup-1.md'));
+
+    const renameCalls = mockFs.renameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+    // The attachments folder follows the disambiguated note name so a
+    // restore would still find them sitting next to the .md file.
+    expect(renameCalls).toContainEqual([
+      '/np/Notes/Dup_attachments',
+      '/np/Notes/@Trash/Dup-1_attachments',
+    ]);
+  });
+
+  // When trash collision suffixes the basename (Dup → Dup-1), the in-content
+  // attachment links still point at the original Dup_attachments/. Without
+  // rewriting them, restoring would produce broken images.
+  it('rewrites in-content attachment links when the trash basename gets a suffix', async () => {
+    let onDiskContent =
+      '# Dup\n\n![pic](Dup_attachments/photo.png)\n[file](Dup_attachments/notes.pdf)\n';
+    let trashed = false;
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/Dup.md') return !trashed;
+      if (s === '/np/Notes/@Trash/Dup-1.md') return trashed;
+      if (s === '/np/Notes/@Trash') return true;
+      if (s === '/np/Notes/@Trash/Dup.md') return true; // forces -1 suffix
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+    mockFs.renameSync.mockImplementation((from: any, to: any) => {
+      if (String(from) === '/np/Notes/Dup.md' && String(to) === '/np/Notes/@Trash/Dup-1.md') {
+        trashed = true;
+      }
+    });
+    mockFs.readFileSync.mockImplementation((p: any) => {
+      if (String(p) === '/np/Notes/@Trash/Dup-1.md') return onDiskContent;
+      throw new Error('unexpected read: ' + p);
+    });
+    mockFs.writeFileSync.mockImplementation((p: any, content: any) => {
+      if (String(p) === '/np/Notes/@Trash/Dup-1.md') onDiskContent = content;
+    });
+
+    await deleteNote('Notes/Dup.md');
+
+    expect(onDiskContent).toContain('Dup-1_attachments/photo.png');
+    expect(onDiskContent).toContain('Dup-1_attachments/notes.pdf');
+    expect(onDiskContent).not.toContain('Dup_attachments/');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -667,6 +746,45 @@ describe('moveLocalNote', () => {
     await moveLocalNote('Notes/test.md', 'NewFolder');
     expect(mockFs.mkdirSync).toHaveBeenCalled();
   });
+
+  // Regression: previously the move only relocated the .md file, leaving
+  // the sibling _attachments folder behind and silently breaking every
+  // embedded image/file reference in the moved note.
+  it('also moves the sibling _attachments folder when present', async () => {
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      // Note + its attachments folder both exist; destination is empty.
+      if (s === '/np/Notes/Photo.md') return true;
+      if (s === '/np/Notes/Photo_attachments') return true;
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    await moveLocalNote('Notes/Photo.md', 'Albums');
+
+    const renameCalls = mockFs.renameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+    expect(renameCalls).toContainEqual(['/np/Notes/Photo.md', '/np/Notes/Albums/Photo.md']);
+    expect(renameCalls).toContainEqual([
+      '/np/Notes/Photo_attachments',
+      '/np/Notes/Albums/Photo_attachments',
+    ]);
+  });
+
+  it('skips the attachments move when the folder is absent', async () => {
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/Plain.md') return true;
+      return false; // no Plain_attachments
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    await moveLocalNote('Notes/Plain.md', 'Work');
+
+    const renameCalls = mockFs.renameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+    // Only the file itself was moved, no attachments folder rename.
+    expect(renameCalls).toHaveLength(1);
+    expect(renameCalls[0]).toEqual(['/np/Notes/Plain.md', '/np/Notes/Work/Plain.md']);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -731,6 +849,26 @@ describe('restoreLocalNoteFromTrash', () => {
     const result = await restoreLocalNoteFromTrash('Notes/@Trash/test.md', 'Notes');
     expect(result).toBe(path.join('Notes', 'test.md'));
     expect(mockFs.renameSync).toHaveBeenCalled();
+  });
+
+  it('also restores the sibling _attachments folder when present', async () => {
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/@Trash/Photo.md') return true;
+      if (s === '/np/Notes/@Trash/Photo_attachments') return true;
+      if (s === '/np/Notes') return true;
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    await restoreLocalNoteFromTrash('Notes/@Trash/Photo.md', 'Notes');
+
+    const renameCalls = mockFs.renameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+    expect(renameCalls).toContainEqual(['/np/Notes/@Trash/Photo.md', '/np/Notes/Photo.md']);
+    expect(renameCalls).toContainEqual([
+      '/np/Notes/@Trash/Photo_attachments',
+      '/np/Notes/Photo_attachments',
+    ]);
   });
 });
 
@@ -831,6 +969,77 @@ describe('renameLocalNoteFile', () => {
     const result = await renameLocalNoteFile('Notes/old.md', 'new');
     expect(result).toBe(path.join('Notes', 'new.md'));
     expect(mockFs.renameSync).toHaveBeenCalledWith('/np/Notes/old.md', '/np/Notes/new.md');
+  });
+
+  it('also renames the sibling _attachments folder', async () => {
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/old.md') return true;
+      if (s === '/np/Notes/old_attachments') return true;
+      // Renamed-note read-back sees no content (file's been moved) — the
+      // link-rewriter just no-ops. Exercised by the next test.
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    await renameLocalNoteFile('Notes/old.md', 'fresh');
+
+    const renameCalls = mockFs.renameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+    expect(renameCalls).toContainEqual(['/np/Notes/old.md', '/np/Notes/fresh.md']);
+    expect(renameCalls).toContainEqual([
+      '/np/Notes/old_attachments',
+      '/np/Notes/fresh_attachments',
+    ]);
+  });
+
+  it('rewrites attachment-folder references in the renamed note content', async () => {
+    let onDiskContent =
+      '# Old\n\nSee ![pic](old_attachments/photo.png) and [doc](old_attachments/notes.pdf).\n';
+    let renamed = false;
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/old.md') return !renamed;       // present until rename
+      if (s === '/np/Notes/fresh.md') return renamed;      // appears post-rename
+      if (s === '/np/Notes/old_attachments') return !renamed;
+      if (s === '/np/Notes/fresh_attachments') return renamed;
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+    mockFs.renameSync.mockImplementation((from: any, to: any) => {
+      if (String(from) === '/np/Notes/old.md' && String(to) === '/np/Notes/fresh.md') {
+        renamed = true;
+      }
+    });
+    mockFs.readFileSync.mockImplementation((p: any) => {
+      if (String(p) === '/np/Notes/fresh.md') return onDiskContent;
+      throw new Error('unexpected read: ' + p);
+    });
+    mockFs.writeFileSync.mockImplementation((p: any, content: any) => {
+      if (String(p) === '/np/Notes/fresh.md') onDiskContent = content;
+    });
+
+    await renameLocalNoteFile('Notes/old.md', 'fresh');
+
+    expect(onDiskContent).toContain('fresh_attachments/photo.png');
+    expect(onDiskContent).toContain('fresh_attachments/notes.pdf');
+    expect(onDiskContent).not.toContain('old_attachments/');
+  });
+
+  it('skips link rewrite when the basename did not change (extension-only rename)', async () => {
+    mockFs.existsSync.mockImplementation((p) => {
+      const s = String(p);
+      if (s === '/np/Notes/Same.md') return true;
+      return false;
+    });
+    mockFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+    await renameLocalNoteFile('Notes/Same.md', 'Same.txt', false);
+
+    // No content read/write should happen when basename is unchanged —
+    // attachment folder name is identical, so rewriteAttachmentLinks short-
+    // circuits before touching the file.
+    expect(mockFs.readFileSync).not.toHaveBeenCalled();
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
   });
 });
 

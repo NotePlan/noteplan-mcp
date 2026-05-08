@@ -20,6 +20,11 @@ import {
   moveFile,
 } from '../transport/bridge-fs.js';
 import { BridgeHttpError } from '../transport/bridge-client.js';
+import {
+  ATTACHMENT_SUFFIX,
+  getAttachmentsAbsolutePath,
+  getNoteBaseName,
+} from './attachments-paths.js';
 
 function ensurePathInsideRoot(candidatePath: string, rootPath: string, label: string): void {
   const resolvedCandidate = path.resolve(candidatePath);
@@ -440,8 +445,42 @@ export async function updateNote(filePath: string, content: string): Promise<voi
 }
 
 /**
- * Delete a note (move to trash)
+ * Move the sibling `_attachments` folder alongside a note file operation.
+ * Idempotent: the bridge-Swift path already moves attachments via
+ * `DataStore.moveNote` when NotePlan is running, so the pathExists check
+ * makes both bridge and fs-fallback paths safe to call unconditionally.
  */
+async function relocateAttachmentsFolderIfPresent(
+  oldNoteAbsolutePath: string,
+  newNoteAbsolutePath: string,
+): Promise<void> {
+  const oldFolder = getAttachmentsAbsolutePath(oldNoteAbsolutePath);
+  const newFolder = getAttachmentsAbsolutePath(newNoteAbsolutePath);
+  if (oldFolder === newFolder) return;
+  if (!(await pathExists(oldFolder))) return;
+  await moveFile(oldFolder, newFolder);
+}
+
+/**
+ * After a rename that changes the basename, rewrite `[label](old_attachments/file)`
+ * style references in the renamed note's content so they point at the
+ * new folder name. Best-effort literal-string replace — basenames with
+ * URL-encodable characters (spaces, parentheses) may need manual fixup.
+ */
+async function rewriteAttachmentLinksAfterRename(
+  noteAbsolutePath: string,
+  oldBaseName: string,
+  newBaseName: string,
+): Promise<void> {
+  if (oldBaseName === newBaseName) return;
+  const content = await readFileUtf8(noteAbsolutePath);
+  if (content === null) return;
+  const oldRef = `${oldBaseName}${ATTACHMENT_SUFFIX}/`;
+  if (!content.includes(oldRef)) return;
+  const newRef = `${newBaseName}${ATTACHMENT_SUFFIX}/`;
+  await writeFileUtf8(noteAbsolutePath, content.split(oldRef).join(newRef));
+}
+
 export async function deleteNote(filePath: string): Promise<string> {
   const fullPath = toLocalNoteAbsolutePath(filePath);
 
@@ -473,6 +512,28 @@ export async function deleteNote(filePath: string): Promise<string> {
   }
 
   await moveFile(fullPath, finalTrashPath);
+
+  // Drag the sibling _attachments/ folder along so embedded images/files
+  // are recoverable from @Trash and the note's relative links keep
+  // resolving if the user restores it. Match the trashed note's
+  // (possibly suffix-disambiguated) basename.
+  const sourceAttachments = getAttachmentsAbsolutePath(fullPath);
+  const sourceBaseName = getNoteBaseName(fullPath);
+  const trashedBaseName = getNoteBaseName(finalTrashPath);
+  if (await pathExists(sourceAttachments)) {
+    const trashedAttachmentsPath = path.join(
+      path.dirname(finalTrashPath),
+      `${trashedBaseName}${ATTACHMENT_SUFFIX}`
+    );
+    await moveFile(sourceAttachments, trashedAttachmentsPath);
+  }
+
+  // If the trash collision suffix changed the basename, the in-content
+  // attachment links still point at the original folder name — rewrite
+  // them so a later restore (which preserves the trashed basename)
+  // produces a functional note.
+  await rewriteAttachmentLinksAfterRename(finalTrashPath, sourceBaseName, trashedBaseName);
+
   return path.relative(getNotePlanPath(), finalTrashPath);
 }
 
@@ -534,6 +595,7 @@ export async function moveLocalNote(filePath: string, destinationFolder: string)
   }
 
   await moveFile(sourcePath, targetPath);
+  await relocateAttachmentsFolderIfPresent(sourcePath, targetPath);
   return preview.toFilename;
 }
 
@@ -584,6 +646,7 @@ export async function restoreLocalNoteFromTrash(filePath: string, destinationFol
     await makeDirectory(targetDir);
   }
   await moveFile(sourcePath, targetPath);
+  await relocateAttachmentsFolderIfPresent(sourcePath, targetPath);
   return preview.toFilename;
 }
 
@@ -640,6 +703,12 @@ export async function renameLocalNoteFile(
   const sourcePath = path.join(getNotePlanPath(), preview.fromFilename);
   const targetPath = path.join(getNotePlanPath(), preview.toFilename);
   await moveFile(sourcePath, targetPath);
+  await relocateAttachmentsFolderIfPresent(sourcePath, targetPath);
+  await rewriteAttachmentLinksAfterRename(
+    targetPath,
+    getNoteBaseName(sourcePath),
+    getNoteBaseName(targetPath),
+  );
   return preview.toFilename;
 }
 
