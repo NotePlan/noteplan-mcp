@@ -225,6 +225,17 @@ describe('createProjectNote', () => {
     expect(result).toBe(path.join('Notes', 'Work', 'Note.md'));
   });
 
+  it('treats a bare "Notes" folder as the vault root (no Notes/Notes nesting)', async () => {
+    // Regression: when the folder resolver short-circuits on the
+    // reserved top-level name "Notes" and passes the literal through,
+    // we used to produce `Notes/Notes/<title>` because the prefix
+    // strip required a trailing slash. The regex now also matches
+    // end-of-string.
+    mockFs.existsSync.mockReturnValue(false);
+    const result = await createProjectNote('Note', '', 'Notes');
+    expect(result).toBe(path.join('Notes', 'Note.md'));
+  });
+
   it('throws if note already exists with same extension', async () => {
     mockFs.existsSync.mockImplementation((p) => {
       return String(p) === '/np/Notes/Dup.md';

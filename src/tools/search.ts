@@ -33,7 +33,7 @@ function normalizeFolderFilterInput(folder: string): string {
   return normalized;
 }
 
-function tokenizeSearchTerms(query: string): string[] {
+export function tokenizeSearchTerms(query: string): string[] {
   const stopWords = new Set([
     'a',
     'an',
@@ -53,8 +53,12 @@ function tokenizeSearchTerms(query: string): string[] {
     'are',
   ]);
 
+  // Split on whitespace AND on `|` so an explicit OR regex like
+  // `meeting|standup` reports as ["meeting","standup"] in tokenTerms.
+  // The bridge already treats `|` as alternation; this just keeps the
+  // response's term list faithful to what the user actually asked for.
   const tokens = query
-    .split(/\s+/)
+    .split(/[\s|]+/)
     .map((token) => token.trim())
     .map((token) => token.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9._-]+$/g, ''))
     .filter((token) => token.length > 0);

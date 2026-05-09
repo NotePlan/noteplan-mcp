@@ -347,7 +347,10 @@ export async function createProjectNote(
   folder?: string,
   filename?: string,
 ): Promise<string> {
-  const cleanFolder = folder?.replace(/^Notes\//, '');
+  // Strip an optional `Notes/` prefix OR a bare `Notes` (the root-only
+  // case). Without the `(\/|$)` branch, `folder = "Notes"` slipped past
+  // and produced `Notes/Notes/<title>` on disk.
+  const cleanFolder = folder?.replace(/^Notes(\/|$)/, '');
   const folderPath = cleanFolder ? path.join('Notes', cleanFolder) : 'Notes';
   const defaultExt = getFileExtension();
   const fileBasename = filename

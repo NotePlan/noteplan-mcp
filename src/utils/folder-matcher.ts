@@ -158,6 +158,23 @@ export function matchFolder(query: string, folders: Folder[]): FolderMatchResult
     };
   }
 
+  // Reserved top-level names. NotePlan organizes everything under either
+  // `Notes` (project notes) or `Calendar` (date-stamped notes). Treat
+  // those literal inputs as a request for the root, not a fuzzy hint —
+  // otherwise a bare `Notes` would substring-match `AI Notes`,
+  // `Onboarding Notes`, etc. and silently misroute new notes. The
+  // caller checks `matched: false` and keeps the literal value, which
+  // file-writer then collapses to the corresponding root.
+  if (/^(notes|calendar)\/?$/i.test(query.trim())) {
+    return {
+      matched: false,
+      folder: null,
+      score: 0,
+      alternatives: [],
+      ambiguous: false,
+    };
+  }
+
   // When the query looks like a path (contains "/"), try exact path match first.
   // This avoids fuzzy ambiguity when the caller already knows the full path.
   if (query.includes('/')) {

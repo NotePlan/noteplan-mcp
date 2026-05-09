@@ -3002,30 +3002,67 @@ export function createServer(): Server {
   return server;
 }
 
+// Discover the bridge and run one cheap search call so NotePlan's
+// SearchHelper / NoteCache is hot before the first user request lands.
+// Bounded so a hung bridge can't wedge MCP startup. Errors are logged
+// but never fatal: if the bridge is unreachable, the cascade falls
+// through to ripgrep on the first request just like before.
+const BRIDGE_WARMUP_TIMEOUT_MS = 5_000;
+
+async function probeAndWarmBridge(): Promise<void> {
+  const deadline = Date.now() + BRIDGE_WARMUP_TIMEOUT_MS;
+  const remaining = () => Math.max(0, deadline - Date.now());
+  const withTimeout = <T>(promise: Promise<T>, label: string): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timeout`)), remaining());
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
+
+  try {
+    const client = await withTimeout(getBridgeClient(), 'bridge discover');
+    if (!client) {
+      console.error('[noteplan-mcp] Bridge unavailable (NotePlan not running, old build, or Automation denied)');
+      return;
+    }
+    const config = await withTimeout(client.config(), 'bridge config');
+    console.error(`[noteplan-mcp] Bridge OK on 127.0.0.1:${client.port} — storage: ${config.storagePath}`);
+    try {
+      await withTimeout(client.search('__np_mcp_warmup_no_match__', { limit: 1 }), 'bridge warmup');
+    } catch (err) {
+      // Warm-up is best-effort: a failure here means the first user
+      // search may still take the cold path. Don't escalate — the
+      // cascade in `searchWithRipgrep` already handles bridge errors.
+      console.error(`[noteplan-mcp] Bridge warmup skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } catch (err) {
+    console.error(`[noteplan-mcp] Bridge probe failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // Start the server with stdio transport
 export async function startServer(): Promise<void> {
   console.error(`[noteplan-mcp] Starting v${getMcpServerVersion()} (Node ${process.version}, ${process.platform} ${process.arch}, pid ${process.pid})`);
   await initSqlite();
   const server = createServer();
+
+  // Bridge probe + SearchHelper / NoteCache warm-up. AWAIT this before
+  // accepting requests so the user's first search hits the warm bridge
+  // instead of racing it and falling back to ripgrep. Bounded by a
+  // short overall timeout so a wedged bridge can't block startup.
+  await probeAndWarmBridge();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('[noteplan-mcp] Server running on stdio');
-
-  // Phase-1 diagnostic probe: not yet wired into any tool, just reports
-  // whether the bridge is reachable so we can verify end-to-end discovery.
-  void (async () => {
-    try {
-      const client = await getBridgeClient();
-      if (client) {
-        const config = await client.config();
-        console.error(`[noteplan-mcp] Bridge OK on 127.0.0.1:${client.port} — storage: ${config.storagePath}`);
-      } else {
-        console.error('[noteplan-mcp] Bridge unavailable (NotePlan not running, old build, or Automation denied)');
-      }
-    } catch (err) {
-      console.error(`[noteplan-mcp] Bridge probe failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  })();
 
   // Nudge the client to re-fetch tools once after a version upgrade.
   // We store the last-seen version in a tiny file so the notification
