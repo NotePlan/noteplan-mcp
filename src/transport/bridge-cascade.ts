@@ -1,5 +1,6 @@
 import { getBridgeClient } from './bridge-availability.js';
 import { BridgeHttpError, type BridgeClient } from './bridge-client.js';
+import { recordBackend } from './bridge-context.js';
 
 /**
  * Run `bridgeOp` against the live bridge when one is available; otherwise
@@ -29,19 +30,31 @@ export async function bridgeOrFallback<T>(
   }
   if (client) {
     try {
-      return await bridgeOp(client);
+      const result = await bridgeOp(client);
+      recordBackend('bridge');
+      return result;
     } catch (err) {
       if (err instanceof BridgeHttpError) {
-        if (err.isClientError) throw err;
-        // 5xx / malformed JSON / empty body — fall through.
+        if (err.isClientError) {
+          // 4xx counts as bridge-served — the bridge processed the request
+          // and rejected it; the fallback would mask the real error.
+          recordBackend('bridge');
+          throw err;
+        }
+        // 5xx / malformed JSON / empty body — fall through. Log so support
+        // diagnosing a TCC-prompt report can see why bridge was skipped.
+        console.error(`[noteplan-mcp] bridge op failed (${err.status}); falling back: ${truncate(err.message, 200)}`);
       } else if (isTransportError(err)) {
         // ECONNREFUSED / ECONNRESET / ETIMEDOUT / ENOTFOUND / EHOSTUNREACH
         // — bridge crashed or port changed; let the fallback have it.
+        const code = (err as NodeJS.ErrnoException).code;
+        console.error(`[noteplan-mcp] bridge unreachable (${code}); falling back`);
       } else {
         throw err;
       }
     }
   }
+  recordBackend('fallback');
   return fallback();
 }
 
@@ -59,4 +72,8 @@ function isTransportError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const code = (err as NodeJS.ErrnoException).code;
   return typeof code === 'string' && TRANSPORT_ERROR_CODES.has(code);
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
 }

@@ -31,10 +31,11 @@ import * as templateTools from './tools/templates.js';
 import * as attachmentTools from './tools/attachments.js';
 import { parseFlexibleDate } from './utils/date-utils.js';
 import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVANCED_FEATURES, MIN_BUILD_CREATE_BACKUP } from './utils/version.js';
-import { isReadOnly, isSkipDryRun } from './utils/server-config.js';
+import { isReadOnly, isSkipDryRun, shouldAutoLaunchNotePlan } from './utils/server-config.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
 import { getDatabase, getDatabasePath, listSpaces as listSpacesFromDb } from './noteplan/sqlite-reader.js';
 import { getBridgeClient } from './transport/bridge-availability.js';
+import { withBackendTracking, getCurrentBackends } from './transport/bridge-context.js';
 
 type ToolDefinition = {
   name: string;
@@ -938,14 +939,29 @@ function withDuration(result: unknown, durationMs: number, includeTiming: boolea
   };
 }
 
-const SERVER_VERSION = '1.1.15';
+/** Attach `backends` (e.g. `["bridge"]` or `["fallback"]` or both) to a tool
+ *  response when the tool's work passed through bridgeOrFallback. Reads the
+ *  request-scoped tracker set up by withBackendTracking in the dispatcher.
+ *  No-op for results that aren't plain objects. */
+function withBackend(result: unknown): unknown {
+  const backends = getCurrentBackends();
+  if (backends.length === 0) return result;
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    return {
+      ...(result as Record<string, unknown>),
+      backends,
+    };
+  }
+  return result;
+}
 
 // Create the server
 export function createServer(): Server {
+  const mcpServerVersion = getMcpServerVersion();
   const server = new Server(
     {
       name: 'NotePlan',
-      version: SERVER_VERSION,
+      version: mcpServerVersion,
     },
     {
       capabilities: {
@@ -953,7 +969,7 @@ export function createServer(): Server {
         resources: {},
       },
       instructions: [
-        `You have access to NotePlan — a markdown-based note-taking and task management app for macOS/iOS. (MCP server v${SERVER_VERSION})`,
+        `You have access to NotePlan — a markdown-based note-taking and task management app for macOS/iOS. (MCP server v${mcpServerVersion})`,
         'All tools use action-based dispatch: one tool per domain, with an `action` parameter to select the operation.',
         '',
         '## Workflow',
@@ -1040,6 +1056,9 @@ export function createServer(): Server {
   }
   if (skipDryRun) {
     console.error('[noteplan-mcp] Skip dry-run: ENABLED (confirmation tokens not required)');
+  }
+  if (!shouldAutoLaunchNotePlan()) {
+    console.error('[noteplan-mcp] Auto-launch: DISABLED (NOTEPLAN_MCP_AUTOLAUNCH=false; bridge probe stays passive when NotePlan is closed)');
   }
 
   const toolDefinitions: ToolDefinition[] = [
@@ -2612,7 +2631,7 @@ export function createServer(): Server {
   };
 
   // Register tool call handler
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request) => withBackendTracking(async () => {
     const { name, arguments: args } = request.params;
     const normalizedName = normalizeToolName(name);
     const includeTiming = isDebugTimingsEnabled(args);
@@ -2628,7 +2647,8 @@ export function createServer(): Server {
       if ((args as any)?.action === 'list_actions' && TOOL_ACTIONS[normalizedName]) {
         result = { success: true, tool: normalizedName, actions: TOOL_ACTIONS[normalizedName] };
         const resultWithDuration = withDuration(result, Date.now() - startTime, includeTiming);
-        return { content: [{ type: 'text', text: JSON.stringify(resultWithDuration, null, 2) }] };
+        const finalResult = withBackend(resultWithDuration);
+        return { content: [{ type: 'text', text: JSON.stringify(finalResult, null, 2) }] };
       }
 
       // ── Read-only mode: reject write actions ──
@@ -2639,9 +2659,10 @@ export function createServer(): Server {
           const errorResult = { success: false, error: `Read-only mode is enabled (NOTEPLAN_READ_ONLY=true). Write action "${action}" on ${normalizedName} is not allowed.`, code: 'ERR_READ_ONLY' };
           const hasOutputSchema = !!toolDefinitions.find(t => t.name === normalizedName)?.outputSchema;
           const resultWithDuration = withDuration(errorResult, Date.now() - startTime, includeTiming);
+          const finalResult = withBackend(resultWithDuration);
           return {
-            content: [{ type: 'text', text: JSON.stringify(resultWithDuration, null, 2) }],
-            ...(hasOutputSchema ? { structuredContent: resultWithDuration } : {}),
+            content: [{ type: 'text', text: JSON.stringify(finalResult, null, 2) }],
+            ...(hasOutputSchema ? { structuredContent: finalResult } : {}),
             isError: true,
           };
         }
@@ -2925,18 +2946,19 @@ export function createServer(): Server {
       const resultWithSuggestions = withSuggestedNextTools(enrichedResult, normalizedName, registeredToolNameSet);
       const resultWithMemory = withMemoryHints(resultWithSuggestions, normalizedName);
       const resultWithDuration = withDuration(resultWithMemory, Date.now() - startTime, includeTiming);
+      const finalResult = withBackend(resultWithDuration);
 
       // Log non-throwing errors (success: false returned without an exception)
-      if (resultWithDuration && typeof resultWithDuration === 'object' && (resultWithDuration as any).success === false) {
+      if (finalResult && typeof finalResult === 'object' && (finalResult as any).success === false) {
         const duration = Date.now() - startTime;
-        const errMsg = (resultWithDuration as any).error || 'unknown';
+        const errMsg = (finalResult as any).error || 'unknown';
         console.error(`[noteplan-mcp] Tool failed: ${actionLabel} (${duration}ms): ${errMsg}`);
       }
 
       const hasOutputSchema = Boolean(toolDefinitionByName.get(normalizedName)?.outputSchema);
 
       // If the result contains image data, return it as an MCP image content block
-      const typedResult = resultWithDuration as Record<string, unknown>;
+      const typedResult = finalResult as Record<string, unknown>;
       if (typedResult._imageData && typedResult._imageMimeType) {
         const imageData = typedResult._imageData as string;
         const imageMimeType = typedResult._imageMimeType as string;
@@ -2961,10 +2983,10 @@ export function createServer(): Server {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(resultWithDuration),
+            text: JSON.stringify(finalResult),
           },
         ],
-        ...(hasOutputSchema ? { structuredContent: resultWithDuration } : {}),
+        ...(hasOutputSchema ? { structuredContent: finalResult } : {}),
       };
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -2985,19 +3007,28 @@ export function createServer(): Server {
         retryable: meta.retryable,
       };
       const errorWithDuration = withDuration(errorResult, Date.now() - startTime, includeTiming);
+      const finalErrorResult = withBackend(errorWithDuration);
       const hasOutputSchema = Boolean(toolDefinitionByName.get(normalizedName)?.outputSchema);
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(errorWithDuration),
+            text: JSON.stringify(finalErrorResult),
           },
         ],
-        ...(hasOutputSchema ? { structuredContent: errorWithDuration } : {}),
+        ...(hasOutputSchema ? { structuredContent: finalErrorResult } : {}),
         isError: true,
       };
+    } finally {
+      // Per-call backend summary so support reading the log linearly can tell
+      // whether the call used the HTTP bridge or the SQLite/FS fallback. Mixed
+      // calls (multiple bridge ops where one fell back) show "bridge+fallback".
+      const backends = getCurrentBackends();
+      if (backends.length > 0) {
+        console.error(`[noteplan-mcp]   ↳ backend: ${backends.join('+')}`);
+      }
     }
-  });
+  }));
 
   return server;
 }

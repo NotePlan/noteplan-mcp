@@ -1,4 +1,5 @@
 import { runAppleScript } from '../utils/applescript.js';
+import { shouldAutoLaunchNotePlan } from '../utils/server-config.js';
 import {
   APPLESCRIPT_APP_NAMES,
   MIN_BUILD_BRIDGE,
@@ -61,10 +62,21 @@ function queryBridgeInfo(): { port: number; token: string } | null {
   const detected = getDetectedAppName();
   const ordered = [detected, ...APPLESCRIPT_APP_NAMES.filter((n) => n !== detected)];
 
+  // Default: a bare `tell application "X" to …` auto-launches X on macOS,
+  // which is desirable here because routing through NotePlan sidesteps the
+  // Files & Folders (TCC) prompts users would otherwise face from direct
+  // container access. Set NOTEPLAN_MCP_AUTOLAUNCH=false to opt out, in which
+  // case the `is running` wrapper keeps the probe passive.
+  const autoLaunch = shouldAutoLaunchNotePlan();
   for (const appName of ordered) {
     let raw: string;
     try {
-      raw = runAppleScript(`tell application "${appName}" to getMCPBridgeInfo`, 5_000);
+      const script = autoLaunch
+        ? `tell application "${appName}" to getMCPBridgeInfo`
+        : `if application "${appName}" is running then\n` +
+          `  tell application "${appName}" to getMCPBridgeInfo\n` +
+          `end if`;
+      raw = runAppleScript(script, 5_000);
     } catch {
       continue;
     }
