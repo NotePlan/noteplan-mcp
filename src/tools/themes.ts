@@ -106,17 +106,13 @@ function isPathTraversal(filename: string): boolean {
   return filename.includes('..') || filename.includes('/') || filename.includes('\\');
 }
 
-function stripInvalidKeys(obj: Record<string, unknown>, validKeys: string[]): { cleaned: Record<string, unknown>; stripped: string[] } {
-  const cleaned: Record<string, unknown> = {};
-  const stripped: string[] = [];
-  for (const key of Object.keys(obj)) {
-    if (validKeys.includes(key)) {
-      cleaned[key] = obj[key];
-    } else {
-      stripped.push(key);
-    }
-  }
-  return { cleaned, stripped };
+/** List keys not present in the whitelist. Informational only — we no longer
+ *  strip unknown keys: NotePlan owns the theme schema (which evolves), and
+ *  user themes legitimately add custom regex highlighters with arbitrary
+ *  names and properties (isRevealOnCursorRange, isMarkdownCharacter, etc.).
+ *  Stripping silently destroyed user customizations on every save/edit. */
+function findUnknownKeys(obj: Record<string, unknown>, validKeys: string[]): string[] {
+  return Object.keys(obj).filter((k) => !validKeys.includes(k));
 }
 
 // --- Implementations ---
@@ -202,34 +198,33 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
     return { success: false, error: 'Invalid filename: must contain only alphanumeric characters, dashes, underscores, dots, spaces, and end with .json' };
   }
 
-  const allStrippedKeys: string[] = [];
+  // Survey unknown keys for caller awareness (typo catcher) but keep them in
+  // the written file. The VALID_* lists below are an out-of-date subset of
+  // what NotePlan actually accepts, and user themes routinely use custom
+  // regex highlighters with arbitrary keys — stripping them silently
+  // destroyed user customizations on every save.
+  const editorInput = (theme.editor ?? {}) as Record<string, unknown>;
+  const stylesInput = (theme.styles ?? {}) as Record<string, unknown>;
 
-  // Validate and strip editor keys
-  const editorResult = stripInvalidKeys(theme.editor as Record<string, unknown>, VALID_EDITOR_KEYS);
-  allStrippedKeys.push(...editorResult.stripped.map(k => `editor.${k}`));
-
-  // Validate and strip styles keys, then validate each style's properties
-  const stylesInput = theme.styles as Record<string, unknown>;
-  const stylesResult = stripInvalidKeys(stylesInput, VALID_STYLE_KEYS);
-  allStrippedKeys.push(...stylesResult.stripped.map(k => `styles.${k}`));
-
-  const cleanedStyles: Record<string, unknown> = {};
-  for (const [styleKey, styleValue] of Object.entries(stylesResult.cleaned)) {
+  const unknownKeys: string[] = [];
+  unknownKeys.push(...findUnknownKeys(editorInput, VALID_EDITOR_KEYS).map((k) => `editor.${k}`));
+  unknownKeys.push(...findUnknownKeys(stylesInput, VALID_STYLE_KEYS).map((k) => `styles.${k}`));
+  for (const [styleKey, styleValue] of Object.entries(stylesInput)) {
     if (styleValue && typeof styleValue === 'object' && !Array.isArray(styleValue)) {
-      const propResult = stripInvalidKeys(styleValue as Record<string, unknown>, VALID_STYLE_PROPERTIES);
-      allStrippedKeys.push(...propResult.stripped.map(p => `styles.${styleKey}.${p}`));
-      cleanedStyles[styleKey] = propResult.cleaned;
-    } else {
-      cleanedStyles[styleKey] = styleValue;
+      unknownKeys.push(
+        ...findUnknownKeys(styleValue as Record<string, unknown>, VALID_STYLE_PROPERTIES).map(
+          (p) => `styles.${styleKey}.${p}`,
+        ),
+      );
     }
   }
 
-  // Build the final theme object
+  // Build the final theme object — pass editor and styles through verbatim.
   const finalTheme: Record<string, unknown> = {
     name: theme.name,
     style: theme.style,
-    editor: editorResult.cleaned,
-    styles: cleanedStyles,
+    editor: editorInput,
+    styles: stylesInput,
   };
   if (theme.author) {
     finalTheme.author = theme.author;
@@ -253,7 +248,7 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
       return {
         success: true,
         filename,
-        strippedKeys: allStrippedKeys.length > 0 ? allStrippedKeys : undefined,
+        unknownKeys: unknownKeys.length > 0 ? unknownKeys : undefined,
         message: `Theme saved to ${filename} but failed to activate: ${err.message}`,
       };
     }
@@ -273,7 +268,7 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
       success: true,
       filename,
       activatedForMode: mode,
-      strippedKeys: allStrippedKeys.length > 0 ? allStrippedKeys : undefined,
+      unknownKeys: unknownKeys.length > 0 ? unknownKeys : undefined,
       message: `Theme saved and activated: ${filename}`,
       ...(modeHint ? { hint: modeHint } : {}),
     };
@@ -282,7 +277,7 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
   return {
     success: true,
     filename,
-    strippedKeys: allStrippedKeys.length > 0 ? allStrippedKeys : undefined,
+    unknownKeys: unknownKeys.length > 0 ? unknownKeys : undefined,
     message: `Theme saved: ${filename}`,
   };
 }
