@@ -15,6 +15,44 @@ When running these tests, follow this procedure exactly:
 3. **Tear down** — delete the 4000-01-01 daily note and any notes created during testing (e.g. "Weekly Review", "Q1 Goals", "MCP Test Note", "MCP Verified Note").
 5. **Report** — write a complete results table into the chat showing pass/fail for each test, with notes on any failures.
 
+### Coverage rule: every tool at least once
+
+> **Why this section exists.** The v1.1.25 `noteplan_templates` bug — an un-awaited async
+> handler that leaked a `Promise` into the MCP `structuredContent`, failing every `list`
+> and `render` call — shipped because templates had **never been invoked through a client**.
+> Unit tests covered only its pure frontmatter helpers; the server dispatcher and the MCP
+> response path had zero coverage. The same un-awaited mistake also existed in
+> `noteplan_embeddings` (`status`, `reset`).
+>
+> **Rule: every MCP tool must be invoked at least once during a manual run.** For each, the
+> response must be a real object — not an error, and not an `[object Promise]`. The detailed
+> note/task/calendar cases below cover most tools; section **C0** below is a one-line smoke
+> call for each tool to guarantee none is skipped (regression-critical tools marked ⚠️).
+
+#### C0. Tool coverage smoke matrix
+
+Run one call per tool and confirm a non-error object response:
+
+| # | Tool | Smoke call | Detailed tests |
+|---|------|-----------|----------------|
+| C0.1 | `noteplan_get_notes` | `action: today` | 16 |
+| C0.2 | `noteplan_search` | `action: search, query: "Existing"` | 17, 25, 33 |
+| C0.3 | `noteplan_paragraphs` | `action: get, date: 4000-01-01` | 1–4, 26–37, 41 |
+| C0.4 | `noteplan_edit_content` | `action: append, date: 4000-01-01, content: "smoke"` | 5–10, 31 |
+| C0.5 | `noteplan_manage_note` | `action: create, title: "Smoke Note"` (then delete) | 12–15, 22–24, 38–42 |
+| C0.6 | `noteplan_folders` | `action: list` | 13 (folder targeting) |
+| C0.7 | `noteplan_filters` | `action: list` | — |
+| C0.8 | `noteplan_eventkit` | `action: list_calendars` | 43–48 |
+| C0.9 | `noteplan_memory` | `action: save` → `list` → `delete` | — |
+| C0.10 | `noteplan_embeddings` ⚠️ | `action: status` | — |
+| C0.11 | `noteplan_ui` | `action: open_today` | — |
+| C0.12 | `noteplan_plugins` | `action: list` | — |
+| C0.13 | `noteplan_themes` | `action: list` | — |
+| C0.14 | `noteplan_templates` ⚠️ | `list`, `render`, `search_docs`, `get_doc` | — |
+| C0.15 | `noteplan_attachments` | `action: list, filename: "<a note>"` | — |
+
+⚠️ = was un-awaited in v1.1.25. Explicitly confirm `structuredContent` is an object, not a Promise.
+
 ### Important
 
 - All references to "today's note" in test cases below mean the **4000-01-01 daily note**. When calling tools, use `date: "4000-01-01"` instead of `date: "today"`.

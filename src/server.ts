@@ -2906,10 +2906,10 @@ export function createServer(): Server {
         case 'noteplan_embeddings': {
           const action = (args as any)?.action;
           switch (action) {
-            case 'status': result = embeddingsTools.embeddingsStatus(args as any); break;
+            case 'status': result = await embeddingsTools.embeddingsStatus(args as any); break;
             case 'search': result = await embeddingsTools.embeddingsSearch(args as any); break;
             case 'sync': result = await embeddingsTools.embeddingsSync(args as any); break;
-            case 'reset': result = embeddingsTools.embeddingsReset(args as any); break;
+            case 'reset': result = await embeddingsTools.embeddingsReset(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -2917,10 +2917,10 @@ export function createServer(): Server {
         case 'noteplan_templates': {
           const action = (args as any)?.action;
           switch (action) {
-            case 'list': result = templateTools.listTemplates(args as any); break;
-            case 'render': result = templateTools.renderTemplate(args as any); break;
+            case 'list': result = await templateTools.listTemplates(args as any); break;
+            case 'render': result = await templateTools.renderTemplate(args as any); break;
             case 'search_docs': result = await templateTools.searchDocs(args as any); break;
-            case 'get_doc': result = templateTools.getDoc(args as any); break;
+            case 'get_doc': result = await templateTools.getDoc(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
