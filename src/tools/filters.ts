@@ -5,18 +5,11 @@ import { BridgeHttpError } from '../transport/bridge-client.js';
 import {
   issueConfirmationToken,
   validateAndConsumeConfirmationToken,
+  confirmationFailureMessage,
 } from '../utils/confirmation-tokens.js';
 
-function confirmationFailureMessage(reason: string): string {
-  const refreshHint = 'Call noteplan_filters with action="delete" and dryRun=true to get a new confirmationToken.';
-  if (reason === 'missing') {
-    return `Confirmation token is required to delete a filter. ${refreshHint}`;
-  }
-  if (reason === 'expired') {
-    return `Confirmation token is expired. ${refreshHint}`;
-  }
-  return `Confirmation token is invalid for this filter. ${refreshHint}`;
-}
+const DELETE_FILTER_REFRESH_HINT =
+  'Call noteplan_filters with action="delete" and dryRun=true to get a new confirmationToken.';
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -288,11 +281,12 @@ export async function deleteFilter(params: z.infer<typeof deleteFilterSchema>) {
         target: existing.name,
         action: 'delete_filter',
       });
+      const itemCount = existing.items.length;
       return {
         success: true,
         dryRun: true,
-        message: `Dry run: filter "${existing.name}" (${existing.items.length} item${existing.items.length !== 1 ? 's' : ''}) would be deleted`,
-        filter: { name: existing.name, itemCount: existing.items.length },
+        message: `Dry run: filter "${existing.name}" (${itemCount} item${itemCount !== 1 ? 's' : ''}) would be deleted`,
+        filter: { name: existing.name, itemCount },
         ...token,
       };
     }
@@ -303,7 +297,10 @@ export async function deleteFilter(params: z.infer<typeof deleteFilterSchema>) {
       action: 'delete_filter',
     });
     if (!confirmation.ok) {
-      return { success: false, error: confirmationFailureMessage(confirmation.reason) };
+      return {
+        success: false,
+        error: confirmationFailureMessage('noteplan_filters', confirmation.reason, DELETE_FILTER_REFRESH_HINT),
+      };
     }
 
     await filterStore.deleteFilter(params.name);

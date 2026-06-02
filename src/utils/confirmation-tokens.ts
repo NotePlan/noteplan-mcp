@@ -14,7 +14,7 @@ type StoredConfirmation = {
   expiresAt: number;
 };
 
-type ConfirmationFailureReason = 'missing' | 'invalid' | 'expired' | 'mismatch';
+export type ConfirmationFailureReason = 'missing' | 'invalid' | 'expired' | 'mismatch';
 
 export type ConfirmationValidationResult =
   | { ok: true }
@@ -98,4 +98,27 @@ export function validateAndConsumeConfirmationToken(
 
   confirmationStore.delete(token);
   return { ok: true };
+}
+
+/**
+ * Render a user-facing message for a confirmation-token failure. Lives here,
+ * next to the reason union it renders, so every destructive tool action shares
+ * one exhaustive formatting (rather than copy-pasting a per-tool variant).
+ * `refreshHint` overrides the default "call with dryRun=true" guidance for
+ * tools whose dry-run is reached differently (e.g. an action parameter).
+ */
+export function confirmationFailureMessage(
+  toolName: string,
+  reason: ConfirmationFailureReason,
+  refreshHint = `Call ${toolName} with dryRun=true to get a new confirmationToken.`
+): string {
+  switch (reason) {
+    case 'missing':
+      return `Confirmation token is required for ${toolName}. ${refreshHint}`;
+    case 'expired':
+      return `Confirmation token is expired for ${toolName}. ${refreshHint}`;
+    case 'invalid':
+    case 'mismatch':
+      return `Confirmation token is invalid for ${toolName}. ${refreshHint}`;
+  }
 }
