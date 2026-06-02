@@ -221,6 +221,25 @@ export async function saveFilter(
   return stored;
 }
 
+export async function deleteFilter(name: string): Promise<void> {
+  const safeName = assertFilterName(name);
+
+  // Same reasoning as saveFilter/renameFilter — deleting the file while
+  // NotePlan is closed leaves the in-memory filter list pointing at a
+  // file that no longer exists.
+  const bridge = await getBridgeClient();
+  if (!bridge) {
+    throw new Error('Deleting filters requires NotePlan to be running.');
+  }
+
+  const existing = await bridge.getFilter(safeName);
+  if (!existing) {
+    throw new Error(`Filter not found: ${safeName}`);
+  }
+
+  await bridge.deleteFilter(safeName);
+}
+
 export async function renameFilter(oldName: string, newName: string, overwrite = false): Promise<FilterRecord> {
   const sourceName = assertFilterName(oldName);
   const targetName = assertFilterName(newName);

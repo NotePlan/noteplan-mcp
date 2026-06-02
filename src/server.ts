@@ -1688,18 +1688,18 @@ export function createServer(): Server {
         {
           name: 'noteplan_filters',
           description:
-            'Saved filter operations: list, get, get_tasks, list_parameters, save, rename.\n\nActions:\n- list: List saved filters\n- get: Get one filter with parsed params (requires name)\n- get_tasks: Execute a filter against tasks (requires name)\n- list_parameters: List supported filter parameter keys\n- save: Create or update a filter (requires name + items)\n- rename: Rename a filter (requires oldName + newName)',
+            'Saved filter operations: list, get, get_tasks, list_parameters, save, rename, delete.\n\nActions:\n- list: List saved filters\n- get: Get one filter with parsed params (requires name)\n- get_tasks: Execute a filter against tasks (requires name)\n- list_parameters: List supported filter parameter keys\n- save: Create or update a filter (requires name + items)\n- rename: Rename a filter (requires oldName + newName)\n- delete: Delete a filter (requires name + dryRun/confirmationToken)',
           inputSchema: {
             type: 'object',
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'get', 'get_tasks', 'list_parameters', 'save', 'rename', 'list_actions'],
-                description: 'Action: list | get | get_tasks | list_parameters | save | rename | list_actions (discover all actions)',
+                enum: ['list', 'get', 'get_tasks', 'list_parameters', 'save', 'rename', 'delete', 'list_actions'],
+                description: 'Action: list | get | get_tasks | list_parameters | save | rename | delete | list_actions (discover all actions)',
               },
               name: {
                 type: 'string',
-                description: 'Filter name — used by get, get_tasks, save',
+                description: 'Filter name — used by get, get_tasks, save, delete',
               },
               oldName: {
                 type: 'string',
@@ -1761,6 +1761,14 @@ export function createServer(): Server {
               cursor: {
                 type: 'string',
                 description: 'Cursor from previous page',
+              },
+              dryRun: {
+                type: 'boolean',
+                description: 'Preview deletion and get confirmationToken — used by delete',
+              },
+              confirmationToken: {
+                type: 'string',
+                description: 'Token from dryRun for execution — used by delete',
               },
             },
             required: ['action'],
@@ -2561,6 +2569,7 @@ export function createServer(): Server {
       { action: 'list_parameters', description: 'List supported filter parameter keys' },
       { action: 'save', description: 'Create or update a filter (requires name + items)' },
       { action: 'rename', description: 'Rename a filter (requires oldName + newName)' },
+      { action: 'delete', description: 'Delete a filter (requires name + dryRun/confirmationToken)' },
     ],
     noteplan_eventkit: [
       { action: 'get_events', description: 'Get events for a date/range (source: calendar)' },
@@ -2779,6 +2788,7 @@ export function createServer(): Server {
             case 'list_parameters': result = await filterTools.listFilterParameters(); break;
             case 'save': result = await filterTools.saveFilter(args as any); break;
             case 'rename': result = await filterTools.renameFilter(args as any); break;
+            case 'delete': result = await filterTools.deleteFilter(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;

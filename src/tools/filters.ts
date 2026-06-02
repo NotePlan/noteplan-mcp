@@ -2,6 +2,21 @@ import { z } from 'zod';
 import * as filterStore from '../noteplan/filter-store.js';
 import { getBridgeClient } from '../transport/bridge-availability.js';
 import { BridgeHttpError } from '../transport/bridge-client.js';
+import {
+  issueConfirmationToken,
+  validateAndConsumeConfirmationToken,
+} from '../utils/confirmation-tokens.js';
+
+function confirmationFailureMessage(reason: string): string {
+  const refreshHint = 'Call noteplan_filters with action="delete" and dryRun=true to get a new confirmationToken.';
+  if (reason === 'missing') {
+    return `Confirmation token is required to delete a filter. ${refreshHint}`;
+  }
+  if (reason === 'expired') {
+    return `Confirmation token is expired. ${refreshHint}`;
+  }
+  return `Confirmation token is invalid for this filter. ${refreshHint}`;
+}
 
 function toBoundedInt(value: unknown, defaultValue: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -121,6 +136,18 @@ export const renameFilterSchema = z.object({
   oldName: z.string().describe('Existing filter name'),
   newName: z.string().describe('New filter name'),
   overwrite: z.boolean().optional().default(false).describe('Allow replacing an existing target name'),
+});
+
+export const deleteFilterSchema = z.object({
+  name: z.string().describe('Filter name to delete'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('Preview deletion impact and get a confirmationToken without deleting'),
+  confirmationToken: z
+    .string()
+    .optional()
+    .describe('Confirmation token issued by dryRun for delete execution'),
 });
 
 export const getFilterTasksSchema = z.object({
@@ -244,6 +271,51 @@ export async function renameFilter(params: z.infer<typeof renameFilterSchema>) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to rename filter',
+    };
+  }
+}
+
+export async function deleteFilter(params: z.infer<typeof deleteFilterSchema>) {
+  try {
+    const existing = await filterStore.getFilter(params.name);
+    if (!existing) {
+      return { success: false, error: `Filter not found: ${params.name}` };
+    }
+
+    if (params.dryRun === true) {
+      const token = issueConfirmationToken({
+        tool: 'noteplan_filters',
+        target: existing.name,
+        action: 'delete_filter',
+      });
+      return {
+        success: true,
+        dryRun: true,
+        message: `Dry run: filter "${existing.name}" (${existing.items.length} item${existing.items.length !== 1 ? 's' : ''}) would be deleted`,
+        filter: { name: existing.name, itemCount: existing.items.length },
+        ...token,
+      };
+    }
+
+    const confirmation = validateAndConsumeConfirmationToken(params.confirmationToken, {
+      tool: 'noteplan_filters',
+      target: existing.name,
+      action: 'delete_filter',
+    });
+    if (!confirmation.ok) {
+      return { success: false, error: confirmationFailureMessage(confirmation.reason) };
+    }
+
+    await filterStore.deleteFilter(params.name);
+    return {
+      success: true,
+      message: `Filter deleted: ${existing.name}`,
+      filter: { name: existing.name },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete filter',
     };
   }
 }
