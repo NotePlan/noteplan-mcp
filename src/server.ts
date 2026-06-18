@@ -1034,19 +1034,48 @@ export function createServer(): Server {
   }
   console.error(`[noteplan-mcp] Detected NotePlan ${versionInfo.version} (build ${versionInfo.build}, source: ${versionInfo.source}). Advanced features: ${advancedFeaturesEnabled ? 'enabled' : 'disabled'}.`);
 
-  // Startup diagnostics: HOME, database, spaces
+  // Startup diagnostics: HOME, database, spaces.
+  //
+  // Prefer the HTTP bridge for space data. The bridge talks to the running
+  // NotePlan app, which already owns the teamspace database — so when it is
+  // available we must NOT open teamspace.db ourselves. getDatabasePath()
+  // (fs.existsSync) and getDatabase() (opens the SQLite file read-write)
+  // reach directly into NotePlan's container, which triggers a macOS Files &
+  // Folders (TCC) prompt on every launch, even when the server is idle. Only
+  // fall back to the direct SQLite open when the bridge is unavailable
+  // (NotePlan closed, old build, or Automation denied). This mirrors the
+  // bridge-first policy that bridgeOrFallback() already enforces at runtime.
   console.error(`[noteplan-mcp] HOME: ${process.env.HOME ?? '(unset)'}`);
-  const dbPath = getDatabasePath();
-  if (dbPath) {
-    const database = getDatabase();
-    const writable = database ? 'read-write' : 'unavailable';
-    console.error(`[noteplan-mcp] Space database: ${dbPath} (${writable})`);
-    listSpacesFromDb()
-      .then((spaces) => console.error(`[noteplan-mcp] Spaces discovered: ${spaces.length}`))
-      .catch((err) => console.error('[noteplan-mcp] Failed to list spaces:', err));
-  } else {
-    console.error('[noteplan-mcp] Space database: not found');
-  }
+  void (async () => {
+    const bridge = await getBridgeClient().catch(() => null);
+    if (bridge) {
+      // listSpacesFromDb() routes through bridgeOrFallback(); with a live
+      // bridge it serves from NotePlan and never touches the container.
+      try {
+        const spaces = await listSpacesFromDb();
+        console.error(`[noteplan-mcp] Spaces discovered: ${spaces.length} (via bridge)`);
+      } catch (err) {
+        console.error('[noteplan-mcp] Failed to list spaces via bridge:', err);
+      }
+      return;
+    }
+
+    // Bridge unavailable — fall back to reading the local teamspace.db.
+    const dbPath = getDatabasePath();
+    if (dbPath) {
+      const database = getDatabase();
+      const writable = database ? 'read-write' : 'unavailable';
+      console.error(`[noteplan-mcp] Space database: ${dbPath} (${writable})`);
+      try {
+        const spaces = await listSpacesFromDb();
+        console.error(`[noteplan-mcp] Spaces discovered: ${spaces.length}`);
+      } catch (err) {
+        console.error('[noteplan-mcp] Failed to list spaces:', err);
+      }
+    } else {
+      console.error('[noteplan-mcp] Space database: not found');
+    }
+  })();
 
   // Log environment configuration
   const readOnly = isReadOnly();
