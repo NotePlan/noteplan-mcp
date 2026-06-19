@@ -1,10 +1,12 @@
 // Theme management tools for NotePlan
 
 import { z } from 'zod';
-import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { getNotePlanPath } from '../noteplan/file-reader.js';
+import { readDir, readFileUtf8, writeFileUtf8, makeDirectory, pathExists } from '../transport/bridge-fs.js';
+import { getBridgeClient } from '../transport/bridge-availability.js';
+import { getBridgeThemeSnapshot } from '../noteplan/preferences.js';
 import { escapeAppleScript, runAppleScript, getAppName } from '../utils/applescript.js';
 
 function themesPath(): string {
@@ -106,6 +108,21 @@ function isPathTraversal(filename: string): boolean {
   return filename.includes('..') || filename.includes('/') || filename.includes('\\');
 }
 
+/**
+ * Resolve the active light/dark theme without touching NotePlan's container
+ * when the bridge is reachable. Prefers the bridge's /config snapshot (newer
+ * builds report the current themes directly); when the bridge was available
+ * but didn't report them, returns nulls rather than reading the container;
+ * only falls back to the container-touching `defaults` read when the bridge is
+ * genuinely unavailable.
+ */
+async function resolveCurrentThemes(): Promise<{ light: string | null; dark: string | null }> {
+  const snapshot = getBridgeThemeSnapshot();
+  if (snapshot) return snapshot;
+  if (await getBridgeClient()) return { light: null, dark: null };
+  return { light: readDefaults('themeLight'), dark: readDefaults('themeDark') };
+}
+
 /** List keys not present in the whitelist. Informational only — we no longer
  *  strip unknown keys: NotePlan owns the theme schema (which evolves), and
  *  user themes legitimately add custom regex highlighters with arbitrary
@@ -117,28 +134,25 @@ function findUnknownKeys(obj: Record<string, unknown>, validKeys: string[]): str
 
 // --- Implementations ---
 
-export function listThemes(_args: z.infer<typeof listThemesSchema>): Record<string, unknown> {
+export async function listThemes(_args: z.infer<typeof listThemesSchema>): Promise<Record<string, unknown>> {
   const customThemes: Array<{ name: string; isCustom: boolean; filename: string }> = [];
 
   const dir = themesPath();
-  if (fs.existsSync(dir)) {
-    const entries = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-    for (const filename of entries) {
+  // readDir routes through the bridge when available (returns [] if missing),
+  // so we never read the Themes folder off the container directly.
+  const entries = (await readDir(dir)).filter(e => !e.isDir && e.name.endsWith('.json'));
+  for (const { name: filename } of entries) {
+    let name = path.basename(filename, '.json');
+    const raw = await readFileUtf8(path.join(dir, filename));
+    if (raw) {
       try {
-        const content = JSON.parse(fs.readFileSync(path.join(dir, filename), 'utf-8'));
-        customThemes.push({
-          name: content.name || path.basename(filename, '.json'),
-          isCustom: true,
-          filename,
-        });
+        const content = JSON.parse(raw);
+        if (content.name) name = content.name;
       } catch {
-        customThemes.push({
-          name: path.basename(filename, '.json'),
-          isCustom: true,
-          filename,
-        });
+        // Unparseable theme file — fall back to the filename-derived name.
       }
     }
+    customThemes.push({ name, isCustom: true, filename });
   }
 
   const systemThemes = SYSTEM_THEMES.map(name => ({
@@ -147,8 +161,9 @@ export function listThemes(_args: z.infer<typeof listThemesSchema>): Record<stri
     filename: name,
   }));
 
-  const currentLight = readDefaults('themeLight');
-  const currentDark = readDefaults('themeDark');
+  // Active theme comes from the bridge when reachable; only the bridge-down
+  // fallback touches the container (see resolveCurrentThemes).
+  const { light: currentLight, dark: currentDark } = await resolveCurrentThemes();
 
   return {
     success: true,
@@ -158,7 +173,7 @@ export function listThemes(_args: z.infer<typeof listThemesSchema>): Record<stri
   };
 }
 
-export function getTheme(args: z.infer<typeof getThemeSchema>): Record<string, unknown> {
+export async function getTheme(args: z.infer<typeof getThemeSchema>): Promise<Record<string, unknown>> {
   const { filename } = getThemeSchema.parse(args);
 
   if (isPathTraversal(filename)) {
@@ -175,19 +190,20 @@ export function getTheme(args: z.infer<typeof getThemeSchema>): Record<string, u
   }
 
   const filePath = path.join(themesPath(), filename);
-  if (!fs.existsSync(filePath)) {
+  const raw = await readFileUtf8(filePath);
+  if (raw === null) {
     return { success: false, error: `Theme file not found: ${filename}` };
   }
 
   try {
-    const content = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const content = JSON.parse(raw);
     return { success: true, filename, theme: content };
   } catch (err: any) {
     return { success: false, error: `Failed to parse theme JSON: ${err.message}` };
   }
 }
 
-export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string, unknown> {
+export async function saveTheme(args: z.infer<typeof saveThemeSchema>): Promise<Record<string, unknown>> {
   const { filename, theme, setActive, mode: parsedMode } = saveThemeSchema.parse(args);
 
   // Validate filename
@@ -232,11 +248,11 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
 
   // Ensure Themes folder exists
   const dir = themesPath();
-  fs.mkdirSync(dir, { recursive: true });
+  await makeDirectory(dir);
 
   // Write the theme file
   const filePath = path.join(dir, filename);
-  fs.writeFileSync(filePath, JSON.stringify(finalTheme, null, 2), 'utf-8');
+  await writeFileUtf8(filePath, JSON.stringify(finalTheme, null, 2));
 
   // Activate the theme if requested
   if (setActive) {
@@ -253,9 +269,11 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
       };
     }
 
-    // Warn if theme was applied to a mode the user isn't currently viewing
-    const currentLight = readDefaults('themeLight');
-    const currentDark = readDefaults('themeDark');
+    // Warn if theme was applied to a mode the user isn't currently viewing.
+    // Resolution prefers the bridge; the hint is simply omitted when current
+    // themes are unknown (bridge up but not reported) rather than reading the
+    // container.
+    const { light: currentLight, dark: currentDark } = await resolveCurrentThemes();
     const nameWithoutExt = filename.replace(/\.json$/, '');
     const modeHint =
       mode === 'dark' && currentLight && currentLight !== nameWithoutExt && currentLight !== filename
@@ -282,31 +300,33 @@ export function saveTheme(args: z.infer<typeof saveThemeSchema>): Record<string,
   };
 }
 
-export function setTheme(args: z.infer<typeof setThemeSchema>): Record<string, unknown> {
+export async function setTheme(args: z.infer<typeof setThemeSchema>): Promise<Record<string, unknown>> {
   const { name, mode } = setThemeSchema.parse(args);
 
-  // Resolve display name → filename for custom themes
+  // Resolve display name → filename for custom themes. All folder access goes
+  // through the bridge when available; readDir/pathExists degrade to empty/false
+  // if the Themes folder isn't there, so no explicit existence guard is needed.
   let resolvedName = name;
   const dir = themesPath();
-  if (fs.existsSync(dir)) {
-    // If the name doesn't match a system theme or a file directly, search by display name
-    const nameWithoutExt = name.replace(/\.json$/, '');
-    const isSystemTheme = SYSTEM_THEMES.includes(nameWithoutExt) || SYSTEM_THEMES.includes(name);
-    if (!isSystemTheme) {
-      const isDirectFilename = fs.existsSync(path.join(dir, name)) || fs.existsSync(path.join(dir, name + '.json'));
-      if (!isDirectFilename) {
-        // Search custom themes by display name
-        const entries = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-        for (const filename of entries) {
-          try {
-            const content = JSON.parse(fs.readFileSync(path.join(dir, filename), 'utf-8'));
-            if (content.name === name) {
-              resolvedName = filename;
-              break;
-            }
-          } catch {
-            // skip
+  const nameWithoutExt = name.replace(/\.json$/, '');
+  const isSystemTheme = SYSTEM_THEMES.includes(nameWithoutExt) || SYSTEM_THEMES.includes(name);
+  if (!isSystemTheme) {
+    const isDirectFilename =
+      (await pathExists(path.join(dir, name))) || (await pathExists(path.join(dir, name + '.json')));
+    if (!isDirectFilename) {
+      // Search custom themes by display name
+      const entries = (await readDir(dir)).filter(e => !e.isDir && e.name.endsWith('.json'));
+      for (const { name: filename } of entries) {
+        const raw = await readFileUtf8(path.join(dir, filename));
+        if (!raw) continue;
+        try {
+          const content = JSON.parse(raw);
+          if (content.name === name) {
+            resolvedName = filename;
+            break;
           }
+        } catch {
+          // skip
         }
       }
     }

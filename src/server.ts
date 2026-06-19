@@ -34,6 +34,8 @@ import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVA
 import { isReadOnly, isSkipDryRun, shouldAutoLaunchNotePlan } from './utils/server-config.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
 import { getDatabase, getDatabasePath, listSpaces as listSpacesFromDb } from './noteplan/sqlite-reader.js';
+import { primeConfigFromBridge } from './noteplan/file-reader.js';
+import { primePreferencesFromBridge } from './noteplan/preferences.js';
 import { getBridgeClient } from './transport/bridge-availability.js';
 import { withBackendTracking, getCurrentBackends } from './transport/bridge-context.js';
 
@@ -2919,14 +2921,14 @@ export function createServer(): Server {
           switch (action) {
             case 'list': result = pluginTools.listPlugins(args as any); break;
             case 'list_available': result = pluginTools.listAvailablePlugins(args as any); break;
-            case 'create': result = pluginTools.createPlugin(args as any); break;
-            case 'delete': result = pluginTools.deletePlugin(args as any); break;
+            case 'create': result = await pluginTools.createPlugin(args as any); break;
+            case 'delete': result = await pluginTools.deletePlugin(args as any); break;
             case 'install': result = pluginTools.installPlugin(args as any); break;
-            case 'log': result = pluginTools.getPluginLog(args as any); break;
-            case 'source': result = pluginTools.getPluginSource(args as any); break;
-            case 'update_html': result = pluginTools.updatePluginHtml(args as any); break;
-            case 'update_json': result = pluginTools.updatePluginJson(args as any); break;
-            case 'screenshot': result = pluginTools.screenshotPlugin(args as any); break;
+            case 'log': result = await pluginTools.getPluginLog(args as any); break;
+            case 'source': result = await pluginTools.getPluginSource(args as any); break;
+            case 'update_html': result = await pluginTools.updatePluginHtml(args as any); break;
+            case 'update_json': result = await pluginTools.updatePluginJson(args as any); break;
+            case 'screenshot': result = await pluginTools.screenshotPlugin(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -2934,10 +2936,10 @@ export function createServer(): Server {
         case 'noteplan_themes': {
           const action = (args as any)?.action;
           switch (action) {
-            case 'list': result = themeTools.listThemes(args as any); break;
-            case 'get': result = themeTools.getTheme(args as any); break;
-            case 'save': result = themeTools.saveTheme(args as any); break;
-            case 'set_active': result = themeTools.setTheme(args as any); break;
+            case 'list': result = await themeTools.listThemes(args as any); break;
+            case 'get': result = await themeTools.getTheme(args as any); break;
+            case 'save': result = await themeTools.saveTheme(args as any); break;
+            case 'set_active': result = await themeTools.setTheme(args as any); break;
             default: throw new Error(`Unknown action: ${action}`);
           }
           break;
@@ -3105,6 +3107,16 @@ async function probeAndWarmBridge(): Promise<void> {
     }
     const config = await withTimeout(client.config(), 'bridge config');
     console.error(`[noteplan-mcp] Bridge OK on 127.0.0.1:${client.port} — storage: ${config.storagePath}`);
+    // Prime the sync config cache from the bridge so the first file-path
+    // operation doesn't stat NotePlan's container (which triggers a macOS
+    // Files & Folders prompt). Must happen before any tool call — startServer
+    // awaits this probe before accepting requests.
+    primeConfigFromBridge(config);
+    // Same idea for user preferences (first-day-of-week, task markers, current
+    // theme): capture whatever the bridge reports now. Newer builds include
+    // these (→ zero container access); older builds omit them, and the prefs
+    // reader falls back to a disk-cached `defaults` read lazily, on demand.
+    primePreferencesFromBridge(config);
     try {
       await withTimeout(client.search('__np_mcp_warmup_no_match__', { limit: 1 }), 'bridge warmup');
     } catch (err) {

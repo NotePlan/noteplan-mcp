@@ -8,6 +8,17 @@ export interface BridgeConfig {
   appBuild: number;
   appName: string;
   isUsingCloudKit: boolean;
+  // Optional preference fields — present only in newer NotePlan builds. When
+  // absent, the MCP falls back to reading `defaults` (cached to disk) so a
+  // single MCP version works against both the current and the future bridge.
+  // Supplying these lets the MCP avoid the sandboxed-container read entirely,
+  // which is what triggers the macOS "access data from other apps" prompt.
+  firstDayOfWeek?: number; // raw NSCalendar value (1 = Sunday … 7 = Saturday)
+  isAsteriskTodo?: boolean;
+  isDashTodo?: boolean;
+  defaultTodoCharacter?: string; // "*" | "-"
+  themeLight?: string; // active light-mode theme filename
+  themeDark?: string; // active dark-mode theme filename
 }
 
 export interface BridgeFsEntry {

@@ -270,6 +270,39 @@ function detectConfig(): NotePlanConfig {
   return cachedConfig;
 }
 
+/**
+ * Populate the synchronous config cache from the bridge's /config response.
+ *
+ * When NotePlan is running, the bridge tells us the storage root, calendar
+ * file extension, and year-subfolder layout directly from the app. Priming
+ * the cache with that means the synchronous detectConfig() path never has to
+ * stat NotePlan's container (existsSync + readdirSync on Calendar), which is
+ * what triggers a macOS Files & Folders (TCC) prompt on the first file-path
+ * operation of a session — even when every actual read/write goes over the
+ * bridge (bridge-fs's toRelative() still calls getNotePlanPath()).
+ *
+ * Called once at startup right after the bridge probe; before any tool runs.
+ * No-op if the bridge reports an empty path or an unrecognized extension, in
+ * which case detectConfig() resolves it the usual (fs) way.
+ */
+export function primeConfigFromBridge(cfg: {
+  storagePath: string;
+  fileExtension: string;
+  hasYearSubfolders: boolean;
+}): void {
+  if (!cfg.storagePath) return;
+  const ext = cfg.fileExtension === '.md' ? '.md' : cfg.fileExtension === '.txt' ? '.txt' : null;
+  if (!ext) return;
+  cachedConfig = {
+    storagePath: cfg.storagePath,
+    fileExtension: ext,
+    hasYearSubfolders: cfg.hasYearSubfolders,
+  };
+  console.error(
+    `[noteplan-mcp] Config primed from bridge (no container access): ${cfg.storagePath} (ext: ${ext}, yearFolders: ${cfg.hasYearSubfolders})`,
+  );
+}
+
 // MARK: - Synchronous path getters (read cached config)
 
 export function getNotePlanPath(): string {
