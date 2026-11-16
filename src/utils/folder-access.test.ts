@@ -196,3 +196,79 @@ describe('assertFolderAllowed', () => {
     });
   });
 });
+
+// ── Symlinks (security report HS #20548) ──
+// The file operations follow symlinks, so the rules must hold for the real
+// path too, not only for the path as written.
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { setFolderAccessStorageRoot } from './folder-access.js';
+
+describe('folder access through symlinks', () => {
+  let tmp: string;
+  let root: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'np-folder-access-'));
+    root = path.join(tmp, 'vault');
+    fs.mkdirSync(path.join(root, 'Notes/Public'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'Notes/Personal'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'outside'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Notes/Personal/Secret.md'), 'iban: SECRET-1234');
+    fs.writeFileSync(path.join(root, 'Notes/Public/Hello.md'), 'hello');
+    fs.writeFileSync(path.join(tmp, 'outside/key.txt'), 'private');
+    fs.symlinkSync('../Personal', path.join(root, 'Notes/Public/link'));
+    fs.symlinkSync(path.join(tmp, 'outside'), path.join(root, 'Notes/Public/out'));
+    setFolderAccessStorageRoot(() => root);
+  });
+
+  afterEach(() => {
+    setFolderAccessStorageRoot(null);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('denies reading a denied note through a symlink in an allowed folder', () => {
+    withEnv({ [DENIED]: 'Personal' }, () => {
+      expect(isFolderAllowed('Notes/Personal/Secret.md')).toBe(false);
+      expect(isFolderAllowed('Notes/Public/link/Secret.md')).toBe(false);
+      expect(isFolderAllowed('Notes/Public/link')).toBe(false);
+      expect(isFolderAllowed('Notes/Public/Hello.md')).toBe(true);
+    });
+  });
+
+  it('rejects writes and new files through the symlink', () => {
+    withEnv({ [DENIED]: 'Personal' }, () => {
+      expect(() => assertFolderAllowed('Notes/Public/link/Secret.md', 'append to')).toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+      expect(() => assertFolderAllowed('Notes/Public/link/New.md', 'create')).toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+      expect(() => assertFolderAllowed('Notes/Public/link/Sub/Deep.md', 'create')).toThrow(/NOTEPLAN_DENIED_FOLDERS/);
+    });
+  });
+
+  it('applies the allowlist to the real path', () => {
+    withEnv({ [ALLOWED]: 'Public' }, () => {
+      expect(isFolderAllowed('Notes/Public/Hello.md')).toBe(true);
+      expect(isFolderAllowed('Notes/Public/link/Secret.md')).toBe(false);
+    });
+  });
+
+  it('rejects a symlink that leaves the NotePlan folder when rules are set', () => {
+    withEnv({ [DENIED]: 'Personal' }, () => {
+      expect(isFolderAllowed('Notes/Public/out/key.txt')).toBe(false);
+      expect(() => assertFolderAllowed('Notes/Public/out/key.txt', 'read')).toThrow(/outside the NotePlan folder/);
+    });
+  });
+
+  it('keeps the old behavior without rules', () => {
+    expect(isFolderAllowed('Notes/Public/link/Secret.md')).toBe(true);
+    expect(isFolderAllowed('Notes/Public/out/key.txt')).toBe(true);
+  });
+
+  it('falls back to the textual check when the root cannot be resolved', () => {
+    setFolderAccessStorageRoot(() => path.join(tmp, 'missing-root'));
+    withEnv({ [DENIED]: 'Personal' }, () => {
+      expect(isFolderAllowed('Notes/Personal/Secret.md')).toBe(false);
+      expect(isFolderAllowed('Notes/Public/Hello.md')).toBe(true);
+    });
+  });
+});

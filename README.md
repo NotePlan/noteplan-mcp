@@ -1,5 +1,18 @@
 # NotePlan MCP Server
 
+> [!WARNING]
+> **This package is deprecated.** NotePlan 3.22 and later has a built-in connector that replaces it: no Node.js needed, and it updates together with NotePlan. This package still works, but it gets no new features.
+>
+> **To switch:**
+> 1. Update NotePlan to 3.22 or later. If your notes sync with iCloud Drive, switch to CloudKit in NotePlan > Settings > Sync.
+> 2. In NotePlan, open **Help > AI Connectors (MCP)** and install the connector for your AI app.
+> 3. Remove this connector, otherwise the tools show up twice:
+>    - Claude Desktop: Settings > Developer > Edit Config, delete the `noteplan` entry under `mcpServers`, save, and quit Claude with ⌘Q.
+>    - Claude Code: `claude mcp remove noteplan`
+>    - Codex: `codex mcp remove noteplan`
+>
+> Full guide: [How to Install the NotePlan MCP Server](https://help.noteplan.co/article/277-how-to-install-the-noteplan-mcp-server)
+
 An MCP (Model Context Protocol) server that exposes NotePlan's note, task, calendar, reminders, and plugin management to AI assistants like Claude.
 
 Works with **Claude Desktop** and **Claude Code**. Claude Desktop is great for conversational workflows — planning your day, reviewing tasks, asking questions about your notes. Claude Code is ideal for batch operations and automation — bulk edits, plugin development, or scripting complex workflows across many notes.

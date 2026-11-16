@@ -34,10 +34,43 @@ import { upgradeMessage, getNotePlanVersion, getMcpServerVersion, MIN_BUILD_ADVA
 import { isReadOnly, isSkipDryRun, shouldAutoLaunchNotePlan } from './utils/server-config.js';
 import { initSqlite } from './noteplan/sqlite-loader.js';
 import { listSpaces as listSpacesFromDb } from './noteplan/sqlite-reader.js';
-import { primeConfigFromBridge } from './noteplan/file-reader.js';
+import { primeConfigFromBridge, getNotePlanPath } from './noteplan/file-reader.js';
 import { primePreferencesFromBridge } from './noteplan/preferences.js';
 import { getBridgeClient } from './transport/bridge-availability.js';
 import { withBackendTracking, getCurrentBackends } from './transport/bridge-context.js';
+import { setFolderAccessStorageRoot } from './utils/folder-access.js';
+import { DeprecationNoticeGate, deprecationInstructions, deprecationNotice, type DeprecationContext } from './utils/deprecation.js';
+
+// ── Deprecation (NotePlan 3.22 ships a built-in connector) ──
+const deprecationGate = new DeprecationNoticeGate();
+
+function currentDeprecationContext(): DeprecationContext {
+  let notePlanVersion: string | null = null;
+  try {
+    const detected = getNotePlanVersion().version;
+    notePlanVersion = detected && detected !== '0.0.0' ? detected : null;
+  } catch {
+    notePlanVersion = null;
+  }
+  let usesICloudDrive = false;
+  try {
+    usesICloudDrive = getNotePlanPath().includes('/Library/Mobile Documents/');
+  } catch {
+    usesICloudDrive = false;
+  }
+  return { notePlanVersion, usesICloudDrive };
+}
+
+/** Adds the deprecation notice to the first tool result after start, then once a day. */
+function withDeprecationNotice<T>(response: T): T {
+  if (!deprecationGate.shouldShow()) return response;
+  const typed = response as unknown as { content?: unknown[] };
+  const content = Array.isArray(typed.content) ? typed.content : [];
+  return {
+    ...(response as object),
+    content: [...content, { type: 'text', text: deprecationNotice(currentDeprecationContext()) }],
+  } as T;
+}
 
 type ToolDefinition = {
   name: string;
@@ -972,6 +1005,9 @@ export function createServer(): Server {
       },
       instructions: [
         `You have access to NotePlan — a markdown-based note-taking and task management app for macOS/iOS. (MCP server v${mcpServerVersion})`,
+        '',
+        deprecationInstructions(),
+        '',
         'All tools use action-based dispatch: one tool per domain, with an `action` parameter to select the operation.',
         '',
         '## Workflow',
@@ -2658,7 +2694,7 @@ export function createServer(): Server {
   };
 
   // Register tool call handler
-  server.setRequestHandler(CallToolRequestSchema, async (request) => withBackendTracking(async () => {
+  server.setRequestHandler(CallToolRequestSchema, async (request) => withDeprecationNotice(await withBackendTracking(async () => {
     const { name, arguments: args } = request.params;
     const normalizedName = normalizeToolName(name);
     const includeTiming = isDebugTimingsEnabled(args);
@@ -3056,7 +3092,7 @@ export function createServer(): Server {
         console.error(`[noteplan-mcp]   ↳ backend: ${backends.join('+')}`);
       }
     }
-  }));
+  })));
 
   return server;
 }
@@ -3121,6 +3157,8 @@ async function probeAndWarmBridge(): Promise<void> {
 export async function startServer(): Promise<void> {
   console.error(`[noteplan-mcp] Starting v${getMcpServerVersion()} (Node ${process.version}, ${process.platform} ${process.arch}, pid ${process.pid})`);
   await initSqlite();
+  // The folder allow/deny rules also check the symlink-resolved path.
+  setFolderAccessStorageRoot(() => getNotePlanPath());
   const server = createServer();
 
   // Bridge probe + SearchHelper / NoteCache warm-up. AWAIT this before

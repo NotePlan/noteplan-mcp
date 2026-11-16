@@ -20,9 +20,28 @@
 // response. Write operations (create, update, delete, move, rename,
 // restore) reject with a clear error so the agent knows it hit a
 // configured boundary instead of silently misbehaving.
+//
+// Symlinks: the file readers/writers follow symlinks, so a purely textual
+// prefix check can be bypassed by a link inside an allowed folder that
+// points into a denied one (`Notes/Public/link -> ../Personal`). When rules
+// are configured, the path is therefore also resolved on disk (realpath of
+// the nearest existing ancestor) and the rules must pass for BOTH the
+// written path and the real path. A real path outside the storage root is
+// rejected. If the root itself can't be resolved locally (no container
+// access, files read through the app bridge), only the textual check runs.
+
+import * as fs from 'fs';
+import * as path from 'path';
 
 const ALLOWED_ENV_KEY = 'NOTEPLAN_ALLOWED_FOLDERS';
 const DENIED_ENV_KEY = 'NOTEPLAN_DENIED_FOLDERS';
+
+/** Returns the NotePlan storage root. Set once at server start (and by tests). */
+let storageRootProvider: (() => string) | null = null;
+
+export function setFolderAccessStorageRoot(provider: (() => string) | null): void {
+  storageRootProvider = provider;
+}
 
 interface FolderAccessConfig {
   allowed: string[];
@@ -86,7 +105,53 @@ function pathStartsWithPrefix(prefix: string, candidate: string): boolean {
 
 type FolderAccessVerdict =
   | { allowed: true }
-  | { allowed: false; reason: 'denied' | 'not-allowed' };
+  | { allowed: false; reason: 'denied' | 'not-allowed' | 'outside-root' };
+
+function evaluateRules(normalized: string, allowed: string[], denied: string[]): FolderAccessVerdict {
+  if (denied.some((prefix) => pathStartsWithPrefix(prefix, normalized))) {
+    return { allowed: false, reason: 'denied' };
+  }
+  if (allowed.length > 0 && !allowed.some((prefix) => pathStartsWithPrefix(prefix, normalized))) {
+    return { allowed: false, reason: 'not-allowed' };
+  }
+  return { allowed: true };
+}
+
+/**
+ * The symlink-resolved path of `normalized` relative to the real storage
+ * root: realpath of the nearest existing ancestor plus the not-yet-existing
+ * rest (so new files are checked too). Returns 'outside' when it leaves the
+ * root, and null when it can't be resolved locally.
+ */
+function resolveRealRelativePath(normalized: string): string | 'outside' | null {
+  if (!storageRootProvider) return null;
+  let rawRoot: string;
+  let realRoot: string;
+  try {
+    rawRoot = storageRootProvider();
+    realRoot = fs.realpathSync.native(rawRoot);
+  } catch {
+    return null;
+  }
+
+  let existing = path.resolve(rawRoot, normalized);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = fs.realpathSync.native(existing);
+      const realFull = missing.length > 0 ? path.join(real, ...missing.reverse()) : real;
+      const relative = path.relative(realRoot, realFull);
+      if (relative === '') return '';
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return 'outside';
+      return relative.split(path.sep).join('/');
+    } catch {
+      const parent = path.dirname(existing);
+      if (parent === existing) return null;
+      missing.push(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
 
 /**
  * Single evaluation pass that powers both `isFolderAllowed` (boolean) and
@@ -99,13 +164,14 @@ function evaluateFolderAccess(relativePath: string): FolderAccessVerdict {
   if (allowed.length === 0 && denied.length === 0) return { allowed: true };
 
   const normalized = normalizePathInput(relativePath);
-  if (denied.some((prefix) => pathStartsWithPrefix(prefix, normalized))) {
-    return { allowed: false, reason: 'denied' };
-  }
-  if (allowed.length > 0 && !allowed.some((prefix) => pathStartsWithPrefix(prefix, normalized))) {
-    return { allowed: false, reason: 'not-allowed' };
-  }
-  return { allowed: true };
+  const lexical = evaluateRules(normalized, allowed, denied);
+  if (!lexical.allowed) return lexical;
+
+  // Follow symlinks the same way the file operations do.
+  const real = resolveRealRelativePath(normalized);
+  if (real === 'outside') return { allowed: false, reason: 'outside-root' };
+  if (real === null || real === normalized) return lexical;
+  return evaluateRules(real, allowed, denied);
 }
 
 /**
@@ -139,6 +205,8 @@ export function assertFolderAllowed(relativePath: string, action: string): void 
   if (verdict.allowed) return;
   const reason = verdict.reason === 'denied'
     ? `it is inside a folder listed in ${DENIED_ENV_KEY}`
-    : `it is not inside any folder listed in ${ALLOWED_ENV_KEY}`;
+    : verdict.reason === 'outside-root'
+      ? 'it points outside the NotePlan folder (through a symlink)'
+      : `it is not inside any folder listed in ${ALLOWED_ENV_KEY}`;
   throw new Error(`Cannot ${action} "${relativePath}": ${reason}.`);
 }
